@@ -1,0 +1,234 @@
+[server]
+address = "0.0.0.0"
+port = 2333
+authorization = "youshallnotpass"
+player_update_interval = 100      # ms
+stats_interval = 60               # seconds
+websocket_ping_interval = 30      # seconds
+max_event_queue_size = 100
+
+[player]
+stuck_threshold_ms = 10000
+buffer_duration_ms = 400
+frame_buffer_duration_ms = 5000
+resampling_quality = "medium"                                                  # low | medium | high
+opus_encoding_quality = 10                                                     # 1-10
+tape = { tape_stop = true, tape_stop_duration_ms = 500, curve = "sinusoidal" } # curve: linear | exponential | sinusoidal
+
+[player.mirrors]
+# List of mirror provider patterns. %ISRC% or %QUERY%
+providers = ["ytsearch:%ISRC%", "ytsearch:%QUERY%", "scsearch:%QUERY%"]
+
+[logging]
+level = "info"              # trace | debug | info | warn | error | off
+filters = "rustalink=debug" # e.g. "rustalink=debug,davey=off"
+
+[logging.file]
+path = "./logs/rustalink.log"
+max_lines = 10000
+
+[route_planner]
+enabled = false
+cidrs = []        # ["1.2.3.4/24"]
+excluded_ips = []
+
+[sources.youtube]
+enabled = true
+refresh_tokens = []     # ["token1", "token2"]
+get_oauth_token = false
+
+[sources.youtube.clients]
+search = ["MUSIC_ANDROID", "MUSIC_WEB", "ANDROID", "WEB"]
+playback = [
+    "ANDROID_VR",
+    "TV_CAST",
+    "ANDROID_MUSIC",
+    "WEB_EMBEDDED",
+    "TV",
+    "WEB",
+    "IOS",
+]
+resolve = ["WEB", "MUSIC_WEB", "ANDROID", "TVHTML5_SIMPLY"]
+
+[sources.youtube.cipher]
+# url = "http://your-cipher-host/js"
+# token = "your-auth-token"
+
+[sources.spotify]
+enabled = true
+search_limit = 10
+recommendations_limit = 10
+playlist_load_limit = 6
+album_load_limit = 6
+playlist_page_load_concurrency = 10
+album_page_load_concurrency = 5
+track_resolve_concurrency = 50
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.jiosaavn]
+enabled = true
+search_limit = 10
+recommendations_limit = 10
+playlist_load_limit = 50
+album_load_limit = 50
+artist_load_limit = 20
+# decryption = { secretKey = "your-secret-key" }
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.applemusic]
+enabled = true
+country_code = "us"
+playlist_load_limit = 0
+album_load_limit = 0
+playlist_page_load_concurrency = 5
+album_page_load_concurrency = 5
+# media_api_token = "your-media-api-token"
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.gaana]
+enabled = true
+search_limit = 10
+playlist_load_limit = 50
+album_load_limit = 50
+artist_load_limit = 20
+stream_quality = "high"  # low | medium | high
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.deezer]
+enabled = false
+# arls = ["your-arl-token"]
+# master_decryption_key = "your-key"
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.tidal]
+enabled = false
+country_code = "US"
+playlist_load_limit = 50
+album_load_limit = 50
+artist_load_limit = 20
+# token = "your-token"
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.soundcloud]
+enabled = true
+search_limit = 10
+playlist_load_limit = 100
+# client_id = "your-client-id"
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.qobuz]
+enabled = false
+search_limit = 10
+playlist_load_limit = 100
+album_load_limit = 50
+artist_load_limit = 20
+# user_token = "your-user-token"
+# app_id = "your-app-id"
+# app_secret = "your-app-secret"
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.yandexmusic]
+enabled = false
+search_limit = 10
+playlist_load_limit = 10
+album_load_limit = 10
+artist_load_limit = 10
+# access_token = "your-oauth-token"
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.anghami]
+enabled = false
+search_limit = 10
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.shazam]
+enabled = true
+search_limit = 10
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.mixcloud]
+enabled = true
+search_limit = 10
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.bandcamp]
+enabled = true
+search_limit = 10
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.audiomack]
+enabled = true
+search_limit = 20
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.audius]
+enabled = true
+search_limit = 10
+playlist_load_limit = 100
+album_load_limit = 100
+# app_name = "your-app-name"
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.pandora]
+enabled = false
+search_limit = 10
+playlist_load_limit = 100
+# csrf_token = "your-csrf-token"
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.http]
+enabled = true
+
+[sources.local]
+enabled = true
+
+[sources.google_tts]
+enabled = false
+language = "en-US"
+
+[sources.flowery]
+enabled = false
+voice = "Salli"
+translate = false
+silence = 0
+speed = 1.0
+enforce_config = false
+
+[sources.lazypytts]
+enabled = false
+service = "Cerence"
+voice = "Luciana"
+enforce_config = false
+max_text_length = 3000
+
+[lyrics]
+youtubemusic = true
+lrclib = true
+genius = true
+deezer = true
+yandex = true
+musixmatch = true
+letrasmus = true
+netease = true
+
+[filters]
+volume = true
+equalizer = true
+karaoke = true
+timescale = true
+tremolo = true
+vibrato = true
+distortion = true
+rotation = true
+channel_mix = true
+low_pass = true
+echo = true
+high_pass = true
+normalization = true
+chorus = true
+compressor = true
+flanger = true
+phaser = true
+phonograph = true
+reverb = true
+spatial = true
