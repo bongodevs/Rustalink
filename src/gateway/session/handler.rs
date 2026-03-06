@@ -3,32 +3,33 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc,
-        atomic::{AtomicI64, AtomicU64, Ordering},
+        atomic::{AtomicI64, Ordering},
     },
 };
 
 use serde_json::Value;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc::UnboundedSender};
 use tokio_tungstenite::tungstenite::protocol::Message;
-use tracing::{debug, error, info, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, trace, warn};
 
 use super::{
     VoiceGateway,
-    heartbeat::spawn_heartbeat,
-    voice::{discover_ip, speak_loop},
+    heartbeat::HeartbeatTracker,
+    types::{SessionOutcome, VoiceGatewayMessage, VoiceOp},
+    voice::{SpeakConfig, discover_ip, speak_loop},
 };
 use crate::{
     common::types::{Shared, UserId},
     gateway::{
         DaveHandler,
         constants::{DAVE_INITIAL_VERSION, DEFAULT_VOICE_MODE},
-        session::types::{SessionOutcome, VoiceGatewayMessage},
     },
 };
 
 pub struct SessionState<'a> {
     gateway: &'a VoiceGateway,
-    tx: tokio::sync::mpsc::UnboundedSender<Message>,
+    tx: UnboundedSender<Message>,
     seq_ack: Arc<AtomicI64>,
     ssrc: u32,
     udp_addr: Option<SocketAddr>,
@@ -36,80 +37,94 @@ pub struct SessionState<'a> {
     connected_users: HashSet<UserId>,
     udp_socket: Arc<tokio::net::UdpSocket>,
     dave: Shared<DaveHandler>,
+    heartbeat: HeartbeatTracker,
     heartbeat_handle: Option<tokio::task::JoinHandle<()>>,
-    last_heartbeat: Arc<AtomicU64>,
+    conn_token: CancellationToken,
+    speaking_tx: UnboundedSender<bool>,
+    session_key: Option<[u8; 32]>,
+    speak_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl<'a> SessionState<'a> {
     pub fn new(
         gateway: &'a VoiceGateway,
-        tx: tokio::sync::mpsc::UnboundedSender<Message>,
+        tx: UnboundedSender<Message>,
         seq_ack: Arc<AtomicI64>,
-    ) -> Self {
-        let mut connected_users = HashSet::new();
-        connected_users.insert(gateway.user_id);
+        conn_token: CancellationToken,
+        speaking_tx: UnboundedSender<bool>,
+    ) -> Result<Self, std::io::Error> {
+        let mut users = HashSet::new();
+        users.insert(gateway.user_id);
 
-        let udp_socket = std::net::UdpSocket::bind("0.0.0.0:0").expect("Failed to bind UDP socket");
-        udp_socket
-            .set_nonblocking(true)
-            .expect("Failed to set non-blocking");
-        let udp_socket = Arc::new(
-            tokio::net::UdpSocket::from_std(udp_socket)
-                .expect("Failed to convert to tokio UDP socket"),
-        );
+        let udp = std::net::UdpSocket::bind("0.0.0.0:0")?;
+        udp.set_nonblocking(true)?;
+        let udp_socket = Arc::new(tokio::net::UdpSocket::from_std(udp)?);
 
-        Self {
+        Ok(Self {
             gateway,
             tx,
             seq_ack,
             ssrc: 0,
             udp_addr: None,
             selected_mode: DEFAULT_VOICE_MODE.to_string(),
-            connected_users,
+            connected_users: users,
             udp_socket,
             dave: Arc::new(Mutex::new(DaveHandler::new(
                 gateway.user_id,
                 gateway.channel_id,
             ))),
+            heartbeat: HeartbeatTracker::new(),
             heartbeat_handle: None,
-            last_heartbeat: Arc::new(AtomicU64::new(0)),
-        }
+            conn_token,
+            speaking_tx,
+            session_key: None,
+            speak_task: None,
+        })
+    }
+
+    pub fn ssrc(&self) -> u32 {
+        self.ssrc
+    }
+    pub fn tx(&self) -> &UnboundedSender<Message> {
+        &self.tx
     }
 
     pub async fn handle_text(&mut self, text: String) -> Option<SessionOutcome> {
         let msg: VoiceGatewayMessage = match serde_json::from_str(&text) {
             Ok(m) => m,
             Err(e) => {
-                warn!(
-                    "[{}] Failed to parse voice gateway message: {} - Text: {}",
-                    self.gateway.guild_id, e, text
-                );
+                warn!("[{}] Parse error: {e}", self.gateway.guild_id);
                 return None;
             }
         };
 
-        // Update sequence acknowledgment if present
-        if let Some(seq) = serde_json::from_str::<Value>(&text)
-            .ok()
-            .and_then(|v| v["seq"].as_i64())
+        if let Ok(v) = serde_json::from_str::<Value>(&text)
+            && let Some(seq) = v["seq"].as_i64()
         {
             self.seq_ack.store(seq, Ordering::Relaxed);
         }
 
-        match msg.op {
-            8 => self.handle_hello(msg.d),
-            2 => self.handle_ready(msg.d).await,
-            4 => self.handle_session_description(msg.d).await,
-            6 => self.handle_heartbeat_ack(),
-            9 => self.handle_resumed(),
-            11 => self.handle_user_connect(msg.d),
-            13 => self.handle_user_disconnect(msg.d),
-            21 => self.handle_prepare_transition(msg.d).await,
-            22 => self.handle_execute_transition(msg.d).await,
-            24 => self.handle_prepare_epoch(msg.d).await,
+        let op = VoiceOp::from_raw(msg.op);
+        trace!(
+            "[{}] WS RX: op={} d={:?}",
+            self.gateway.guild_id, msg.op, msg.d
+        );
+
+        match op {
+            Some(VoiceOp::Hello) => self.handle_hello(msg.d),
+            Some(VoiceOp::Ready) => self.handle_ready(msg.d).await,
+            Some(VoiceOp::SessionDescription) => self.handle_session_description(msg.d).await,
+            Some(VoiceOp::HeartbeatAck) => self.handle_heartbeat_ack(msg.d),
+            Some(VoiceOp::Resumed) => self.handle_resumed().await,
+            Some(VoiceOp::UserConnect) => self.handle_user_connect(msg.d),
+            Some(VoiceOp::UserDisconnect) => self.handle_user_disconnect(msg.d),
+            Some(VoiceOp::Speaking) => None, // Silently ignore speaking events
+            Some(VoiceOp::DavePrepareTransition) => self.handle_prepare_transition(msg.d).await,
+            Some(VoiceOp::DaveExecuteTransition) => self.handle_execute_transition(msg.d).await,
+            Some(VoiceOp::DavePrepareEpoch) => self.handle_prepare_epoch(msg.d).await,
             _ => {
-                debug!(
-                    "[{}] Received voice op {}: {:?}",
+                warn!(
+                    "[{}] Unhandled op {}: {:?}",
                     self.gateway.guild_id, msg.op, msg.d
                 );
                 None
@@ -117,20 +132,104 @@ impl<'a> SessionState<'a> {
         }
     }
 
+    pub async fn handle_binary(&mut self, bin: Vec<u8>) {
+        if bin.len() < 3 {
+            warn!(
+                "[{}] Binary too short: {} bytes",
+                self.gateway.guild_id,
+                bin.len()
+            );
+            return;
+        }
+
+        let seq = u16::from_be_bytes([bin[0], bin[1]]);
+        let op = bin[2];
+        let payload = &bin[3..];
+        self.seq_ack.store(seq as i64, Ordering::Relaxed);
+
+        let mut dave = self.dave.lock().await;
+        match op {
+            25 => {
+                if let Ok(resps) = dave.process_external_sender(payload, &self.connected_users) {
+                    for resp in resps {
+                        self.send_binary(28, &resp);
+                    }
+                }
+            }
+            27 => {
+                if let Err(e) = self.process_dave_proposals(&mut dave, payload).await {
+                    warn!("[{}] DAVE proposals failed: {e}", self.gateway.guild_id);
+                    self.reset_dave_session(&mut dave, 0).await;
+                }
+            }
+            29 | 30 => {
+                let is_welcome = op == 30;
+                let res = if is_welcome {
+                    dave.process_welcome(payload)
+                } else {
+                    dave.process_commit(payload)
+                };
+
+                match res {
+                    Ok(tid) if tid != 0 => {
+                        self.send_json(23, serde_json::json!({ "transition_id": tid }))
+                    }
+                    Err(e) => {
+                        let tid = if payload.len() >= 2 {
+                            u16::from_be_bytes([payload[0], payload[1]])
+                        } else {
+                            0
+                        };
+                        warn!(
+                            "[{}] DAVE {} failed (tid {tid}): {e}",
+                            self.gateway.guild_id,
+                            if is_welcome { "welcome" } else { "commit" }
+                        );
+                        self.reset_dave_session(&mut dave, tid).await;
+                    }
+                    _ => {}
+                }
+            }
+            _ => trace!(
+                "[{}] Unknown binary op {op} (seq {seq})",
+                self.gateway.guild_id
+            ),
+        }
+    }
+
+    async fn process_dave_proposals(
+        &self,
+        dave: &mut DaveHandler,
+        payload: &[u8],
+    ) -> crate::common::types::AnyResult<()> {
+        if let Some(cw) = dave.process_proposals(payload, &self.connected_users)? {
+            self.send_binary(28, &cw);
+        }
+        Ok(())
+    }
+
+    async fn reset_dave_session(&self, dave: &mut DaveHandler, tid: u16) {
+        dave.reset();
+        self.send_json(31, serde_json::json!({ "transition_id": tid }));
+        if let Ok(kp) = dave.setup_session(DAVE_INITIAL_VERSION) {
+            self.send_binary(26, &kp);
+        }
+    }
+
     fn handle_hello(&mut self, d: Value) -> Option<SessionOutcome> {
-        let interval = d["heartbeat_interval"].as_u64().unwrap_or(30000);
+        let interval = d["heartbeat_interval"].as_u64().unwrap_or(30_000);
+
         if let Some(h) = self.heartbeat_handle.take() {
             h.abort();
         }
-
-        debug!(
-            "[{}] Heartbeat interval set to {}ms",
-            self.gateway.guild_id, interval
+        trace!(
+            "[{}] Heartbeat interval: {interval}ms",
+            self.gateway.guild_id
         );
-        self.heartbeat_handle = Some(spawn_heartbeat(
+
+        self.heartbeat_handle = Some(self.heartbeat.spawn(
             self.tx.clone(),
             self.seq_ack.clone(),
-            self.last_heartbeat.clone(),
             interval,
         ));
         None
@@ -140,7 +239,7 @@ impl<'a> SessionState<'a> {
         self.ssrc = d["ssrc"].as_u64().unwrap_or(0) as u32;
         let ip = d["ip"].as_str().unwrap_or("");
         let port = d["port"].as_u64().unwrap_or(0) as u16;
-        self.udp_addr = Some(format!("{}:{}", ip, port).parse().ok()?);
+        self.udp_addr = Some(format!("{ip}:{port}").parse().ok()?);
 
         if let Some(modes) = d["modes"].as_array() {
             let preferred = ["aead_aes256_gcm_rtpsize", "xsalsa20_poly1305"];
@@ -154,8 +253,8 @@ impl<'a> SessionState<'a> {
 
         let addr = self.udp_addr?;
         debug!(
-            "[{}] Ready! IP: {}, Port: {}, SSRC: {}, Mode: {}",
-            self.gateway.guild_id, ip, port, self.ssrc, self.selected_mode
+            "[{}] Ready: ssrc={}, mode={}",
+            self.gateway.guild_id, self.ssrc, self.selected_mode
         );
 
         match discover_ip(&self.udp_socket, addr, self.ssrc).await {
@@ -169,7 +268,7 @@ impl<'a> SessionState<'a> {
                 );
             }
             Err(e) => {
-                error!("[{}] IP discovery failed: {}", self.gateway.guild_id, e);
+                error!("[{}] IP discovery failed: {e}", self.gateway.guild_id);
                 return Some(SessionOutcome::Reconnect);
             }
         }
@@ -192,85 +291,56 @@ impl<'a> SessionState<'a> {
             Some(key)
         });
 
-        let Some(key) = secret_key else {
-            error!(
-                "[{}] Missing or invalid secret_key in session_description",
-                self.gateway.guild_id
-            );
-            return Some(SessionOutcome::Reconnect);
+        let key = match secret_key {
+            Some(k) => k,
+            None => {
+                error!("[{}] Missing secret_key", self.gateway.guild_id);
+                return Some(SessionOutcome::Reconnect);
+            }
         };
 
         if let Some(addr) = self.udp_addr {
-            debug!(
-                "[{}] Starting voice playback loop with mode {}",
-                self.gateway.guild_id, self.selected_mode
-            );
-
-            let mixer = self.gateway.mixer.clone();
-            let dave_handle = self.dave.clone();
-            let socket = self.udp_socket.clone();
-            let mode = self.selected_mode.clone();
-            let filter_chain = self.gateway.filter_chain.clone();
-            let f_sent = self.gateway.frames_sent.clone();
-            let f_nulled = self.gateway.frames_nulled.clone();
-            let cancel = self.gateway.cancel_token.clone();
-            let ssrc = self.ssrc;
-
-            tokio::spawn(async move {
-                if let Err(e) = speak_loop(
-                    mixer,
-                    socket,
-                    addr,
-                    ssrc,
-                    key,
-                    mode,
-                    dave_handle,
-                    filter_chain,
-                    f_sent,
-                    f_nulled,
-                    cancel,
-                )
-                .await
-                {
-                    error!("Voice playback loop error: {}", e);
-                }
-            });
-
+            self.session_key = Some(key);
+            self.launch_speak_loop(addr, key).await;
             self.send_json(
                 5,
-                serde_json::json!({"speaking": 1, "delay": 0, "ssrc": self.ssrc}),
+                serde_json::json!({"speaking": 0, "delay": 0, "ssrc": self.ssrc}),
             );
         }
 
-        // Initialize DAVE protocol if applicable
         if self.gateway.channel_id.0 > 0 {
             let mut dave = self.dave.lock().await;
             if let Ok(kp) = dave.setup_session(DAVE_INITIAL_VERSION) {
-                debug!("[{}] Sending DAVE keyring (op 26)", self.gateway.guild_id);
                 self.send_binary(26, &kp);
             }
         }
         None
     }
 
-    fn handle_heartbeat_ack(&self) -> Option<SessionOutcome> {
-        let sent_ms = self.last_heartbeat.load(Ordering::Relaxed);
-        if sent_ms > 0 {
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            let latency = now_ms.saturating_sub(sent_ms);
-            self.gateway.ping.store(latency as i64, Ordering::Relaxed);
+    async fn handle_resumed(&mut self) -> Option<SessionOutcome> {
+        info!("[{}] Resumed", self.gateway.guild_id);
+
+        match (self.udp_addr, self.session_key) {
+            (Some(addr), Some(key)) => {
+                self.launch_speak_loop(addr, key).await;
+                self.send_json(
+                    5,
+                    serde_json::json!({"speaking": 0, "delay": 0, "ssrc": self.ssrc}),
+                );
+            }
+            _ => {
+                warn!("[{}] Resume failed: missing state", self.gateway.guild_id);
+                return Some(SessionOutcome::Identify);
+            }
         }
         None
     }
 
-    fn handle_resumed(&self) -> Option<SessionOutcome> {
-        info!(
-            "[{}] Voice session resumed successfully",
-            self.gateway.guild_id
-        );
+    fn handle_heartbeat_ack(&self, d: Value) -> Option<SessionOutcome> {
+        let nonce = d["t"].as_u64().unwrap_or(0);
+        if let Some(rtt) = self.heartbeat.validate_ack(nonce) {
+            self.gateway.ping.store(rtt as i64, Ordering::Relaxed);
+        }
         None
     }
 
@@ -286,16 +356,16 @@ impl<'a> SessionState<'a> {
     }
 
     fn handle_user_disconnect(&mut self, d: Value) -> Option<SessionOutcome> {
-        if let Some(id) = d["user_id"].as_str().and_then(|s| s.parse::<u64>().ok()) {
-            self.connected_users.remove(&UserId(id));
+        if let Some(uid) = d["user_id"].as_str().and_then(|s| s.parse::<u64>().ok()) {
+            self.connected_users.remove(&UserId(uid));
         }
         None
     }
 
     async fn handle_prepare_transition(&mut self, d: Value) -> Option<SessionOutcome> {
         let tid = d["transition_id"].as_u64().unwrap_or(0) as u16;
-        let version = d["protocol_version"].as_u64().unwrap_or(0) as u16;
-        if self.dave.lock().await.prepare_transition(tid, version) {
+        let ver = d["protocol_version"].as_u64().unwrap_or(0) as u16;
+        if self.dave.lock().await.prepare_transition(tid, ver) {
             self.send_json(23, serde_json::json!({ "transition_id": tid }));
         }
         None
@@ -309,80 +379,38 @@ impl<'a> SessionState<'a> {
 
     async fn handle_prepare_epoch(&mut self, d: Value) -> Option<SessionOutcome> {
         let epoch = d["epoch"].as_u64().unwrap_or(0);
-        let version = d["protocol_version"].as_u64().unwrap_or(0) as u16;
-        self.dave.lock().await.prepare_epoch(epoch, version);
+        let ver = d["protocol_version"].as_u64().unwrap_or(0) as u16;
+        self.dave.lock().await.prepare_epoch(epoch, ver);
         None
     }
 
-    pub async fn handle_binary(&mut self, bin: Vec<u8>) {
-        if bin.len() < 3 {
-            return;
+    async fn launch_speak_loop(&mut self, addr: SocketAddr, key: [u8; 32]) {
+        if let Some(prev) = self.speak_task.take() {
+            prev.abort();
         }
 
-        let seq = u16::from_be_bytes([bin[0], bin[1]]);
-        let op = bin[2];
-        let payload = &bin[3..];
-        self.seq_ack.store(seq as i64, Ordering::Relaxed);
+        debug!("[{}] Launching speak_loop", self.gateway.guild_id);
 
-        let mut dave = self.dave.lock().await;
-        match op {
-            25 => {
-                if let Ok(responses) = dave.process_external_sender(payload, &self.connected_users)
-                {
-                    for resp in responses {
-                        self.send_binary(28, &resp);
-                    }
-                }
+        let config = SpeakConfig {
+            mixer: self.gateway.mixer.clone(),
+            socket: self.udp_socket.clone(),
+            addr,
+            ssrc: self.ssrc,
+            key,
+            mode: self.selected_mode.clone(),
+            dave: self.dave.clone(),
+            filter_chain: self.gateway.filter_chain.clone(),
+            frames_sent: self.gateway.frames_sent.clone(),
+            frames_nulled: self.gateway.frames_nulled.clone(),
+            cancel_token: self.conn_token.clone(),
+            speaking_tx: self.speaking_tx.clone(),
+        };
+
+        self.speak_task = Some(tokio::spawn(async move {
+            if let Err(e) = speak_loop(config).await {
+                error!("speak_loop failed: {e}");
             }
-            27 => match dave.process_proposals(payload, &self.connected_users) {
-                Ok(Some(cw)) => self.send_binary(28, &cw),
-                Ok(None) => {}
-                Err(_) => {
-                    warn!(
-                        "[{}] DAVE proposals failed, resetting session",
-                        self.gateway.guild_id
-                    );
-                    dave.reset();
-                    self.send_json(31, serde_json::json!({ "transition_id": 0 }));
-                    if let Ok(kp) = dave.setup_session(DAVE_INITIAL_VERSION) {
-                        self.send_binary(26, &kp);
-                    }
-                }
-            },
-            29 | 30 => {
-                let res = if op == 30 {
-                    dave.process_welcome(payload)
-                } else {
-                    dave.process_commit(payload)
-                };
-                match res {
-                    Ok(tid) if tid != 0 => {
-                        self.send_json(23, serde_json::json!({ "transition_id": tid }));
-                    }
-                    Ok(_) => {}
-                    Err(_) => {
-                        let tid = if payload.len() >= 2 {
-                            u16::from_be_bytes([payload[0], payload[1]])
-                        } else {
-                            0
-                        };
-                        warn!(
-                            "[{}] DAVE transition failed (op {}), resetting",
-                            self.gateway.guild_id, op
-                        );
-                        dave.reset();
-                        self.send_json(31, serde_json::json!({ "transition_id": tid }));
-                        if let Ok(kp) = dave.setup_session(1) {
-                            self.send_binary(26, &kp);
-                        }
-                    }
-                }
-            }
-            _ => debug!(
-                "[{}] Received unknown binary op {} (seq {})",
-                self.gateway.guild_id, op, seq
-            ),
-        }
+        }));
     }
 
     fn send_json(&self, op: u8, d: Value) {
@@ -402,6 +430,9 @@ impl<'a> SessionState<'a> {
 impl<'a> Drop for SessionState<'a> {
     fn drop(&mut self) {
         if let Some(h) = self.heartbeat_handle.take() {
+            h.abort();
+        }
+        if let Some(h) = self.speak_task.take() {
             h.abort();
         }
     }

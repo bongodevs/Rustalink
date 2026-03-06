@@ -1,14 +1,8 @@
-//! `resample/linear.rs` — fast linear-interpolation resampler.
-//!
-//! Exposed as a named type so callers can choose quality vs. speed
-//! (see [`HermiteResampler`](super::HermiteResampler) for the higher-quality option).
+use crate::audio::buffer::PooledBuffer;
 
 pub struct LinearResampler {
-    /// Source / target ratio (< 1.0 upsamples, > 1.0 downsamples).
     ratio: f32,
-    /// Fractional read head within the current input block.
     index: f32,
-    /// Last sample of the previous block (per channel) for cross-block interpolation.
     last_samples: Vec<i16>,
     channels: usize,
 }
@@ -23,8 +17,7 @@ impl LinearResampler {
         }
     }
 
-    /// Resample `input` and **append** resampled samples into `output`.
-    pub fn process(&mut self, input: &[i16], output: &mut Vec<i16>) {
+    pub fn process(&mut self, input: &[i16], output: &mut PooledBuffer) {
         let num_frames = input.len() / self.channels;
 
         while self.index < num_frames as f32 {
@@ -33,16 +26,16 @@ impl LinearResampler {
 
             for c in 0..self.channels {
                 let s1 = if idx == 0 {
-                    self.last_samples[c] as f32
+                    self.last_samples[c]
                 } else {
-                    input[(idx - 1) * self.channels + c] as f32
-                };
+                    input[(idx - 1) * self.channels + c]
+                } as f32;
 
                 let s2 = if idx < num_frames {
-                    input[idx * self.channels + c] as f32
+                    input[idx * self.channels + c]
                 } else {
-                    input[(num_frames - 1) * self.channels + c] as f32
-                };
+                    input[(num_frames - 1) * self.channels + c]
+                } as f32;
 
                 output.push((s1 * (1.0 - fract) + s2 * fract) as i16);
             }

@@ -1,8 +1,18 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use regex::Regex;
 use tokio::sync::RwLock;
 use tracing::{error, info};
+
+fn script_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"src="(/assets/index-[^"]+\.js)""#).unwrap())
+}
+
+fn client_id_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"clientId\s*[:=]\s*"([^"]+)""#).unwrap())
+}
 
 #[derive(Clone, Debug)]
 pub struct TidalToken {
@@ -39,10 +49,10 @@ impl TidalTokenTracker {
     pub async fn get_token(&self) -> Option<String> {
         {
             let lock = self.token.read().await;
-            if let Some(token) = &*lock {
-                if self.is_valid(token) {
-                    return Some(token.access_token.clone());
-                }
+            if let Some(token) = &*lock
+                && self.is_valid(token)
+            {
+                return Some(token.access_token.clone());
             }
         }
         self.refresh_token().await
@@ -76,8 +86,7 @@ impl TidalTokenTracker {
         let html = resp.text().await.unwrap_or_default();
 
         // Find src="/assets/index-....js"
-        let script_regex = Regex::new(r#"src="(/assets/index-[^"]+\.js)""#).unwrap();
-        let script_path = match script_regex.captures(&html) {
+        let script_path = match script_regex().captures(&html) {
             Some(caps) => caps.get(1)?.as_str(),
             None => {
                 error!("Could not find index JS in Tidal HTML");
@@ -98,14 +107,13 @@ impl TidalTokenTracker {
         let js_content = js_resp.text().await.unwrap_or_default();
 
         // Find clientId:"..." - we want the second one
-        let client_id_regex = Regex::new(r#"clientId\s*[:=]\s*"([^"]+)""#).unwrap();
-        let mut matches = client_id_regex.captures_iter(&js_content);
+        let mut matches = client_id_regex().captures_iter(&js_content);
 
         // Skip first match
         matches.next();
 
         let token_str = match matches.next() {
-            Some(caps) => caps.get(1)?.as_str().to_string(),
+            Some(caps) => caps.get(1)?.as_str().to_owned(),
             None => {
                 error!("Could not find second clientId in Tidal JS");
                 return None;

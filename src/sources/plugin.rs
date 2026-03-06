@@ -4,86 +4,89 @@ use async_trait::async_trait;
 use flume::{Receiver, Sender};
 
 use crate::audio::{buffer::PooledBuffer, processor::DecoderCommand};
+use crate::config::HttpProxyConfig;
+use crate::protocol::tracks::{LoadResult, SearchResult};
+use crate::routeplanner::RoutePlanner;
 
-/// A track that can start its own decoding and return audio frames.
+/// Represents the output of a decoder, providing streams for audio data and control commands.
 ///
 /// Returns `(pcm_rx, cmd_tx, error_rx, opus_rx)` where:
-/// - `pcm_rx`   — batched i16 PCM sample frames (transcode path)
-/// - `cmd_tx`   — send seek/stop commands to the decoder
-/// - `error_rx` — receives a single `String` if a fatal decode/IO error occurs
-/// - `opus_rx`  — `Some` when the stream is already Opus (YouTube WebM passthrough);
-///               raw Opus frames that bypass the PCM mix and encode entirely
+/// - `pcm_rx`   — Receives batched i16 PCM sample frames for transcoding.
+/// - `cmd_tx`   — Sends `DecoderCommand` (e.g., seek, stop) to the decoder.
+/// - `error_rx` — Receives a fatal error message if decoding or IO fails.
+/// - `opus_rx`  — Optional receiver for raw Opus frames (e.g., YouTube WebM passthrough).
+pub type DecoderOutput = (
+    Receiver<PooledBuffer>,
+    Sender<DecoderCommand>,
+    Receiver<String>,
+    Option<Receiver<Arc<Vec<u8>>>>,
+);
+
+/// A track capable of initializing its own decoding process.
 pub trait PlayableTrack: Send + Sync {
-    fn start_decoding(
-        &self,
-        config: crate::configs::player::PlayerConfig,
-    ) -> (
-        Receiver<PooledBuffer>,
-        Sender<DecoderCommand>,
-        flume::Receiver<String>,
-        Option<Receiver<Arc<Vec<u8>>>>,
-    );
+    /// Starts the decoding process with the provided player configuration.
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput;
 }
 
-/// A boxed playable track.
 pub type BoxedTrack = Box<dyn PlayableTrack>;
-
-/// A boxed source plugin.
 pub type BoxedSource = Box<dyn SourcePlugin>;
 
-/// Trait that all source plugins must implement.
+/// Core trait for all media source plugins.
 #[async_trait]
 pub trait SourcePlugin: Send + Sync {
-    /// Unique identifier for this source (e.g., "http", "youtube", "spotify")
+    /// Returns the unique identifier for this source (e.g., "youtube", "spotify").
     fn name(&self) -> &str;
 
-    /// Check if this source can handle the given identifier.
+    /// Returns true if this source can handle the given identifier/URI.
     fn can_handle(&self, identifier: &str) -> bool;
 
-    /// Resolve the identifier into track(s).
+    /// Resolves an identifier into one or more tracks.
     async fn load(
         &self,
         identifier: &str,
-        routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> crate::protocol::tracks::LoadResult;
+        routeplanner: Option<Arc<dyn RoutePlanner>>,
+    ) -> LoadResult;
 
-    /// Get a playable track for the given identifier.
+    /// Returns a playable track for the given identifier, if applicable.
     async fn get_track(
         &self,
         _identifier: &str,
-        _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
+        _routeplanner: Option<Arc<dyn RoutePlanner>>,
     ) -> Option<BoxedTrack> {
         None
     }
 
-    /// Search across various entities (tracks, albums, artists, etc).
-    /// Corresponds to LavaSearch's loadSearch API.
+    /// Performs a search across various entities (tracks, albums, etc.).
     async fn load_search(
         &self,
         _query: &str,
         _types: &[String],
-        _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<crate::protocol::tracks::SearchResult> {
+        _routeplanner: Option<Arc<dyn RoutePlanner>>,
+    ) -> Option<SearchResult> {
         None
     }
 
-    /// Get the proxy configuration for this source, if any.
-    fn get_proxy_config(&self) -> Option<crate::configs::HttpProxyConfig> {
+    /// Returns the proxy configuration specific to this source.
+    fn get_proxy_config(&self) -> Option<HttpProxyConfig> {
         None
     }
 
+    /// Prefixes used for searching (e.g., "ytsearch:").
     fn search_prefixes(&self) -> Vec<&str> {
         vec![]
     }
 
+    /// Prefixes used for ISRC lookups.
     fn isrc_prefixes(&self) -> Vec<&str> {
         vec![]
     }
 
+    /// Prefixes used for recommendations.
     fn rec_prefixes(&self) -> Vec<&str> {
         vec![]
     }
 
+    /// Indicates if this source acts as a mirror/resolver rather than a primary content provider.
     fn is_mirror(&self) -> bool {
         false
     }

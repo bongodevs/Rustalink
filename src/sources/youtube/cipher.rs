@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
-use crate::{common::types::AnyResult, configs::sources::YouTubeCipherConfig};
+use crate::{common::types::AnyResult, config::sources::YouTubeCipherConfig};
 
 #[derive(Clone)]
 pub struct CachedPlayerScript {
@@ -30,19 +30,19 @@ impl YouTubeCipherManager {
     pub async fn get_cached_player_script(&self) -> AnyResult<CachedPlayerScript> {
         {
             let cache = self.cached_player_script.read().await;
-            if let Some(script) = &*cache {
-                if Instant::now() < script.expire_timestamp_ms {
-                    return Ok(script.clone());
-                }
+            if let Some(script) = &*cache
+                && Instant::now() < script.expire_timestamp_ms
+            {
+                return Ok(script.clone());
             }
         }
 
         let mut cache = self.cached_player_script.write().await;
         // Check again after acquiring write lock
-        if let Some(script) = &*cache {
-            if Instant::now() < script.expire_timestamp_ms {
-                return Ok(script.clone());
-            }
+        if let Some(script) = &*cache
+            && Instant::now() < script.expire_timestamp_ms
+        {
+            return Ok(script.clone());
         }
 
         let script = self.get_player_script().await?;

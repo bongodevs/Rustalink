@@ -9,48 +9,123 @@ pub struct VoiceGatewayMessage {
     pub d: Value,
 }
 
-/// Outcome of a single WS session — tells the outer loop what to do next.
+/// What the outer reconnect loop should do after a session ends.
 pub enum SessionOutcome {
-    /// Reconnectable disconnect — try Op 7 resume.
+    /// Op 7 resume is viable — the UDP/SSRC state is still valid on Discord's end.
     Reconnect,
-    /// Session invalid — start over with fresh Op 0 Identify.
+    /// Session is stale; start fresh with Op 0 Identify.
     Identify,
-    /// Fatal close or max errors — stop entirely.
+    /// Close code is fatal or retry budget exhausted — stop entirely.
     Shutdown,
 }
 
-/// Close codes that allow Op-7 resume (per Discord voice gateway spec).
-///
-/// Note: `1006` is a *local* abnormal-close marker set by the WebSocket
-/// library, not a Discord gateway close code. It is handled in the WS
-/// read-error arm and must NOT be listed here to avoid duplicate reconnect
-/// triggers.
-pub fn is_reconnectable_close(code: u16) -> bool {
-    matches!(code, 4009 | 4015)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseAction {
+    UnknownOpcode,
+    InvalidPayload,
+    NotAuthenticated,
+    AuthenticationFailed,
+    AlreadyAuthenticated,
+    InvalidSession,
+    SessionTimeout,
+    ServerNotFound,
+    UnknownProtocol,
+    Disconnected,
+    VoiceServerCrash,
+    UnknownEncryptionMode,
+    DaveProtocolRequired,
+    BadRequest,
+    RateLimited,
+    CallTerminated,
 }
 
-/// Close codes that require a fresh Identify (Op 0) instead of Resume (Op 7).
-pub fn is_reidentify_close(code: u16) -> bool {
-    matches!(code, 4006)
+const CLOSE_CODE_TABLE: &[(u16, CloseAction)] = &[
+    (4001, CloseAction::UnknownOpcode),
+    (4002, CloseAction::InvalidPayload),
+    (4003, CloseAction::NotAuthenticated),
+    (4004, CloseAction::AuthenticationFailed),
+    (4005, CloseAction::AlreadyAuthenticated),
+    (4006, CloseAction::InvalidSession),
+    (4009, CloseAction::SessionTimeout),
+    (4011, CloseAction::ServerNotFound),
+    (4012, CloseAction::UnknownProtocol),
+    (4013, CloseAction::Disconnected),
+    (4014, CloseAction::VoiceServerCrash),
+    (4015, CloseAction::UnknownEncryptionMode),
+    (4016, CloseAction::DaveProtocolRequired),
+    (4020, CloseAction::BadRequest),
+    (4021, CloseAction::RateLimited),
+    (4022, CloseAction::CallTerminated),
+];
+
+/// Single authoritative entry point: given a raw WS close code, return the
+/// `SessionOutcome` the reconnect loop should act on.
+pub fn classify_close(code: u16) -> SessionOutcome {
+    let action = CLOSE_CODE_TABLE
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map(|(_, a)| *a)
+        .unwrap_or(CloseAction::UnknownOpcode);
+
+    match action {
+        CloseAction::UnknownOpcode => SessionOutcome::Reconnect,
+        CloseAction::InvalidPayload => SessionOutcome::Identify,
+        CloseAction::NotAuthenticated => SessionOutcome::Shutdown,
+        CloseAction::AuthenticationFailed => SessionOutcome::Shutdown,
+        CloseAction::AlreadyAuthenticated => SessionOutcome::Shutdown,
+        CloseAction::InvalidSession => SessionOutcome::Identify,
+        CloseAction::SessionTimeout => SessionOutcome::Identify,
+        CloseAction::ServerNotFound => SessionOutcome::Shutdown,
+        CloseAction::UnknownProtocol => SessionOutcome::Shutdown,
+        CloseAction::Disconnected => SessionOutcome::Shutdown,
+        CloseAction::VoiceServerCrash => SessionOutcome::Shutdown,
+        CloseAction::UnknownEncryptionMode => SessionOutcome::Shutdown,
+        CloseAction::DaveProtocolRequired => SessionOutcome::Shutdown,
+        CloseAction::BadRequest => SessionOutcome::Shutdown,
+        CloseAction::RateLimited => SessionOutcome::Shutdown,
+        CloseAction::CallTerminated => SessionOutcome::Shutdown,
+    }
 }
 
-/// Close codes that mean the session is dead and must not be retried.
-///
-/// - `4004`: Authentication failed
-/// - `4014`: Channel was deleted / bot was kicked
 pub fn is_fatal_close(code: u16) -> bool {
-    matches!(code, 4004 | 4014)
+    matches!(classify_close(code), SessionOutcome::Shutdown)
 }
 
-/// Converts any `Display`-able value into the project's boxed error type.
-///
-/// Using `Display` (rather than `std::error::Error`) means this works with
-/// every error type in the codebase, including those that don't impl `Error`
-/// (e.g. `audiopus::Error`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceOp {
+    Ready = 2,
+    Speaking = 5,
+    SessionDescription = 4,
+    HeartbeatAck = 6,
+    Hello = 8,
+    Resumed = 9,
+    UserConnect = 11,
+    UserDisconnect = 13,
+    DavePrepareTransition = 21,
+    DaveExecuteTransition = 22,
+    DavePrepareEpoch = 24,
+}
+
+impl VoiceOp {
+    pub fn from_raw(op: u8) -> Option<Self> {
+        Some(match op {
+            2 => Self::Ready,
+            5 => Self::Speaking,
+            4 => Self::SessionDescription,
+            6 => Self::HeartbeatAck,
+            8 => Self::Hello,
+            9 => Self::Resumed,
+            11 => Self::UserConnect,
+            13 => Self::UserDisconnect,
+            21 => Self::DavePrepareTransition,
+            22 => Self::DaveExecuteTransition,
+            24 => Self::DavePrepareEpoch,
+            _ => return None,
+        })
+    }
+}
+
 #[inline]
 pub fn map_boxed_err<E: std::fmt::Display>(e: E) -> AnyError {
-    Box::new(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        e.to_string(),
-    ))
+    Box::new(std::io::Error::other(e.to_string()))
 }

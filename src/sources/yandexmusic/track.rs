@@ -14,13 +14,13 @@ pub struct YandexMusicTrack {
     pub client: Arc<reqwest::Client>,
     pub track_id: String,
     pub local_addr: Option<IpAddr>,
-    pub proxy: Option<crate::configs::HttpProxyConfig>,
+    pub proxy: Option<crate::config::HttpProxyConfig>,
 }
 
 impl PlayableTrack for YandexMusicTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::buffer::PooledBuffer>,
         Sender<DecoderCommand>,

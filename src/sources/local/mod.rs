@@ -23,6 +23,12 @@ use crate::{
 
 pub struct LocalSource;
 
+impl Default for LocalSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LocalSource {
     pub fn new() -> Self {
         Self
@@ -30,7 +36,8 @@ impl LocalSource {
 
     fn probe_file(path: &str) -> Result<TrackInfo, Box<dyn std::error::Error + Send + Sync>> {
         let file = std::fs::File::open(path)?;
-        let ext = Path::new(path)
+        let path_obj = Path::new(path);
+        let ext = path_obj
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_lowercase());
@@ -55,18 +62,19 @@ impl LocalSource {
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
             .ok_or("no audio track found")?;
 
-        // Duration
-        let duration = if let Some(n_frames) = track.codec_params.n_frames {
-            if let Some(rate) = track.codec_params.sample_rate {
-                (n_frames as f64 / rate as f64 * 1000.0) as u64
-            } else {
-                0
-            }
-        } else {
-            0
-        };
+        // Duration calculation
+        let duration = track
+            .codec_params
+            .n_frames
+            .and_then(|n| {
+                track
+                    .codec_params
+                    .sample_rate
+                    .map(|r| (n as f64 / r as f64 * 1000.0) as u64)
+            })
+            .unwrap_or(0);
 
-        // Metadata tags
+        // Metadata extraction
         let mut title = String::new();
         let mut author = String::new();
 
@@ -74,38 +82,38 @@ impl LocalSource {
             for tag in meta.tags() {
                 match tag.std_key {
                     Some(StandardTagKey::TrackTitle) => title = tag.value.to_string(),
-                    Some(StandardTagKey::Artist) | Some(StandardTagKey::AlbumArtist) => {
-                        if author.is_empty() {
-                            author = tag.value.to_string();
-                        }
+                    Some(StandardTagKey::Artist) | Some(StandardTagKey::AlbumArtist)
+                        if author.is_empty() =>
+                    {
+                        author = tag.value.to_string();
                     }
                     _ => {}
                 }
             }
         }
 
-        // Fallback: use the filename without extension as the title
+        // Fallback: use filename if metadata is missing
         if title.is_empty() {
-            title = Path::new(path)
+            title = path_obj
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("Unknown")
-                .to_string();
+                .to_owned();
         }
         if author.is_empty() {
-            author = "Unknown Artist".to_string();
+            author = "Unknown Artist".to_owned();
         }
 
         Ok(TrackInfo {
-            identifier: path.to_string(),
+            identifier: path.to_owned(),
             is_seekable: true,
             author,
             length: duration,
             is_stream: false,
             position: 0,
             title,
-            uri: Some(format!("file://{}", path)),
-            source_name: "local".to_string(),
+            uri: Some(format!("file://{path}")),
+            source_name: "local".to_owned(),
             artwork_url: None,
             isrc: None,
         })
@@ -131,9 +139,8 @@ impl SourcePlugin for LocalSource {
         let path = identifier
             .strip_prefix("file://")
             .unwrap_or(identifier)
-            .to_string();
-
-        debug!("Local source probing file: {}", path);
+            .to_owned();
+        debug!("Local source probing file: {path}");
 
         let path_clone = path.clone();
         let result =
@@ -142,18 +149,18 @@ impl SourcePlugin for LocalSource {
         match result {
             Ok(Ok(info)) => LoadResult::Track(Track::new(info)),
             Ok(Err(e)) => {
-                warn!("Local source: failed to probe '{}': {}", path, e);
+                warn!("Local source: failed to probe '{path}': {e}");
                 LoadResult::Error(LoadError {
-                    message: Some(format!("Failed to load local file: {}", e)),
+                    message: Some(format!("Failed to load local file: {e}")),
                     severity: Severity::Suspicious,
                     cause: e.to_string(),
                     cause_stack_trace: None,
                 })
             }
             Err(e) => {
-                error!("Local source: task join error: {}", e);
+                error!("Local source: task join error: {e}");
                 LoadResult::Error(LoadError {
-                    message: Some("Internal error reading local file".to_string()),
+                    message: Some("Internal error reading local file".to_owned()),
                     severity: Severity::Fault,
                     cause: e.to_string(),
                     cause_stack_trace: None,
@@ -170,7 +177,7 @@ impl SourcePlugin for LocalSource {
         let path = identifier
             .strip_prefix("file://")
             .unwrap_or(identifier)
-            .to_string();
+            .to_owned();
 
         if !Path::new(&path).is_file() {
             return None;
@@ -221,7 +228,7 @@ impl symphonia::core::io::MediaSource for LocalFileSource {
 impl PlayableTrack for LocalTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         flume::Receiver<crate::audio::buffer::PooledBuffer>,
         flume::Sender<DecoderCommand>,
@@ -242,8 +249,8 @@ impl PlayableTrack for LocalTrack {
             let source = match LocalFileSource::open(&path) {
                 Ok(s) => Box::new(s) as Box<dyn symphonia::core::io::MediaSource>,
                 Err(e) => {
-                    error!("LocalTrack: failed to open '{}': {}", path, e);
-                    let _ = err_tx.send(format!("Failed to open file: {}", e));
+                    error!("LocalTrack: failed to open '{path}': {e}");
+                    let _ = err_tx.send(format!("Failed to open file: {e}"));
                     return;
                 }
             };
@@ -253,22 +260,15 @@ impl PlayableTrack for LocalTrack {
                 .and_then(|e| e.to_str())
                 .map(crate::common::types::AudioFormat::from_ext);
 
-            match AudioProcessor::new(
-                source,
-                kind,
-                tx,
-                cmd_rx,
-                Some(err_tx.clone()),
-                config.clone(),
-            ) {
+            match AudioProcessor::new(source, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
                 Ok(mut processor) => {
                     if let Err(e) = processor.run() {
-                        error!("LocalTrack audio processor error: {}", e);
+                        error!("LocalTrack audio processor error: {e}");
                     }
                 }
                 Err(e) => {
-                    error!("LocalTrack failed to initialize processor: {}", e);
-                    let _ = err_tx.send(format!("Failed to initialize processor: {}", e));
+                    error!("LocalTrack failed to initialize processor: {e}");
+                    let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
                 }
             }
         });

@@ -5,14 +5,13 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     audio::processor::DecoderCommand,
-    configs::HttpProxyConfig,
+    config::HttpProxyConfig,
     sources::{
         plugin::PlayableTrack,
         youtube::{
             cipher::YouTubeCipherManager,
             clients::YouTubeClient,
             oauth::YouTubeOAuth,
-            sabr::SabrConfig,
             utils::{create_reader, detect_audio_kind},
         },
     },
@@ -28,15 +27,10 @@ pub struct YoutubeTrack {
     pub proxy: Option<HttpProxyConfig>,
 }
 
-enum ResolvedStream {
-    Url(String, String),
-    Sabr(SabrConfig, String, Arc<dyn YouTubeClient>),
-}
-
 impl PlayableTrack for YoutubeTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::PooledBuffer>,
         Sender<DecoderCommand>,
@@ -57,44 +51,18 @@ impl PlayableTrack for YoutubeTrack {
 
         tokio::spawn(async move {
             let context = serde_json::json!({ "visitorData": visitor_data_for_task });
-            let visitor_data_str = context
-                .get("visitorData")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
 
             let mut current_seek_ms = 0u64;
             let mut current_client_index = 0;
 
             'playback_loop: loop {
-                let signature_timestamp = cipher_manager_async.get_signature_timestamp().await.ok();
-                let mut resolved = None;
+                // Resolve a playback URL using any available client.
+                let mut resolved_url: Option<(String, String)> = None;
 
                 for (idx, client) in clients_async.iter().enumerate().skip(current_client_index) {
                     current_client_index = idx;
                     let client_name = client.name().to_string();
 
-                    if client_name == "Web" {
-                        if let Some(sabr_cfg) = client
-                            .get_sabr_config(
-                                &identifier_async,
-                                visitor_data_str.as_deref(),
-                                signature_timestamp,
-                                cipher_manager_async.clone(),
-                                current_seek_ms,
-                            )
-                            .await
-                        {
-                            info!(
-                                "YoutubeTrack: starting SABR stream for '{}' using client '{}' at {}ms",
-                                identifier_async, client_name, current_seek_ms
-                            );
-                            resolved =
-                                Some(ResolvedStream::Sabr(sabr_cfg, client_name, client.clone()));
-                            break;
-                        }
-                    }
-
-                    // 2. Try URL resolution (fallback)
                     debug!(
                         "YoutubeTrack: Resolving '{}' using {}",
                         identifier_async, client_name
@@ -113,7 +81,7 @@ impl PlayableTrack for YoutubeTrack {
                                 "YoutubeTrack: resolved track URL for '{}' using client '{}'",
                                 identifier_async, client_name
                             );
-                            resolved = Some(ResolvedStream::Url(url, client_name));
+                            resolved_url = Some((url, client_name));
                             break;
                         }
                         Ok(None) => {
@@ -131,7 +99,7 @@ impl PlayableTrack for YoutubeTrack {
                     }
                 }
 
-                let resolved = match resolved {
+                let (url, client_name) = match resolved_url {
                     Some(r) => r,
                     None => {
                         let msg = format!(
@@ -140,85 +108,38 @@ impl PlayableTrack for YoutubeTrack {
                         );
                         error!("{}", msg);
                         let _ = err_tx.send(msg);
-                        return; // Orchestrator exits
+                        return;
                     }
                 };
 
-                let is_sabr = matches!(resolved, ResolvedStream::Sabr(..));
+                let is_hls = url.contains(".m3u8") || url.contains("/playlist");
+                let url_clone = url.clone();
+                let cipher_clone = cipher_manager_async.clone();
+                let proxy_clone = proxy_bg.clone();
+                let client_name_inner = client_name.clone();
 
-                let (reader, kind, _client_name, opt_sabr_cmd_tx, opt_sabr_event_rx) =
-                    match resolved {
-                        ResolvedStream::Sabr(cfg, client_name, _client) => {
-                            let mime = crate::sources::youtube::sabr::best_format_mime(&cfg);
-                            let Some((rx, event_rx, cmd_tx, handle)) =
-                                crate::sources::youtube::sabr::stream::start_sabr_stream(
-                                    identifier_async.clone(),
-                                    cfg,
-                                )
-                            else {
-                                let msg = format!(
-                                    "YoutubeTrack: SABR start_sabr_stream returned None for {}",
-                                    identifier_async
-                                );
-                                error!("{}", msg);
-                                let _ = err_tx.send(msg);
-                                return;
-                            };
+                let reader_res = tokio::task::spawn_blocking(move || {
+                    create_reader(
+                        &url_clone,
+                        &client_name_inner,
+                        local_addr_bg,
+                        proxy_clone,
+                        cipher_clone,
+                    )
+                })
+                .await
+                .expect("YoutubeTrack: reader spawn_blocking failed");
 
-                            let kind = mime.as_deref().and_then(|m| {
-                                if m.contains("webm") {
-                                    Some(crate::common::types::AudioFormat::Webm)
-                                } else if m.contains("mp4") {
-                                    Some(crate::common::types::AudioFormat::Mp4)
-                                } else {
-                                    None
-                                }
-                            });
+                let reader = match reader_res {
+                    Ok(r) => r,
+                    Err(e) => {
+                        error!("YoutubeTrack: Reader initialization failed: {}", e);
+                        let _ = err_tx.send(e.to_string());
+                        return;
+                    }
+                };
 
-                            (
-                                Box::new(crate::sources::youtube::sabr::reader::SabrReader::new(
-                                    rx, handle,
-                                ))
-                                    as Box<dyn symphonia::core::io::MediaSource>,
-                                kind,
-                                client_name,
-                                Some(cmd_tx),
-                                Some(event_rx),
-                            )
-                        }
-
-                        ResolvedStream::Url(url, client_name) => {
-                            let is_hls = url.contains(".m3u8") || url.contains("/playlist");
-                            let url_clone = url.clone();
-                            let cipher_clone = cipher_manager_async.clone();
-                            let proxy_clone = proxy_bg.clone();
-                            let client_name_inner = client_name.clone();
-
-                            let reader_res = tokio::task::spawn_blocking(move || {
-                                create_reader(
-                                    &url_clone,
-                                    &client_name_inner,
-                                    local_addr_bg,
-                                    proxy_clone,
-                                    cipher_clone,
-                                )
-                            })
-                            .await
-                            .expect("YoutubeTrack: reader spawn_blocking failed");
-
-                            let reader = match reader_res {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    error!("YoutubeTrack: Reader initialization failed: {}", e);
-                                    let _ = err_tx.send(e.to_string());
-                                    return;
-                                }
-                            };
-
-                            let kind = detect_audio_kind(&url, is_hls);
-                            (reader, Some(kind), client_name, None, None)
-                        }
-                    };
+                let kind = detect_audio_kind(&url, is_hls);
 
                 let (inner_cmd_tx, inner_cmd_rx) = flume::bounded(8);
                 let tx_clone = tx.clone();
@@ -228,7 +149,7 @@ impl PlayableTrack for YoutubeTrack {
                 let mut process_task = tokio::task::spawn_blocking(move || {
                     match crate::audio::processor::AudioProcessor::new(
                         reader,
-                        kind,
+                        Some(kind),
                         tx_clone,
                         inner_cmd_rx,
                         Some(err_tx_clone.clone()),
@@ -246,89 +167,16 @@ impl PlayableTrack for YoutubeTrack {
                     let _ = inner_cmd_tx.send(DecoderCommand::Seek(current_seek_ms));
                 }
 
-                let sabr_cmd_tx_clone = opt_sabr_cmd_tx.clone();
-                let sabr_abort_tx = if let (Some(sabr_event_rx), Some(sabr_cmd_tx)) =
-                    (opt_sabr_event_rx, sabr_cmd_tx_clone)
-                {
-                    let id_rec = identifier_async.clone();
-                    let visitor_data_rec = visitor_data_str.clone();
-                    let cipher_rec = cipher_manager_async.clone();
-                    let clients_rec = clients_async.clone();
-
-                    let (abort_tx, abort_rx) = tokio::sync::oneshot::channel();
-
-                    tokio::spawn(async move {
-                        tokio::select! {
-                            _ = abort_rx => {}
-                            event_opt = sabr_event_rx.recv_async() => {
-                                if let Ok(event) = event_opt {
-                                    match event {
-                                        crate::sources::youtube::sabr::stream::SabrEvent::Stall => {
-                                            debug!("YoutubeTrack: SABR stall detected for {}. Refreshing session...", id_rec);
-                                            let sig_ts = cipher_rec.get_signature_timestamp().await.ok();
-                                            let mut new_cfg_opt = None;
-                                            for client in &clients_rec {
-                                                if let Some(cfg) = client.get_sabr_config(&id_rec, visitor_data_rec.as_deref(), sig_ts, cipher_rec.clone(), 0).await {
-                                                    new_cfg_opt = Some(cfg);
-                                                    break;
-                                                }
-                                            }
-
-                                            if let Some(new_cfg) = new_cfg_opt {
-                                                debug!("YoutubeTrack: SABR session re-resolved for {}", id_rec);
-                                                let po_token = new_cfg.po_token.as_deref().and_then(crate::sources::youtube::sabr::stream::decode_po_token);
-                                                let _ = sabr_cmd_tx.send(crate::sources::youtube::sabr::stream::SabrCommand::UpdateSession {
-                                                    server_abr_url: new_cfg.server_abr_url,
-                                                    ustreamer_config: new_cfg.ustreamer_config,
-                                                    po_token,
-                                                    playback_cookie: None,
-                                                });
-                                            }
-                                        }
-                                        crate::sources::youtube::sabr::stream::SabrEvent::Finished => {}
-                                        crate::sources::youtube::sabr::stream::SabrEvent::Error(e) => {
-                                            error!("YoutubeTrack: SABR stream error for {}: {}", id_rec, e);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    });
-
-                    Some(abort_tx)
-                } else {
-                    None
-                };
-
                 loop {
                     tokio::select! {
                         cmd_res = cmd_rx.recv_async() => {
                             match cmd_res {
                                 Ok(DecoderCommand::Seek(ms)) => {
-                                    if is_sabr {
-                                        current_seek_ms = ms;
-                                        let _ = inner_cmd_tx.send(DecoderCommand::Stop);
-                                        if let Some(tx) = sabr_abort_tx {
-                                            let _ = tx.send(());
-                                        }
-                                        let _ = process_task.await;
-                                        continue 'playback_loop;
-                                    } else {
-                                        let _ = inner_cmd_tx.send(DecoderCommand::Seek(ms));
-                                    }
+                                    current_seek_ms = ms;
+                                    let _ = inner_cmd_tx.send(DecoderCommand::Seek(ms));
                                 }
-                                Ok(DecoderCommand::Stop) => {
+                                Ok(DecoderCommand::Stop) | Err(_) => {
                                     let _ = inner_cmd_tx.send(DecoderCommand::Stop);
-                                    if let Some(tx) = sabr_abort_tx {
-                                        let _ = tx.send(());
-                                    }
-                                    return;
-                                }
-                                Err(_) => {
-                                    let _ = inner_cmd_tx.send(DecoderCommand::Stop);
-                                    if let Some(tx) = sabr_abort_tx {
-                                        let _ = tx.send(());
-                                    }
                                     return;
                                 }
                             }
@@ -336,20 +184,32 @@ impl PlayableTrack for YoutubeTrack {
                         res = &mut process_task => {
                             match res {
                                 Ok(Err(e)) => {
-                                    warn!("YoutubeTrack: Playback failed for '{}' with client {}: {}. Attempting fallback...", identifier_async, clients_async[current_client_index].name(), e);
+                                    warn!(
+                                        "YoutubeTrack: Playback failed for '{}' with client {}: {}. Attempting fallback...",
+                                        identifier_async, clients_async[current_client_index].name(), e
+                                    );
                                     current_client_index += 1;
                                     if current_client_index < clients_async.len() {
                                         continue 'playback_loop;
                                     } else {
-                                        error!("YoutubeTrack: All clients failed for '{}'", identifier_async);
+                                        error!(
+                                            "YoutubeTrack: All clients failed for '{}'",
+                                            identifier_async
+                                        );
                                         let _ = err_tx.send(format!("All clients failed: {}", e));
                                     }
                                 }
                                 Ok(Ok(())) => {
-                                    debug!("YoutubeTrack: Playback finished for '{}'", identifier_async);
+                                    debug!(
+                                        "YoutubeTrack: Playback finished for '{}'",
+                                        identifier_async
+                                    );
                                 }
                                 Err(e) => {
-                                    error!("YoutubeTrack: Join error for '{}': {}", identifier_async, e);
+                                    error!(
+                                        "YoutubeTrack: Join error for '{}': {}",
+                                        identifier_async, e
+                                    );
                                 }
                             }
                             return;

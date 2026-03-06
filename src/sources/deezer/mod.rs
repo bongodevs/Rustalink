@@ -7,7 +7,7 @@ pub mod search;
 pub mod token;
 pub mod track;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -22,22 +22,29 @@ use crate::{
 const PUBLIC_API_BASE: &str = "https://api.deezer.com";
 const PRIVATE_API_BASE: &str = "https://www.deezer.com/ajax/gw-light.php";
 
+pub(crate) const SEARCH_PREFIX: &str = "dzsearch:";
+pub(crate) const ISRC_PREFIX: &str = "dzisrc:";
+pub(crate) const RECOMMENDATION_PREFIX: &str = "dzrec:";
+pub(crate) const REC_ARTIST_PREFIX: &str = "artist=";
+pub(crate) const REC_TRACK_PREFIX: &str = "track=";
+pub(crate) const SHARE_URL_PREFIX: &str = "https://deezer.page.link/";
+
+fn url_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"https?://(?:www\.)?deezer\.com/(?:[a-z]+(?:-[a-z]+)?/)?(?<type>track|album|playlist|artist)/(?<id>\d+)").unwrap()
+    })
+}
+
 pub struct DeezerSource {
     client: Arc<reqwest::Client>,
-    config: crate::configs::DeezerConfig,
+    config: crate::config::DeezerConfig,
     pub token_tracker: Arc<DeezerTokenTracker>,
-    url_regex: Regex,
-    search_prefixes: Vec<String>,
-    isrc_prefixes: Vec<String>,
-    rec_prefixes: Vec<String>,
-    rec_artist_prefix: String,
-    rec_track_prefix: String,
-    share_url_prefix: String,
 }
 
 impl DeezerSource {
     pub fn new(
-        config: crate::configs::DeezerConfig,
+        config: crate::config::DeezerConfig,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         let mut arls = config.arls.clone().unwrap_or_default();
@@ -46,22 +53,15 @@ impl DeezerSource {
         arls.dedup();
 
         if arls.is_empty() {
-            return Err("Deezer arls must be set".to_string());
+            return Err("Deezer arls must be set".to_owned());
         }
         let token_tracker = Arc::new(DeezerTokenTracker::new(client.clone(), arls));
 
         Ok(Self {
-      client,
-      config,
-      token_tracker,
-      url_regex: Regex::new(r"https?://(?:www\.)?deezer\.com/(?:[a-z]+(?:-[a-z]+)?/)?(?<type>track|album|playlist|artist)/(?<id>\d+)").unwrap(),
-      search_prefixes: vec!["dzsearch:".to_string()],
-      isrc_prefixes: vec!["dzisrc:".to_string()],
-      rec_prefixes: vec!["dzrec:".to_string()],
-      rec_artist_prefix: "artist=".to_string(),
-      rec_track_prefix: "track=".to_string(),
-      share_url_prefix: "https://deezer.page.link/".to_string(),
-    })
+            client,
+            config,
+            token_tracker,
+        })
     }
 }
 
@@ -70,22 +70,21 @@ impl SourcePlugin for DeezerSource {
     fn name(&self) -> &str {
         "deezer"
     }
+
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
-            .iter()
-            .any(|p| identifier.starts_with(p))
-            || self.isrc_prefixes.iter().any(|p| identifier.starts_with(p))
-            || self.rec_prefixes.iter().any(|p| identifier.starts_with(p))
-            || identifier.starts_with(&self.share_url_prefix)
-            || self.url_regex.is_match(identifier)
+        identifier.starts_with(SEARCH_PREFIX)
+            || identifier.starts_with(ISRC_PREFIX)
+            || identifier.starts_with(RECOMMENDATION_PREFIX)
+            || identifier.starts_with(SHARE_URL_PREFIX)
+            || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec![SEARCH_PREFIX]
     }
 
     fn isrc_prefixes(&self) -> Vec<&str> {
-        self.isrc_prefixes.iter().map(|s| s.as_str()).collect()
+        vec![ISRC_PREFIX]
     }
 
     async fn load(
@@ -93,60 +92,46 @@ impl SourcePlugin for DeezerSource {
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
-        {
-            return self.search(identifier.strip_prefix(prefix).unwrap()).await;
+        if let Some(query) = identifier.strip_prefix(SEARCH_PREFIX) {
+            return self.search(query).await;
         }
-        if let Some(prefix) = self
-            .isrc_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
-        {
-            if let Some(track) = self
-                .get_track_by_isrc(identifier.strip_prefix(prefix).unwrap())
-                .await
-            {
+
+        if let Some(isrc) = identifier.strip_prefix(ISRC_PREFIX) {
+            if let Some(track) = self.get_track_by_isrc(isrc).await {
                 return LoadResult::Track(track);
             }
             return LoadResult::Empty {};
         }
-        if let Some(prefix) = self
-            .rec_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
-        {
-            return self
-                .get_recommendations(identifier.strip_prefix(prefix).unwrap())
-                .await;
+
+        if let Some(query) = identifier.strip_prefix(RECOMMENDATION_PREFIX) {
+            return self.get_recommendations(query).await;
         }
-        if identifier.starts_with(&self.share_url_prefix) {
+
+        if identifier.starts_with(SHARE_URL_PREFIX) {
             let client = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_else(|_| (*self.client).clone());
-            if let Ok(res) = client.get(identifier).send().await {
-                if res.status().is_redirection() {
-                    if let Some(loc) = res.headers().get("location").and_then(|l| l.to_str().ok()) {
-                        if loc.starts_with("https://www.deezer.com/") {
-                            return self.load(loc, routeplanner).await;
-                        }
-                    }
-                }
+
+            if let Ok(res) = client.get(identifier).send().await
+                && res.status().is_redirection()
+                && let Some(loc) = res.headers().get("location").and_then(|l| l.to_str().ok())
+                && loc.starts_with("https://www.deezer.com/")
+            {
+                return self.load(loc, routeplanner).await;
             }
             return LoadResult::Empty {};
         }
-        if let Some(caps) = self.url_regex.captures(identifier) {
+
+        if let Some(caps) = url_regex().captures(identifier) {
             let type_ = caps.name("type").map(|m| m.as_str()).unwrap_or("");
             let id = caps.name("id").map(|m| m.as_str()).unwrap_or("");
             return match type_ {
                 "track" => {
-                    if let Some(json) = self.get_json_public(&format!("track/{}", id)).await {
-                        if let Some(track) = self.parse_track(&json) {
-                            return LoadResult::Track(track);
-                        }
+                    if let Some(json) = self.get_json_public(&format!("track/{id}")).await
+                        && let Some(track) = self.parse_track(&json)
+                    {
+                        return LoadResult::Track(track);
                     }
                     LoadResult::Empty {}
                 }
@@ -156,6 +141,7 @@ impl SourcePlugin for DeezerSource {
                 _ => LoadResult::Empty {},
             };
         }
+
         LoadResult::Empty {}
     }
 
@@ -164,10 +150,10 @@ impl SourcePlugin for DeezerSource {
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<Box<dyn PlayableTrack>> {
-        let track_id = if let Some(caps) = self.url_regex.captures(identifier) {
-            caps.name("id").map(|m| m.as_str())?.to_string()
+        let track_id = if let Some(caps) = url_regex().captures(identifier) {
+            caps.name("id").map(|m| m.as_str())?.to_owned()
         } else {
-            identifier.to_string()
+            identifier.to_owned()
         };
 
         Some(Box::new(DeezerTrack {
@@ -191,12 +177,7 @@ impl SourcePlugin for DeezerSource {
         types: &[String],
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<crate::protocol::tracks::SearchResult> {
-        let q = if let Some(prefix) = self.search_prefixes.iter().find(|p| query.starts_with(*p)) {
-            query.strip_prefix(prefix).unwrap()
-        } else {
-            query
-        };
-
+        let q = query.strip_prefix(SEARCH_PREFIX).unwrap_or(query);
         self.get_autocomplete(q, types).await
     }
 }

@@ -33,22 +33,18 @@ pub async fn resolve_playlist(
             match best {
                 Some(v) => {
                     // If the variant has an audio group, try to find a rendition URI.
-                    if let Some(group_id) = &v.audio_group {
-                        if let Some(group) = audio_groups.get(group_id) {
-                            let rendition = group
-                                .iter()
-                                .find(|m| m.is_default)
-                                .or_else(|| group.iter().find(|m| m.uri.is_some()))
-                                .and_then(|m| m.uri.as_ref());
+                    if let Some(group_id) = &v.audio_group
+                        && let Some(group) = audio_groups.get(group_id)
+                    {
+                        let rendition = group
+                            .iter()
+                            .find(|m| m.is_default)
+                            .or_else(|| group.iter().find(|m| m.uri.is_some()))
+                            .and_then(|m| m.uri.as_ref());
 
-                            if let Some(uri) = rendition {
-                                tracing::debug!(
-                                    "HLS: selected audio group {} -> {}",
-                                    group_id,
-                                    uri
-                                );
-                                return Box::pin(resolve_playlist(client, uri)).await;
-                            }
+                        if let Some(uri) = rendition {
+                            tracing::debug!("HLS: selected audio group {} -> {}", group_id, uri);
+                            return Box::pin(resolve_playlist(client, uri)).await;
                         }
                     }
 

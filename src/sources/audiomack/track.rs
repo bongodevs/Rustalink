@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, net::IpAddr, sync::Arc};
 
 use flume::{Receiver, Sender};
+use rand::{Rng, distributions::Alphanumeric, thread_rng};
 
 use crate::{
     audio::processor::DecoderCommand,
@@ -16,12 +17,12 @@ pub struct AudiomackTrack {
 impl PlayableTrack for AudiomackTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::buffer::PooledBuffer>,
         Sender<DecoderCommand>,
         flume::Receiver<String>,
-        Option<flume::Receiver<std::sync::Arc<Vec<u8>>>>,
+        Option<flume::Receiver<Arc<Vec<u8>>>>,
     ) {
         let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
             (config.buffer_duration_ms / 20) as usize,
@@ -47,7 +48,7 @@ impl PlayableTrack for AudiomackTrack {
                         http_track.start_decoding(config.clone());
 
                     // Proxy commands
-                    let cmd_tx_clone: Sender<DecoderCommand> = inner_cmd_tx.clone();
+                    let cmd_tx_clone = inner_cmd_tx.clone();
                     std::thread::spawn(move || {
                         while let Ok(cmd) = cmd_rx.recv() {
                             let _ = cmd_tx_clone.send(cmd);
@@ -68,6 +69,8 @@ impl PlayableTrack for AudiomackTrack {
                             break;
                         }
                     }
+                } else {
+                    let _ = err_tx.send("Failed to fetch Audiomack stream URL".to_owned());
                 }
             });
         });
@@ -77,19 +80,19 @@ impl PlayableTrack for AudiomackTrack {
 }
 
 async fn fetch_stream_url(client: &Arc<reqwest::Client>, identifier: &str) -> Option<String> {
-    let nonce = thread_rng_nonce();
-    let timestamp = (std::time::SystemTime::now()
+    let nonce = generate_nonce();
+    let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs())
-    .to_string();
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
 
-    // Strategy 1: POST /music/{id}/play
-    let post_url = format!("https://api.audiomack.com/v1/music/{}/play", identifier);
+    // Strategy 1: POST /music/{id}/play (preferred for web)
+    let post_url = format!("https://api.audiomack.com/v1/music/{identifier}/play");
     let mut body = BTreeMap::new();
-    body.insert("environment".to_string(), "desktop-web".to_string());
-    body.insert("session".to_string(), "backend-session".to_string());
-    body.insert("hq".to_string(), "true".to_string());
+    body.insert("environment".to_owned(), "desktop-web".to_owned());
+    body.insert("session".to_owned(), "backend-session".to_owned());
+    body.insert("hq".to_owned(), "true".to_owned());
 
     let auth_post = build_auth_header("POST", &post_url, &body, &nonce, &timestamp);
     if let Ok(resp) = client
@@ -98,17 +101,16 @@ async fn fetch_stream_url(client: &Arc<reqwest::Client>, identifier: &str) -> Op
         .form(&body)
         .send()
         .await
+        && let Some(url) = parse_response(resp).await
     {
-        if let Some(url) = parse_response(resp).await {
-            return Some(url);
-        }
+        return Some(url);
     }
 
-    // Strategy 2: GET /music/play/{id}
-    let get_url = format!("https://api.audiomack.com/v1/music/play/{}", identifier);
+    // Strategy 2: GET /music/play/{id} (legacy/fallback)
+    let get_url = format!("https://api.audiomack.com/v1/music/play/{identifier}");
     let mut query = BTreeMap::new();
-    query.insert("environment".to_string(), "desktop-web".to_string());
-    query.insert("hq".to_string(), "true".to_string());
+    query.insert("environment".to_owned(), "desktop-web".to_owned());
+    query.insert("hq".to_owned(), "true".to_owned());
 
     let auth_get = build_auth_header("GET", &get_url, &query, &nonce, &timestamp);
     if let Ok(resp) = client
@@ -117,10 +119,9 @@ async fn fetch_stream_url(client: &Arc<reqwest::Client>, identifier: &str) -> Op
         .query(&query)
         .send()
         .await
+        && let Some(url) = parse_response(resp).await
     {
-        if let Some(url) = parse_response(resp).await {
-            return Some(url);
-        }
+        return Some(url);
     }
 
     None
@@ -130,14 +131,17 @@ async fn parse_response(resp: reqwest::Response) -> Option<String> {
     if !resp.status().is_success() {
         return None;
     }
+
     let text = resp.text().await.ok()?;
     if text.starts_with("http") {
         return Some(text);
     }
+
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
     if let Some(s) = json.as_str() {
-        return Some(s.to_string());
+        return Some(s.to_owned());
     }
+
     let results = json.get("results").unwrap_or(&json);
     results
         .get("signedUrl")
@@ -146,12 +150,10 @@ async fn parse_response(resp: reqwest::Response) -> Option<String> {
         .or_else(|| results.get("streamUrl"))
         .or_else(|| results.get("stream_url"))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(|s| s.to_owned())
 }
 
-fn thread_rng_nonce() -> String {
-    use rand::{Rng, distributions::Alphanumeric, thread_rng};
-
+fn generate_nonce() -> String {
     thread_rng()
         .sample_iter(&Alphanumeric)
         .take(32)

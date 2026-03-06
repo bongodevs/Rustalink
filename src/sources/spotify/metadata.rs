@@ -22,10 +22,8 @@ impl SpotifyMetadata {
     ) -> Option<String> {
         let token = token_tracker.get_token().await?;
         let hex_id = SpotifyHelpers::base62_to_hex(id);
-        let url = format!(
-            "https://spclient.wg.spotify.com/metadata/4/track/{}?market=from_token",
-            hex_id
-        );
+        let url =
+            format!("https://spclient.wg.spotify.com/metadata/4/track/{hex_id}?market=from_token");
 
         let resp = client
             .get(&url)
@@ -48,27 +46,25 @@ impl SpotifyMetadata {
             let end = std::cmp::min(pos + 64, body_bytes.len());
             let chunk_str = String::from_utf8_lossy(&body_bytes[pos..end]);
             if let Some(mat) = isrc_binary_regex.find(&chunk_str) {
-                return Some(mat.as_str().to_string());
+                return Some(mat.as_str().to_owned());
             }
         }
 
         // JSON fallback
-        if let Ok(json_str) = std::str::from_utf8(&body_bytes) {
-            if let Ok(json) = serde_json::from_str::<Value>(json_str) {
-                if let Some(isrc) = json
-                    .get("external_id")
-                    .and_then(|ids| ids.as_array())
-                    .and_then(|items| {
-                        items
-                            .iter()
-                            .find(|i| i.get("type").and_then(|v| v.as_str()) == Some("isrc"))
-                    })
-                    .and_then(|i| i.get("id"))
-                    .and_then(|v| v.as_str())
-                {
-                    return Some(isrc.to_string());
-                }
-            }
+        if let Ok(json_str) = std::str::from_utf8(&body_bytes)
+            && let Ok(json) = serde_json::from_str::<Value>(json_str)
+            && let Some(isrc) = json
+                .get("external_id")
+                .and_then(|ids| ids.as_array())
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find(|i| i.get("type").and_then(|v| v.as_str()) == Some("isrc"))
+                })
+                .and_then(|i| i.get("id"))
+                .and_then(|v| v.as_str())
+        {
+            return Some(isrc.to_owned());
         }
 
         None
@@ -104,7 +100,7 @@ impl SpotifyMetadata {
         isrc_binary_regex: &regex::Regex,
     ) -> Option<TrackInfo> {
         let variables = json!({
-            "uri": format!("spotify:track:{}", id)
+            "uri": format!("spotify:track:{id}")
         });
         let hash = "612585ae06ba435ad26369870deaae23b5c8800a256cd8a57e08eddc25a37294";
 
@@ -122,13 +118,13 @@ impl SpotifyMetadata {
         album_load_limit: usize,
         album_page_load_concurrency: usize,
         track_resolve_concurrency: usize,
-        isrc_binary_regex: &Arc<regex::Regex>,
+        isrc_binary_regex: &regex::Regex,
     ) -> LoadResult {
         const HASH: &str = "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10";
         const PAGE_LIMIT: u64 = 50;
 
         let base_vars = json!({
-            "uri": format!("spotify:album:{}", id),
+            "uri": format!("spotify:album:{id}"),
             "locale": "en",
             "offset": 0,
             "limit": PAGE_LIMIT
@@ -156,7 +152,7 @@ impl SpotifyMetadata {
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Album")
-            .to_string();
+            .to_owned();
         let total_count = album
             .pointer("/tracksV2/totalCount")
             .and_then(|v| v.as_u64())
@@ -167,7 +163,7 @@ impl SpotifyMetadata {
             .and_then(|s| s.first())
             .and_then(|i| i.get("url"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
         let mut all_items: Vec<Value> = album
             .pointer("/tracksV2/items")
@@ -234,7 +230,7 @@ impl SpotifyMetadata {
                     name,
                     selected_track: -1,
                 },
-                plugin_info: json!({ "type": "album", "url": format!("https://open.spotify.com/album/{}", id), "artworkUrl": album_artwork, "author": album.pointer("/artists/items/0/profile/name").and_then(|v| v.as_str()), "totalTracks": total_count }),
+                plugin_info: json!({ "type": "album", "url": format!("https://open.spotify.com/album/{id}"), "artworkUrl": album_artwork, "author": album.pointer("/artists/items/0/profile/name").and_then(|v| v.as_str()), "totalTracks": total_count }),
                 tracks,
             })
         }
@@ -247,13 +243,13 @@ impl SpotifyMetadata {
         playlist_load_limit: usize,
         playlist_page_load_concurrency: usize,
         track_resolve_concurrency: usize,
-        isrc_binary_regex: &Arc<regex::Regex>,
+        isrc_binary_regex: &regex::Regex,
     ) -> LoadResult {
         const HASH: &str = "bb67e0af06e8d6f52b531f97468ee4acd44cd0f82b988e15c2ea47b1148efc77";
         const PAGE_LIMIT: u64 = 100;
 
         let base_vars = json!({
-            "uri": format!("spotify:playlist:{}", id),
+            "uri": format!("spotify:playlist:{id}"),
             "offset": 0,
             "limit": PAGE_LIMIT,
             "enableWatchFeedEntrypoint": false
@@ -281,7 +277,7 @@ impl SpotifyMetadata {
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Playlist")
-            .to_string();
+            .to_owned();
         let total_count = playlist
             .pointer("/content/totalCount")
             .and_then(|v| v.as_u64())
@@ -354,7 +350,7 @@ impl SpotifyMetadata {
                 },
                 plugin_info: json!({
                   "type": "playlist",
-                  "url": format!("https://open.spotify.com/playlist/{}", id),
+                  "url": format!("https://open.spotify.com/playlist/{id}"),
                   "artworkUrl": playlist.pointer("/images/items/0/sources/0/url").and_then(|v| v.as_str()),
                   "author": playlist.get("ownerV2").and_then(|v| v.get("name")).and_then(|v| v.as_str()).or_else(|| (id.starts_with("37i9dQZ")).then_some("Spotify")),
                   "totalTracks": total_count
@@ -368,10 +364,10 @@ impl SpotifyMetadata {
         client: &reqwest::Client,
         token_tracker: &Arc<SpotifyTokenTracker>,
         id: &str,
-        isrc_binary_regex: &Arc<regex::Regex>,
+        isrc_binary_regex: &regex::Regex,
     ) -> LoadResult {
         let variables = json!({
-            "uri": format!("spotify:artist:{}", id),
+            "uri": format!("spotify:artist:{id}"),
             "locale": "en",
             "includePrerelease": true
         });
@@ -400,7 +396,7 @@ impl SpotifyMetadata {
             .and_then(|p| p.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Artist")
-            .to_string();
+            .to_owned();
         let mut tracks = Vec::new();
 
         if let Some(items) = artist
@@ -411,7 +407,7 @@ impl SpotifyMetadata {
                 if let Some(track_data) = item.get("track") {
                     let c = client.clone();
                     let tt = token_tracker.clone();
-                    let re = isrc_binary_regex.clone();
+                    let re = isrc_binary_regex.to_owned();
                     if let Some(track_info) =
                         Self::parse_generic_track(&c, &tt, track_data, None, &re).await
                     {
@@ -431,7 +427,7 @@ impl SpotifyMetadata {
                 },
                 plugin_info: json!({
                   "type": "artist",
-                  "url": format!("https://open.spotify.com/artist/{}", id),
+                  "url": format!("https://open.spotify.com/artist/{id}"),
                   "artworkUrl": artist.pointer("/visuals/avatar/sources/0/url").and_then(|v| v.as_str()),
                   "author": name,
                   "totalTracks": tracks.len()

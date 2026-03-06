@@ -90,10 +90,10 @@ impl<'a> ClientConfig<'a> {
             "request": { "useSsl": true }
         });
 
-        if let Some(url) = self.third_party_embed_url {
-            if let Some(obj) = context.as_object_mut() {
-                obj.insert("thirdParty".to_string(), json!({ "embedUrl": url }));
-            }
+        if let Some(url) = self.third_party_embed_url
+            && let Some(obj) = context.as_object_mut()
+        {
+            obj.insert("thirdParty".to_string(), json!({ "embedUrl": url }));
         }
 
         context
@@ -198,18 +198,18 @@ pub async fn resolve_format_url(
         .or_else(|| format.get("cipher"))
         .and_then(|c| c.as_str());
 
-    if let Some(cipher_str) = cipher_str {
-        if let Some((url, sig)) = decode_signature_cipher(cipher_str) {
-            let n_param = url
-                .split("&n=")
-                .nth(1)
-                .or_else(|| url.split("?n=").nth(1))
-                .and_then(|s| s.split('&').next());
-            let resolved = cipher_manager
-                .resolve_url(&url, player_page_url, n_param, Some(&sig))
-                .await?;
-            return Ok(Some(resolved));
-        }
+    if let Some(cipher_str) = cipher_str
+        && let Some((url, sig)) = decode_signature_cipher(cipher_str)
+    {
+        let n_param = url
+            .split("&n=")
+            .nth(1)
+            .or_else(|| url.split("?n=").nth(1))
+            .and_then(|s| s.split('&').next());
+        let resolved = cipher_manager
+            .resolve_url(&url, player_page_url, n_param, Some(&sig))
+            .await?;
+        return Ok(Some(resolved));
     }
 
     Ok(None)
@@ -245,16 +245,14 @@ pub fn extract_thumbnail(renderer: &Value, video_id: Option<&str>) -> Option<Str
                 .and_then(|t| t.get("thumbnails"))
         });
 
-    if let Some(thumbnails) = thumbnails.and_then(|t| t.as_array()) {
-        if !thumbnails.is_empty() {
-            if let Some(url) = thumbnails
-                .last()
-                .and_then(|t| t.get("url"))
-                .and_then(|u| u.as_str())
-            {
-                return Some(url.split('?').next().unwrap_or(url).to_string());
-            }
-        }
+    if let Some(thumbnails) = thumbnails.and_then(|t| t.as_array())
+        && !thumbnails.is_empty()
+        && let Some(url) = thumbnails
+            .last()
+            .and_then(|t| t.get("url"))
+            .and_then(|u| u.as_str())
+    {
+        return Some(url.split('?').next().unwrap_or(url).to_string());
     }
 
     if let Some(id) = video_id {
@@ -264,75 +262,78 @@ pub fn extract_thumbnail(renderer: &Value, video_id: Option<&str>) -> Option<Str
     None
 }
 
-pub async fn make_player_request(
-    http: &reqwest::Client,
-    config: &ClientConfig<'_>,
-    video_id: &str,
-    params: Option<&str>,
-    visitor_data: Option<&str>,
-    signature_timestamp: Option<u32>,
-    auth_header: Option<String>,
-    referer: Option<&str>,
-    origin: Option<&str>,
-    po_token: Option<&str>,
-) -> AnyResult<Value> {
+pub struct PlayerRequestOptions<'a> {
+    pub http: &'a reqwest::Client,
+    pub config: &'a ClientConfig<'a>,
+    pub video_id: &'a str,
+    pub params: Option<&'a str>,
+    pub visitor_data: Option<&'a str>,
+    pub signature_timestamp: Option<u32>,
+    pub auth_header: Option<String>,
+    pub referer: Option<&'a str>,
+    pub origin: Option<&'a str>,
+    pub po_token: Option<&'a str>,
+}
+
+pub async fn make_player_request(opts: PlayerRequestOptions<'_>) -> AnyResult<Value> {
     let mut body = json!({
-        "context": config.build_context(visitor_data),
-        "videoId": video_id,
+        "context": opts.config.build_context(opts.visitor_data),
+        "videoId": opts.video_id,
         "contentCheckOk": true,
         "racyCheckOk": true
     });
 
-    if let Some(token) = po_token {
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert(
-                "serviceIntegrityDimensions".to_string(),
-                json!({ "poToken": token }),
-            );
-        }
+    if let Some(token) = opts.po_token
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert(
+            "serviceIntegrityDimensions".to_string(),
+            json!({ "poToken": token }),
+        );
     }
 
-    if let Some(p) = params {
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert("params".to_string(), p.into());
-        }
+    if let Some(p) = opts.params
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert("params".to_string(), p.into());
     }
 
-    if let Some(sts) = signature_timestamp {
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert(
-                "playbackContext".to_string(),
-                json!({
-                    "contentPlaybackContext": {
-                        "signatureTimestamp": sts
-                    }
-                }),
-            );
-        }
+    if let Some(sts) = opts.signature_timestamp
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert(
+            "playbackContext".to_string(),
+            json!({
+                "contentPlaybackContext": {
+                    "signatureTimestamp": sts
+                }
+            }),
+        );
     }
 
     let url = format!("{}/youtubei/v1/player?prettyPrint=false", INNERTUBE_API);
 
-    let mut req = http
+    let mut req = opts
+        .http
         .post(&url)
-        .header("User-Agent", config.user_agent)
-        .header("X-YouTube-Client-Name", config.client_id)
-        .header("X-YouTube-Client-Version", config.client_version)
+        .header("User-Agent", opts.config.user_agent)
+        .header("X-YouTube-Client-Name", opts.config.client_id)
+        .header("X-YouTube-Client-Version", opts.config.client_version)
         .header("X-Goog-Api-Format-Version", "2");
 
-    if let Some(vd) = visitor_data {
+    if let Some(vd) = opts.visitor_data {
         req = req.header("X-Goog-Visitor-Id", vd);
     }
 
-    if let Some(auth) = auth_header {
+    if let Some(auth) = opts.auth_header {
         req = req.header("Authorization", auth);
     }
 
-    if let Some(ref_url) = referer {
+    if let Some(ref_url) = opts.referer {
         req = req.header("Referer", ref_url);
     }
 
-    if let Some(orig_url) = origin {
+    if let Some(orig_url) = opts.origin {
         req = req.header("Origin", orig_url);
     }
 
@@ -361,16 +362,16 @@ pub async fn make_next_request(
         "context": config.build_context(visitor_data),
     });
 
-    if let Some(vid) = video_id {
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert("videoId".to_string(), vid.into());
-        }
+    if let Some(vid) = video_id
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert("videoId".to_string(), vid.into());
     }
 
-    if let Some(pid) = playlist_id {
-        if let Some(obj) = body.as_object_mut() {
-            obj.insert("playlistId".to_string(), pid.into());
-        }
+    if let Some(pid) = playlist_id
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert("playlistId".to_string(), pid.into());
     }
 
     let url = format!("{}/youtubei/v1/next?prettyPrint=false", INNERTUBE_API);

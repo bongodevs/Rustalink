@@ -26,14 +26,14 @@ pub struct YandexMusicSource {
     playlist_load_limit: usize,
     album_load_limit: usize,
     artist_load_limit: usize,
-    proxy: Option<crate::configs::HttpProxyConfig>,
+    proxy: Option<crate::config::HttpProxyConfig>,
 }
 
 const API_BASE: &str = "https://api.music.yandex.net";
 
 impl YandexMusicSource {
     pub fn new(
-        config: Option<crate::configs::YandexMusicConfig>,
+        config: Option<crate::config::YandexMusicConfig>,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         let config = config.ok_or("Yandex Music configuration is missing")?;
@@ -518,7 +518,7 @@ impl SourcePlugin for YandexMusicSource {
         }))
     }
 
-    fn get_proxy_config(&self) -> Option<crate::configs::HttpProxyConfig> {
+    fn get_proxy_config(&self) -> Option<crate::config::HttpProxyConfig> {
         self.proxy.clone()
     }
 }

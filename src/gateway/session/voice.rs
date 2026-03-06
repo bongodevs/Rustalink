@@ -1,14 +1,16 @@
 use std::{
     net::SocketAddr,
     sync::{Arc, atomic::Ordering},
+    time::{Duration, Instant},
 };
 
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
 use super::types::map_boxed_err;
 use crate::{
-    audio::{Mixer, engine::Encoder},
+    audio::{Mixer, engine::Encoder, filters::FilterChain},
     common::types::{AnyResult, Shared},
     gateway::{
         DaveHandler, UdpBackend,
@@ -19,7 +21,8 @@ use crate::{
     },
 };
 
-const PCM_FRAME_SIZE: usize = PCM_FRAME_SAMPLES * 2; // Stereo
+const PCM_FRAME_SIZE: usize = PCM_FRAME_SAMPLES * 2;
+const TRAILING_SILENCE_FRAMES: u32 = 5;
 
 pub async fn discover_ip(
     socket: &tokio::net::UdpSocket,
@@ -35,125 +38,150 @@ pub async fn discover_ip(
 
     let mut buf = [0u8; DISCOVERY_PACKET_SIZE];
     match tokio::time::timeout(
-        tokio::time::Duration::from_secs(IP_DISCOVERY_TIMEOUT_SECS),
+        Duration::from_secs(IP_DISCOVERY_TIMEOUT_SECS),
         socket.recv(&mut buf),
     )
     .await
     {
         Ok(Ok(n)) if n >= DISCOVERY_PACKET_SIZE => {
-            let ip_str = std::str::from_utf8(&buf[8..72])
+            let ip = std::str::from_utf8(&buf[8..72])
                 .map_err(map_boxed_err)?
                 .trim_matches('\0')
                 .to_string();
-            let port = u16::from_le_bytes([buf[72], buf[73]]);
-            Ok((ip_str, port))
+            let port = u16::from_be_bytes([buf[72], buf[73]]);
+            Ok((ip, port))
         }
-        Ok(Ok(_)) => Err(map_boxed_err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Malformed IP discovery response",
-        ))),
+        Ok(Ok(_)) => Err(map_boxed_err("Malformed IP discovery response")),
         Ok(Err(e)) => Err(map_boxed_err(e)),
-        Err(_) => Err(map_boxed_err(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "IP discovery timed out",
-        ))),
+        Err(_) => Err(map_boxed_err("IP discovery timed out")),
     }
 }
 
-pub async fn speak_loop(
-    mixer: Shared<Mixer>,
-    socket: Arc<tokio::net::UdpSocket>,
-    addr: SocketAddr,
-    ssrc: u32,
-    key: [u8; 32],
-    mode: String,
-    dave: Shared<DaveHandler>,
-    filter_chain: Shared<crate::audio::filters::FilterChain>,
-    frames_sent: Arc<std::sync::atomic::AtomicU64>,
-    frames_nulled: Arc<std::sync::atomic::AtomicU64>,
-    cancel_token: CancellationToken,
-) -> AnyResult<()> {
-    let mut encoder = Encoder::new().map_err(map_boxed_err)?;
-    let mut udp = UdpBackend::new(socket, addr, ssrc, key, &mode).map_err(map_boxed_err)?;
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(FRAME_DURATION_MS));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+pub struct SpeakConfig {
+    pub mixer: Shared<Mixer>,
+    pub socket: Arc<tokio::net::UdpSocket>,
+    pub addr: SocketAddr,
+    pub ssrc: u32,
+    pub key: [u8; 32],
+    pub mode: String,
+    pub dave: Shared<DaveHandler>,
+    pub filter_chain: Shared<FilterChain>,
+    pub frames_sent: Arc<std::sync::atomic::AtomicU64>,
+    pub frames_nulled: Arc<std::sync::atomic::AtomicU64>,
+    pub cancel_token: CancellationToken,
+    pub speaking_tx: UnboundedSender<bool>,
+}
 
-    let mut pcm_buf = vec![0i16; PCM_FRAME_SIZE];
-    let mut opus_buf = vec![0u8; MAX_OPUS_FRAME_SIZE];
-    let mut silence_frames = 0;
-    let mut ts_frame_buf = vec![0i16; PCM_FRAME_SIZE];
+pub async fn speak_loop(config: SpeakConfig) -> AnyResult<()> {
+    let mut encoder = Encoder::new().map_err(map_boxed_err)?;
+    let mut udp = UdpBackend::new(
+        config.socket,
+        config.addr,
+        config.ssrc,
+        config.key,
+        &config.mode,
+    )?;
+
+    let frame_period = Duration::from_millis(FRAME_DURATION_MS);
+    let mut deadline = Instant::now() + frame_period;
+
+    let mut pcm = vec![0i16; PCM_FRAME_SIZE];
+    let mut opus = vec![0u8; MAX_OPUS_FRAME_SIZE];
+    let mut ts_pcm = vec![0i16; PCM_FRAME_SIZE];
+
+    let mut silence_cnt: u32 = 0;
+    let mut trailing_cnt: u32 = 0;
+    let mut is_speaking = false;
 
     loop {
         tokio::select! {
-            _ = cancel_token.cancelled() => break,
-            _ = interval.tick() => {
-                // 1. Try taking an Opus frame (passthrough)
-                let opus_frame = {
-                    let mut m = mixer.lock().await;
-                    m.take_opus_frame()
-                };
+            biased;
+            _ = config.cancel_token.cancelled() => break,
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {}
+        }
+        deadline += frame_period;
 
-                if let Some(frame) = opus_frame {
-                    silence_frames = 0;
-                    frames_sent.fetch_add(1, Ordering::Relaxed);
-                    let mut d = dave.lock().await;
-                    if let Ok(packet) = d.encrypt_opus(&frame) {
-                        let _ = udp.send_opus_packet(&packet).await;
-                    }
-                    continue;
-                }
+        let (opus_raw, has_audio, do_encode) = {
+            let mut m = config.mixer.lock().await;
+            if let Some(frame) = m.take_opus_frame() {
+                (Some(frame), true, false)
+            } else {
+                let mixed = m.mix(&mut pcm);
+                (None, mixed, true)
+            }
+        };
 
-                // 2. Mix PCM
-                let has_audio = {
-                    let mut m = mixer.lock().await;
-                    m.mix(&mut pcm_buf)
-                };
+        let active = has_audio || (trailing_cnt > 0);
+        if active != is_speaking {
+            is_speaking = active;
+            let _ = config.speaking_tx.send(is_speaking);
+        }
 
-                if !has_audio {
-                    silence_frames += 1;
-                    frames_nulled.fetch_add(1, Ordering::Relaxed);
-                    if silence_frames > MAX_SILENCE_FRAMES { continue; }
-                    pcm_buf.fill(0);
-                } else {
-                    silence_frames = 0;
-                    frames_sent.fetch_add(1, Ordering::Relaxed);
-                }
+        if let Some(frame) = opus_raw {
+            silence_cnt = 0;
+            trailing_cnt = TRAILING_SILENCE_FRAMES;
+            config.frames_sent.fetch_add(1, Ordering::Relaxed);
+            if let Ok(enc) = config.dave.lock().await.encrypt_opus(&frame) {
+                let _ = udp.send_opus_packet(&enc).await;
+            }
+            continue;
+        }
 
-                // 3. Process Effects & Filter Chain
-                let mut use_ts = false;
-                let mut encode_ready = true;
-                {
-                    let mut fc = filter_chain.lock().await;
-                    if fc.is_active() {
-                        fc.process(&mut pcm_buf);
-                        if fc.has_timescale() {
-                            encode_ready = fc.fill_frame(&mut ts_frame_buf);
-                            use_ts = true;
-                        }
-                    }
-                }
+        if !do_encode {
+            continue;
+        }
 
-                if !encode_ready { continue; }
+        if has_audio {
+            silence_cnt = 0;
+            trailing_cnt = TRAILING_SILENCE_FRAMES;
+            config.frames_sent.fetch_add(1, Ordering::Relaxed);
+        } else {
+            silence_cnt += 1;
+            config.frames_nulled.fetch_add(1, Ordering::Relaxed);
 
-                // 4. Encode & Send
-                let target_buf = if use_ts { &ts_frame_buf } else { &pcm_buf };
+            if trailing_cnt > 0 {
+                trailing_cnt -= 1;
+                pcm.fill(0);
+            } else if silence_cnt > MAX_SILENCE_FRAMES {
+                continue;
+            } else {
+                pcm.fill(0);
+            }
+        }
 
-                let size = match encoder.encode(target_buf, &mut opus_buf) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("Encoding failure: {}", e);
-                        0
-                    }
-                };
-
-                if size > 0 {
-                    let mut d = dave.lock().await;
-                    if let Ok(packet) = d.encrypt_opus(&opus_buf[..size]) {
-                        let _ = udp.send_opus_packet(&packet).await;
-                    }
+        let mut ready = true;
+        let mut use_ts = false;
+        {
+            let mut fc = config.filter_chain.lock().await;
+            if fc.is_active() {
+                fc.process(&mut pcm);
+                if fc.has_timescale() {
+                    ready = fc.fill_frame(&mut ts_pcm);
+                    use_ts = true;
                 }
             }
         }
+
+        if !ready {
+            continue;
+        }
+
+        let pcm_ref = if use_ts { &ts_pcm } else { &pcm };
+
+        let size = match encoder.encode(pcm_ref, &mut opus) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Opus error: {e}");
+                continue;
+            }
+        };
+
+        if size > 0
+            && let Ok(enc) = config.dave.lock().await.encrypt_opus(&opus[..size])
+        {
+            let _ = udp.send_opus_packet(&enc).await;
+        }
     }
+
     Ok(())
 }

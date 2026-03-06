@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use flume::{Receiver, Sender};
 use md5::{Digest, Md5};
-use tracing::error;
 
 use crate::{
     audio::processor::DecoderCommand,
@@ -23,7 +22,7 @@ pub struct QobuzTrack {
 impl PlayableTrack for QobuzTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::buffer::PooledBuffer>,
         Sender<DecoderCommand>,
@@ -36,27 +35,17 @@ impl PlayableTrack for QobuzTrack {
         let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
         let (err_tx, err_rx) = flume::bounded::<String>(1);
 
-        let info = self.info.clone();
-        let token_tracker = self.token_tracker.clone();
-        let client = self.client.clone();
+        let info = self.info.to_owned();
+        let token_tracker = self.token_tracker.to_owned();
+        let client = self.client.to_owned();
 
         let handle = tokio::runtime::Handle::current();
         std::thread::spawn(move || {
             let _guard = handle.enter();
             handle.block_on(async move {
-                let url = match resolve_media_url(&client, &token_tracker, &info.identifier).await {
-                    Ok(Some(url)) => Some(url),
-                    Ok(None) => None,
-                    Err(e) => {
-                        error!(
-                            "Qobuz: Failed to resolve media URL for {}: {}",
-                            info.identifier, e
-                        );
-                        None
-                    }
-                };
+                let url = switch_media_url(&client, &token_tracker, &info.identifier).await;
 
-                if let Some(url) = url {
+                if let Ok(Some(url)) = url {
                     let http_track = HttpTrack {
                         url,
                         local_addr: None,
@@ -88,7 +77,15 @@ impl PlayableTrack for QobuzTrack {
                         }
                     }
                 } else {
-                    let _ = err_tx.send("Failed to resolve Qobuz media URL".to_string());
+                    let error_msg = if let Err(e) = url {
+                        format!(
+                            "Qobuz: Failed to resolve media URL for {identifier}: {e}",
+                            identifier = info.identifier
+                        )
+                    } else {
+                        "Failed to resolve Qobuz media URL".to_owned()
+                    };
+                    let _ = err_tx.send(error_msg);
                 }
             });
         });
@@ -97,7 +94,7 @@ impl PlayableTrack for QobuzTrack {
     }
 }
 
-async fn resolve_media_url(
+async fn switch_media_url(
     client: &Arc<reqwest::Client>,
     token_tracker: &QobuzTokenTracker,
     track_id: &str,
@@ -105,7 +102,7 @@ async fn resolve_media_url(
     let tokens = token_tracker
         .get_tokens()
         .await
-        .ok_or_else(|| "Failed to get Qobuz tokens".to_string())?;
+        .ok_or("Failed to get Qobuz tokens")?;
 
     if tokens.user_token.is_none() {
         return Ok(None);
@@ -119,8 +116,8 @@ async fn resolve_media_url(
     let intent = "stream";
 
     let sig_data = format!(
-        "trackgetFileUrlformat_id{}intent{}track_id{}{}{}",
-        format_id, intent, track_id, unix_ts, tokens.app_secret
+        "trackgetFileUrlformat_id{format_id}intent{intent}track_id{track_id}{unix_ts}{}",
+        tokens.app_secret
     );
     let mut hasher = Md5::new();
     hasher.update(sig_data.as_bytes());
@@ -152,16 +149,16 @@ async fn resolve_media_url(
 
     let json: serde_json::Value = resp.json().await?;
     if let Some(url) = json.get("url").and_then(|v| v.as_str()) {
-        if let Some(is_sample) = json.get("sample").and_then(|v| v.as_bool()).or_else(|| {
+        let is_sample = json.get("sample").and_then(|v| v.as_bool()).or_else(|| {
             json.get("sample")
                 .and_then(|v| v.as_str())
                 .map(|s| s == "true")
-        }) {
-            if is_sample {
-                return Ok(None);
-            }
+        });
+
+        if is_sample == Some(true) {
+            return Ok(None);
         }
-        return Ok(Some(url.to_string()));
+        return Ok(Some(url.to_owned()));
     }
 
     Ok(None)

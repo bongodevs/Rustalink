@@ -2,250 +2,242 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{protocol, server::AppState};
 
+/// Entry point for gathering all operational metrics.
 pub fn collect_stats(
-    state: &AppState,
-    session: Option<&crate::server::session::Session>,
+    app_state: &AppState,
+    current_session: Option<&crate::server::session::Session>,
 ) -> protocol::Stats {
-    let uptime = state.start_time.elapsed().as_millis() as u64;
+    let active_duration = app_state.start_time.elapsed();
 
-    // --- Compute live player counts across ALL sessions (same as Lavalink) ---
-    let mut total_players: i32 = 0;
-    let mut playing_players: i32 = 0;
+    let capacity = app_state.total_players.load(Ordering::Relaxed);
+    let active_streams = app_state.playing_players.load(Ordering::Relaxed);
 
-    for entry in state.sessions.iter() {
-        let s = entry.value();
-        total_players += s.players.len() as i32;
-        for player_ref in s.players.iter() {
-            if let Ok(p) = player_ref.value().try_read() {
-                if p.track.is_some() && !p.paused {
-                    playing_players += 1;
-                }
-            }
-        }
-    }
-    // Also count resumable sessions
-    for entry in state.resumable_sessions.iter() {
-        let s = entry.value();
-        total_players += s.players.len() as i32;
-        for player_ref in s.players.iter() {
-            if let Ok(p) = player_ref.value().try_read() {
-                if p.track.is_some() && !p.paused {
-                    playing_players += 1;
-                }
-            }
-        }
-    }
+    let ram_report = MemoryScanner::examine();
+    let cpu_report = compute_cpu_utilization();
 
-    // --- Frame stats: per-session only, over actively playing players ---
-    let frame_stats = if let Some(s) = session {
-        let mut current_total_sent: u64 = s.total_sent_historical.load(Ordering::Relaxed);
-        let mut current_total_nulled: u64 = s.total_nulled_historical.load(Ordering::Relaxed);
-        let mut player_count: i32 = 0;
-
-        let arcs: Vec<_> = s.players.iter().map(|kv| kv.value().clone()).collect();
-        for arc in arcs {
-            if let Ok(player) = arc.try_read() {
-                if player.track.is_some() && !player.paused {
-                    player_count += 1;
-                    current_total_sent += player.frames_sent.load(Ordering::Relaxed);
-                    current_total_nulled += player.frames_nulled.load(Ordering::Relaxed);
-                }
-            }
-        }
-
-        // Delta since last stats call
-        let last_sent = s
-            .last_stats_sent
-            .swap(current_total_sent, Ordering::Relaxed);
-        let last_nulled = s
-            .last_stats_nulled
-            .swap(current_total_nulled, Ordering::Relaxed);
-
-        let (total_sent, total_nulled) = if last_sent != 0 || last_nulled != 0 {
-            (
-                current_total_sent.saturating_sub(last_sent) as i32,
-                current_total_nulled.saturating_sub(last_nulled) as i32,
-            )
-        } else {
-            (0, 0)
-        };
-
-        if player_count != 0 {
-            let expected_per_player = (state.config.server.stats_interval * 50) as i32;
-            let total_deficit = player_count * expected_per_player - (total_sent + total_nulled);
-
-            Some(protocol::FrameStats {
-                sent: total_sent / player_count,
-                nulled: total_nulled / player_count,
-                deficit: total_deficit / player_count,
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let (mem_used, _mem_free, mem_total) = read_memory_stats();
-
-    let cores = num_cpus();
-    let system_load = read_system_load();
-    let lavalink_load = (read_process_cpu_load() / cores as f64).clamp(0.0, 1.0);
+    let transmission_report = current_session.and_then(|sess| {
+        PacketAuditor::calculate_frame_metrics(sess, app_state.config.server.stats_interval)
+    });
 
     protocol::Stats {
-        players: total_players,
-        playing_players,
-        uptime,
+        players: capacity,
+        playing_players: active_streams,
+        uptime: active_duration.as_millis() as u64,
         memory: protocol::Memory {
-            free: mem_total.saturating_sub(mem_used),
-            used: mem_used,
-            allocated: mem_used,
-            reservable: mem_total,
+            free: ram_report.available,
+            used: ram_report.rss,
+            allocated: ram_report.rss,
+            reservable: ram_report.total,
         },
         cpu: protocol::Cpu {
-            cores,
-            system_load,
-            lavalink_load,
+            cores: cpu_report.core_count,
+            system_load: cpu_report.system_wide,
+            lavalink_load: cpu_report.process_specific,
         },
-        frame_stats,
+        frame_stats: transmission_report,
     }
 }
 
-fn read_system_load() -> f64 {
-    static PREV_IDLE: AtomicU64 = AtomicU64::new(0);
-    static PREV_TOTAL: AtomicU64 = AtomicU64::new(0);
-
-    let stat = match std::fs::read_to_string("/proc/stat") {
-        Ok(s) => s,
-        Err(_) => return 0.0,
-    };
-
-    let first_line = stat.lines().next().unwrap_or("");
-    let parts: Vec<&str> = first_line.split_whitespace().collect();
-    if parts.len() < 5 || parts[0] != "cpu" {
-        return 0.0;
-    }
-
-    let mut total: u64 = 0;
-    for part in &parts[1..] {
-        total += part.parse::<u64>().unwrap_or(0);
-    }
-    // Idle is field 4 (0-indexed)
-    let idle = parts[4].parse::<u64>().unwrap_or(0);
-
-    let prev_idle = PREV_IDLE.swap(idle, Ordering::Relaxed);
-    let prev_total = PREV_TOTAL.swap(total, Ordering::Relaxed);
-
-    if prev_total == 0 {
-        return 0.0;
-    }
-
-    let d_idle = idle.saturating_sub(prev_idle);
-    let d_total = total.saturating_sub(prev_total);
-
-    if d_total == 0 {
-        return 0.0;
-    }
-
-    (d_total.saturating_sub(d_idle)) as f64 / d_total as f64
+struct MemoryReport {
+    rss: u64,
+    available: u64,
+    total: u64,
 }
 
-fn num_cpus() -> i32 {
-    std::thread::available_parallelism()
-        .map(|n| n.get() as i32)
-        .unwrap_or(1)
-}
+struct MemoryScanner;
 
-fn read_memory_stats() -> (u64, u64, u64) {
-    let rss = std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("VmRSS:"))
-                .and_then(|l| {
-                    l.split_whitespace()
-                        .nth(1)
-                        .and_then(|v| v.parse::<u64>().ok())
-                })
-                .map(|kb| kb * 1024)
-        })
-        .unwrap_or(0);
+impl MemoryScanner {
+    fn examine() -> MemoryReport {
+        let rss = Self::read_proc_self_status_rss().unwrap_or(0);
+        let (total, available) = Self::read_meminfo().unwrap_or((0, 0));
 
-    let (mut total, mut free) = (0u64, 0u64);
-    if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
-        for line in meminfo.lines() {
-            if line.starts_with("MemTotal:") {
-                total = line
-                    .split_whitespace()
-                    .nth(1)
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(0)
-                    * 1024;
-            } else if line.starts_with("MemAvailable:") {
-                free = line
-                    .split_whitespace()
-                    .nth(1)
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(0)
-                    * 1024;
-            }
+        MemoryReport {
+            rss,
+            available,
+            total,
         }
     }
-    (rss, free, total)
+
+    fn read_proc_self_status_rss() -> Option<u64> {
+        let content = std::fs::read_to_string("/proc/self/status").ok()?;
+        content
+            .lines()
+            .find(|l| l.starts_with("VmRSS:"))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|kb| kb * 1024)
+    }
+
+    fn read_meminfo() -> Option<(u64, u64)> {
+        let content = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let mut total = 0;
+        let mut available = 0;
+
+        for line in content.lines() {
+            if line.starts_with("MemTotal:") {
+                total = line.split_whitespace().nth(1)?.parse::<u64>().ok()? * 1024;
+            } else if line.starts_with("MemAvailable:") {
+                available = line.split_whitespace().nth(1)?.parse::<u64>().ok()? * 1024;
+            }
+        }
+        Some((total, available))
+    }
 }
 
-/// Reads per-process CPU time from `/proc/self/stat` and computes the CPU
-/// load fraction since the last call. Returns a value in `[0.0, 1.0]`
-/// representing fraction of total CPU time used by this process.
-///
-/// Linux kernel always uses 100 ticks/sec for USER_HZ in /proc/self/stat,
-/// so we avoid a libc dependency by hardcoding 100.
-fn read_process_cpu_load() -> f64 {
-    static PREV_CPU: AtomicU64 = AtomicU64::new(0);
-    static PREV_WALL: AtomicU64 = AtomicU64::new(0);
+struct CpuReport {
+    core_count: i32,
+    system_wide: f64,
+    process_specific: f64,
+}
 
-    // Read /proc/self/stat — utime is field 14, stime is field 15 (1-indexed).
-    // The comm field (2nd) can contain spaces and parens; skip past the closing ')'.
-    let stat = match std::fs::read_to_string("/proc/self/stat") {
-        Ok(s) => s,
-        Err(_) => return 0.0,
-    };
-    let after_comm = match stat.rfind(')') {
-        Some(i) => &stat[i + 1..],
-        None => return 0.0,
-    };
+fn compute_cpu_utilization() -> CpuReport {
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get() as i32)
+        .unwrap_or(1);
 
-    let fields: Vec<&str> = after_comm.split_whitespace().collect();
-    // After ')': state(0), ppid(1), pgrp(2), session(3), tty(4), tpgid(5),
-    //             flags(6), minflt(7), cminflt(8), majflt(9), cmajflt(10),
-    //             utime(11), stime(12), ...
-    let utime: u64 = fields.get(11).and_then(|v| v.parse().ok()).unwrap_or(0);
-    let stime: u64 = fields.get(12).and_then(|v| v.parse().ok()).unwrap_or(0);
-    let cpu_ticks = utime + stime;
+    let system_load = SystemCpuSampler::sample().unwrap_or(0.0);
+    let process_raw = ProcessCpuSampler::sample().unwrap_or(0.0);
 
-    // Wall-clock in ticks: uptime_secs * USER_HZ (always 100 on Linux)
-    let uptime_sec: f64 = std::fs::read_to_string("/proc/uptime")
-        .ok()
-        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))
-        .unwrap_or(0.0);
+    // Normalize process load by core count to match convention
+    let process_load = (process_raw / cores as f64).clamp(0.0, 1.0);
 
-    const USER_HZ: u64 = 100;
-    let wall_ticks = (uptime_sec * USER_HZ as f64) as u64;
-
-    let prev_cpu = PREV_CPU.swap(cpu_ticks, Ordering::Relaxed);
-    let prev_wall = PREV_WALL.swap(wall_ticks, Ordering::Relaxed);
-
-    // First call: no delta yet
-    if prev_wall == 0 {
-        return 0.0;
+    CpuReport {
+        core_count: cores,
+        system_wide: system_load,
+        process_specific: process_load,
     }
+}
 
-    let d_cpu = cpu_ticks.saturating_sub(prev_cpu) as f64;
-    let d_wall = wall_ticks.saturating_sub(prev_wall) as f64;
+struct SystemCpuSampler;
 
-    if d_wall == 0.0 {
-        return 0.0;
+impl SystemCpuSampler {
+    fn sample() -> Option<f64> {
+        static PREV_IDLE: AtomicU64 = AtomicU64::new(0);
+        static PREV_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+        let stat = std::fs::read_to_string("/proc/stat").ok()?;
+        let first_line = stat.lines().next()?;
+        let fields: Vec<&str> = first_line.split_whitespace().collect();
+
+        if fields.len() < 5 || fields[0] != "cpu" {
+            return None;
+        }
+
+        let total: u64 = fields[1..]
+            .iter()
+            .filter_map(|&s| s.parse::<u64>().ok())
+            .sum();
+
+        let idle = fields[4].parse::<u64>().ok()?;
+
+        let last_idle = PREV_IDLE.swap(idle, Ordering::Relaxed);
+        let last_total = PREV_TOTAL.swap(total, Ordering::Relaxed);
+
+        if last_total == 0 {
+            return None;
+        }
+
+        let delta_idle = idle.saturating_sub(last_idle);
+        let delta_total = total.saturating_sub(last_total);
+
+        if delta_total == 0 {
+            return Some(0.0);
+        }
+
+        Some(delta_total.saturating_sub(delta_idle) as f64 / delta_total as f64)
     }
+}
 
-    d_cpu / d_wall
+struct ProcessCpuSampler;
+
+impl ProcessCpuSampler {
+    fn sample() -> Option<f64> {
+        static PREV_CPU_TICKS: AtomicU64 = AtomicU64::new(0);
+        static PREV_WALL_TICKS: AtomicU64 = AtomicU64::new(0);
+
+        // utime is 14th field, stime is 15th in /proc/self/stat
+        let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+        let after_comm = stat.rfind(')')?;
+        let fields: Vec<&str> = stat[after_comm + 1..].split_whitespace().collect();
+
+        let utime = fields.get(11)?.parse::<u64>().ok()?;
+        let stime = fields.get(12)?.parse::<u64>().ok()?;
+        let total_cpu_ticks = utime + stime;
+
+        let uptime_str = std::fs::read_to_string("/proc/uptime").ok()?;
+        let uptime_secs = uptime_str.split_whitespace().next()?.parse::<f64>().ok()?;
+
+        // Linux USER_HZ is consistently 100
+        const HZ: f64 = 100.0;
+        let wall_ticks = (uptime_secs * HZ) as u64;
+
+        let last_cpu = PREV_CPU_TICKS.swap(total_cpu_ticks, Ordering::Relaxed);
+        let last_wall = PREV_WALL_TICKS.swap(wall_ticks, Ordering::Relaxed);
+
+        if last_wall == 0 {
+            return None;
+        }
+
+        let delta_cpu = total_cpu_ticks.saturating_sub(last_cpu) as f64;
+        let delta_wall = wall_ticks.saturating_sub(last_wall) as f64;
+
+        if delta_wall == 0.0 {
+            return Some(0.0);
+        }
+
+        Some(delta_cpu / delta_wall)
+    }
+}
+
+struct PacketAuditor;
+
+impl PacketAuditor {
+    fn calculate_frame_metrics(
+        session: &crate::server::session::Session,
+        interval_secs: u64,
+    ) -> Option<protocol::FrameStats> {
+        let mut total_delivered = session.total_sent_historical.load(Ordering::Relaxed);
+        let mut total_dropped = session.total_nulled_historical.load(Ordering::Relaxed);
+        let mut live_players = 0;
+
+        for entry in session.players.iter() {
+            if let Ok(p) = entry.value().try_read()
+                && p.track.is_some()
+                && !p.paused
+            {
+                live_players += 1;
+                total_delivered += p.frames_sent.load(Ordering::Relaxed);
+                total_dropped += p.frames_nulled.load(Ordering::Relaxed);
+            }
+        }
+
+        let previous_delivered = session
+            .last_stats_sent
+            .swap(total_delivered, Ordering::Relaxed);
+        let previous_dropped = session
+            .last_stats_nulled
+            .swap(total_dropped, Ordering::Relaxed);
+
+        if live_players == 0 {
+            return None;
+        }
+
+        // Only calculate delta if we have a previous baseline
+        if previous_delivered == 0 && previous_dropped == 0 {
+            return None;
+        }
+
+        let delta_sent = total_delivered.saturating_sub(previous_delivered) as i32;
+        let delta_nulled = total_dropped.saturating_sub(previous_dropped) as i32;
+
+        // Expect 50 frames per second per player (standard Opus/Discord frame rate)
+        let nominal_total = (interval_secs * 50) as i32 * live_players;
+        let gap = nominal_total - (delta_sent + delta_nulled);
+
+        Some(protocol::FrameStats {
+            sent: delta_sent / live_players,
+            nulled: delta_nulled / live_players,
+            deficit: gap / live_players,
+        })
+    }
 }

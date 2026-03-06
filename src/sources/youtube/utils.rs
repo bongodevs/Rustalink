@@ -24,7 +24,7 @@ pub fn create_reader(
     url: &str,
     client_name: &str,
     local_addr: Option<std::net::IpAddr>,
-    proxy: Option<crate::configs::HttpProxyConfig>,
+    proxy: Option<crate::config::HttpProxyConfig>,
     _cipher_manager: Arc<YouTubeCipherManager>,
 ) -> AnyResult<Box<dyn MediaSource>> {
     if url.contains(".m3u8") || url.contains("/playlist") {

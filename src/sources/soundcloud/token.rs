@@ -1,5 +1,5 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -12,12 +12,19 @@ use crate::common::types::SharedRw;
 const SOUNDCLOUD_URL: &str = "https://soundcloud.com";
 const CLIENT_ID_REFRESH_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
 
+fn asset_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"https://a-v2\.sndcdn\.com/assets/[a-zA-Z0-9_-]+\.js").unwrap())
+}
+
+fn client_id_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"[^_]client_id[:"=]+\s*"?([a-zA-Z0-9_-]{20,})"?"#).unwrap())
+}
+
 pub struct SoundCloudTokenTracker {
     client: Arc<reqwest::Client>,
     client_id: SharedRw<CachedClientId>,
-    // for extracting client_id from HTML/JS
-    asset_re: Regex,
-    client_id_re: Regex,
 }
 
 struct CachedClientId {
@@ -35,7 +42,7 @@ impl CachedClientId {
 }
 
 impl SoundCloudTokenTracker {
-    pub fn new(client: Arc<reqwest::Client>, config: &crate::configs::SoundCloudConfig) -> Self {
+    pub fn new(client: Arc<reqwest::Client>, config: &crate::config::SoundCloudConfig) -> Self {
         // Pre-seed client_id from config if provided
         let cached = CachedClientId {
             value: config.client_id.clone(),
@@ -49,20 +56,16 @@ impl SoundCloudTokenTracker {
         Self {
             client,
             client_id: Arc::new(RwLock::new(cached)),
-            // asset JS script URLs in the page HTML
-            asset_re: Regex::new(r"https://a-v2\.sndcdn\.com/assets/[a-zA-Z0-9_-]+\.js").unwrap(),
-            // client_id inside JS scripts
-            client_id_re: Regex::new(r#"[^_]client_id[:"=]+\s*"?([a-zA-Z0-9_-]{20,})"?"#).unwrap(),
         }
     }
 
     pub async fn get_client_id(&self) -> Option<String> {
         {
             let guard = self.client_id.read().await;
-            if !guard.is_stale() {
-                if let Some(id) = &guard.value {
-                    return Some(id.clone());
-                }
+            if !guard.is_stale()
+                && let Some(id) = &guard.value
+            {
+                return Some(id.clone());
             }
         }
 
@@ -89,21 +92,20 @@ impl SoundCloudTokenTracker {
         };
 
         // Try to find client_id directly in page HTML first
-        if let Some(caps) = self.client_id_re.captures(&html) {
-            if let Some(m) = caps.get(1) {
-                let id = m.as_str().to_string();
-                trace!("SoundCloud: Found client_id in main page: {}", id);
-                self.store_client_id(id.clone()).await;
-                info!("Successfully refreshed SoundCloud client_id");
-                return Some(id);
-            }
+        if let Some(caps) = client_id_re().captures(&html)
+            && let Some(m) = caps.get(1)
+        {
+            let id = m.as_str().to_owned();
+            trace!("SoundCloud: Found client_id in main page: {id}");
+            self.store_client_id(id.clone()).await;
+            info!("Successfully refreshed SoundCloud client_id");
+            return Some(id);
         }
 
         // Otherwise, find all asset JS URLs and probe them
-        let asset_urls: Vec<String> = self
-            .asset_re
+        let asset_urls: Vec<String> = asset_re()
             .find_iter(&html)
-            .map(|m| m.as_str().to_string())
+            .map(|m| m.as_str().to_owned())
             .collect();
 
         if asset_urls.is_empty() {
@@ -126,14 +128,14 @@ impl SoundCloudTokenTracker {
                 Err(_) => continue,
             };
 
-            if let Some(caps) = self.client_id_re.captures(&js) {
-                if let Some(m) = caps.get(1) {
-                    let id = m.as_str().to_string();
-                    trace!("SoundCloud: Found client_id in asset {}: {}", url, id);
-                    self.store_client_id(id.clone()).await;
-                    info!("Successfully refreshed SoundCloud client_id");
-                    return Some(id);
-                }
+            if let Some(caps) = client_id_re().captures(&js)
+                && let Some(m) = caps.get(1)
+            {
+                let id = m.as_str().to_owned();
+                trace!("SoundCloud: Found client_id in asset {url}: {id}");
+                self.store_client_id(id.clone()).await;
+                info!("Successfully refreshed SoundCloud client_id");
+                return Some(id);
             }
         }
 

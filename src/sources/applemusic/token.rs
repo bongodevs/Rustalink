@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use regex::Regex;
 use serde_json::Value;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Clone, Debug)]
 pub struct AppleMusicToken {
@@ -29,10 +30,10 @@ impl AppleMusicTokenTracker {
     pub async fn get_token(&self) -> Option<String> {
         {
             let lock = self.token.read().await;
-            if let Some(token) = &*lock {
-                if self.is_valid(token) {
-                    return Some(token.access_token.clone());
-                }
+            if let Some(token) = &*lock
+                && self.is_valid(token)
+            {
+                return Some(token.access_token.clone());
             }
         }
         self.refresh_token().await
@@ -44,11 +45,11 @@ impl AppleMusicTokenTracker {
     }
 
     fn is_valid(&self, token: &AppleMusicToken) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
             .as_millis() as u64;
-        token.expiry_ms > now + 10_000
+        token.expiry_ms > now + 10_000 // 10 second buffer
     }
 
     async fn refresh_token(&self) -> Option<String> {
@@ -68,27 +69,35 @@ impl AppleMusicTokenTracker {
             return None;
         }
 
-        let html: String = resp.text().await.unwrap_or_default();
+        let html = resp.text().await.unwrap_or_default();
 
-        let script_regex =
+        static SCRIPT_REGEX: OnceLock<Regex> = OnceLock::new();
+        static INDEX_REGEX: OnceLock<Regex> = OnceLock::new();
+
+        let script_re = SCRIPT_REGEX.get_or_init(|| {
             Regex::new(r#"<script\s+type="module"\s+crossorigin\s+src="(/assets/index[^"]+\.js)""#)
-                .unwrap();
-        let script_path = match script_regex.captures(&html) {
-            Some(caps) => caps.get(1)?.as_str(),
+                .unwrap()
+        });
+
+        let script_path = match script_re.captures(&html) {
+            Some(caps) => caps.get(1).map(|m| m.as_str()),
             None => {
-                let index_regex = Regex::new(r#"/assets/index[^"]+\.js"#).unwrap();
-                match index_regex.find(&html) {
-                    Some(m) => m.as_str(),
-                    None => {
-                        error!("Could not find index JS in Apple Music HTML");
-                        return None;
-                    }
-                }
+                let index_re =
+                    INDEX_REGEX.get_or_init(|| Regex::new(r#"/assets/index[^"]+\.js"#).unwrap());
+                index_re.find(&html).map(|m| m.as_str())
+            }
+        };
+
+        let script_path = match script_path {
+            Some(p) => p,
+            None => {
+                error!("Could not find index JS in Apple Music HTML");
+                return None;
             }
         };
 
         let script_url = if script_path.starts_with("http") {
-            script_path.to_string()
+            script_path.to_owned()
         } else {
             format!("https://music.apple.com{}", script_path)
         };
@@ -103,9 +112,12 @@ impl AppleMusicTokenTracker {
 
         let js_content = js_resp.text().await.unwrap_or_default();
 
-        let token_regex = Regex::new(r#"(ey[\w-]+\.[\w-]+\.[\w-]+)"#).unwrap();
-        let token_str = match token_regex.find(&js_content) {
-            Some(m) => m.as_str().to_string(),
+        static TOKEN_REGEX: OnceLock<Regex> = OnceLock::new();
+        let token_re =
+            TOKEN_REGEX.get_or_init(|| Regex::new(r#"(ey[\w-]+\.[\w-]+\.[\w-]+)"#).unwrap());
+
+        let token_str = match token_re.find(&js_content) {
+            Some(m) => m.as_str().to_owned(),
             None => {
                 error!("Could not find bearer token in Apple Music JS");
                 return None;
@@ -134,20 +146,15 @@ impl AppleMusicTokenTracker {
         }
 
         let payload_part = parts[1];
-        let decoded = match URL_SAFE_NO_PAD.decode(payload_part) {
-            Ok(d) => d,
-            Err(_) => return None,
-        };
-
-        let json_str = String::from_utf8(decoded).ok()?;
-        let json: Value = serde_json::from_str(&json_str).ok()?;
+        let decoded = URL_SAFE_NO_PAD.decode(payload_part).ok()?;
+        let json: Value = serde_json::from_slice(&decoded).ok()?;
 
         let origin = json
             .get("root_https_origin")
             .and_then(|v| v.as_array())
             .and_then(|a| a.first())
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
         let exp = json
             .get("exp")
@@ -158,10 +165,21 @@ impl AppleMusicTokenTracker {
         Some((origin, exp))
     }
 
-    pub fn init(self: std::sync::Arc<Self>) {
+    pub fn init(self: Arc<Self>) {
         let this = self.clone();
         tokio::spawn(async move {
-            this.get_token().await;
+            let mut backoff = Duration::from_secs(1);
+            loop {
+                if this.refresh_token().await.is_some() {
+                    break;
+                }
+                warn!(
+                    "Failed to initialize Apple Music token, retrying in {:?}...",
+                    backoff
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(60));
+            }
         });
     }
 }

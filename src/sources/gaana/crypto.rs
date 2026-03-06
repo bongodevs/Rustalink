@@ -60,15 +60,15 @@ pub fn decrypt_stream_path(encrypted_data: &str) -> Option<String> {
 
     let raw_text: String = decrypted
         .iter()
-        .filter(|&&b| b >= 32 && b <= 126)
+        .filter(|&&b| (32..=126).contains(&b))
         .map(|&b| b as char)
         .collect();
 
     if let Some(idx) = raw_text.find("hls/") {
         let path = &raw_text[idx..];
-        Some(format!("{}{}", HLS_BASE_URL, path))
+        Some(format!("{HLS_BASE_URL}{path}"))
     } else {
-        warn!("Gaana: no /hls/ path found in decrypted text");
+        warn!("Gaana: No /hls/ path found in decrypted text");
         None
     }
 }

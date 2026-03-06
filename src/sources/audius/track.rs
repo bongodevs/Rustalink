@@ -21,12 +21,12 @@ const API_BASE: &str = "https://discoveryprovider.audius.co";
 impl PlayableTrack for AudiusTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::buffer::PooledBuffer>,
         Sender<DecoderCommand>,
         Receiver<String>,
-        Option<Receiver<std::sync::Arc<Vec<u8>>>>,
+        Option<Receiver<Arc<Vec<u8>>>>,
     ) {
         let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
             (config.buffer_duration_ms / 20) as usize,
@@ -52,7 +52,7 @@ impl PlayableTrack for AudiusTrack {
 
                 match final_url {
                     Some(stream_url) => {
-                        debug!("Audius stream URL: {}", stream_url);
+                        debug!("Audius stream URL: {stream_url}");
                         let http_track = HttpTrack {
                             url: stream_url,
                             local_addr,
@@ -87,11 +87,8 @@ impl PlayableTrack for AudiusTrack {
                         }
                     }
                     None => {
-                        error!(
-                            "Failed to fetch Audius stream URL for track ID {}",
-                            track_id
-                        );
-                        let _ = err_tx.send("Failed to fetch stream URL".to_string());
+                        error!("Failed to fetch Audius stream URL for track ID {track_id}");
+                        let _ = err_tx.send("Failed to fetch stream URL".to_owned());
                     }
                 }
             });
@@ -107,17 +104,21 @@ pub async fn fetch_stream_url(
     app_name: &str,
 ) -> Option<String> {
     let url = format!(
-        "{}/v1/tracks/{}/stream?app_name={}&no_redirect=true",
-        API_BASE,
-        urlencoding::encode(track_id),
-        urlencoding::encode(app_name)
+        "{API_BASE}/v1/tracks/{}/stream",
+        urlencoding::encode(track_id)
     );
 
-    let resp = client.get(url).send().await.ok()?;
+    let resp = client
+        .get(url)
+        .query(&[("app_name", app_name), ("no_redirect", "true")])
+        .send()
+        .await
+        .ok()?;
+
     if !resp.status().is_success() {
         return None;
     }
 
     let body: serde_json::Value = resp.json().await.ok()?;
-    body["data"].as_str().map(|s| s.to_string())
+    body["data"].as_str().map(|s| s.to_owned())
 }

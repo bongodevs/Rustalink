@@ -27,27 +27,9 @@ pub struct TimescaleFilter {
 
 impl TimescaleFilter {
     pub fn new(speed: f64, pitch: f64, rate: f64) -> Self {
-        let speed = if speed < 0.1 {
-            0.1
-        } else if speed > 5.0 {
-            5.0
-        } else {
-            speed
-        };
-        let pitch = if pitch < 0.1 {
-            0.1
-        } else if pitch > 5.0 {
-            5.0
-        } else {
-            pitch
-        };
-        let rate = if rate < 0.1 {
-            0.1
-        } else if rate > 5.0 {
-            5.0
-        } else {
-            rate
-        };
+        let speed = speed.clamp(0.1, 5.0);
+        let pitch = pitch.clamp(0.1, 5.0);
+        let rate = rate.clamp(0.1, 5.0);
         let final_rate = speed * pitch * rate;
 
         Self {
@@ -77,10 +59,8 @@ impl TimescaleFilter {
         }
 
         // The input buffer is interleaved stereo: [L0, R0, L1, R1, ...]
-        // Number of stereo frames:
         let num_input_frames = self.input_buffer.len() / 2;
 
-        // Estimate output frames
         let output_frames = (num_input_frames as f64 / self.final_rate) as usize;
         let mut output = Vec::with_capacity(output_frames * 2);
 
@@ -99,7 +79,6 @@ impl TimescaleFilter {
             let p1_idx = i1;
             let p2_idx = i1 + 1;
 
-            // Left channel
             let p0_l = self.input_buffer[p0_idx * 2] as f64;
             let p1_l = self.input_buffer[p1_idx * 2] as f64;
             let p2_l = self.input_buffer[p2_idx * 2] as f64;
@@ -107,7 +86,6 @@ impl TimescaleFilter {
             let out_l = cubic_interpolate(p0_l, p1_l, p2_l, p3_l, frac);
             output.push((out_l as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16);
 
-            // Right channel
             let p0_r = self.input_buffer[p0_idx * 2 + 1] as f64;
             let p1_r = self.input_buffer[p1_idx * 2 + 1] as f64;
             let p2_r = self.input_buffer[p2_idx * 2 + 1] as f64;
@@ -118,7 +96,6 @@ impl TimescaleFilter {
             output_frame += 1;
         }
 
-        // Consume the input frames we used
         let consumed_frames = (output_frame as f64 * self.final_rate) as usize;
         let consumed_samples = consumed_frames * 2;
         if consumed_samples < self.input_buffer.len() {

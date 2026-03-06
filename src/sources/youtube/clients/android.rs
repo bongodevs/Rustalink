@@ -55,16 +55,18 @@ impl AndroidClient {
         _oauth: &Arc<YouTubeOAuth>,
     ) -> AnyResult<Value> {
         crate::sources::youtube::clients::common::make_player_request(
-            &self.http,
-            &self.config(),
-            video_id,
-            None,
-            visitor_data,
-            signature_timestamp,
-            None,
-            None,
-            None,
-            None,
+            crate::sources::youtube::clients::common::PlayerRequestOptions {
+                http: &self.http,
+                config: &self.config(),
+                video_id,
+                params: None,
+                visitor_data,
+                signature_timestamp,
+                auth_header: None,
+                referer: None,
+                origin: None,
+                po_token: None,
+            },
         )
         .await
     }

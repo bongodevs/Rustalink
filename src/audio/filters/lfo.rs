@@ -3,7 +3,8 @@ use std::f64::consts::PI;
 const SAMPLE_RATE: f64 = 48000.0;
 const TWO_PI: f64 = 2.0 * PI;
 
-/// Low-Frequency Oscillator (sine wave) used by tremolo, vibrato, and rotation filters.
+/// Low-Frequency Oscillator (sine wave).
+#[derive(Default)]
 pub struct Lfo {
     phase: f64,
     pub frequency: f64,
@@ -12,11 +13,7 @@ pub struct Lfo {
 
 impl Lfo {
     pub fn new() -> Self {
-        Self {
-            phase: 0.0,
-            frequency: 0.0,
-            depth: 0.0,
-        }
+        Self::default()
     }
 
     pub fn update(&mut self, frequency: f64, depth: f64) {

@@ -48,12 +48,8 @@ impl Decoder for OpusCodecDecoder {
             _ => SampleRate::Hz48000,
         };
 
-        let decoder = OpusDecoder::new(opus_rate, opus_channels).map_err(|e| {
-            Error::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })?;
+        let decoder = OpusDecoder::new(opus_rate, opus_channels)
+            .map_err(|e| Error::IoError(std::io::Error::other(e.to_string())))?;
 
         let layout = if channels == 1 {
             Layout::Mono
@@ -98,27 +94,16 @@ impl Decoder for OpusCodecDecoder {
     }
 
     fn decode(&mut self, packet: &SymphPacket) -> Result<AudioBufferRef<'_>> {
-        // Decode into pre-allocated interleaved scratch buffer.
         let n = self
             .decoder
             .decode(
                 Packet::try_from(packet.data.as_ref()).ok(),
-                MutSignals::try_from(self.pcm.as_mut_slice()).map_err(|e| {
-                    Error::IoError(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?,
+                MutSignals::try_from(self.pcm.as_mut_slice())
+                    .map_err(|e| Error::IoError(std::io::Error::other(e.to_string())))?,
                 false,
             )
-            .map_err(|e| {
-                Error::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    e.to_string(),
-                ))
-            })?;
+            .map_err(|e| Error::IoError(std::io::Error::other(e.to_string())))?;
 
-        // Deinterleave into symphonia's planar AudioBuffer.
         self.buf.clear();
         self.buf.render_reserved(Some(n));
 

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use regex::Regex;
 use tokio::sync::RwLock;
@@ -7,6 +7,21 @@ use tracing::{debug, error};
 use crate::common::types::SharedRw;
 
 const EMBED_URL: &str = "https://open.spotify.com/embed/track/4cOdK2wGLETKBW3PvgPWqT";
+
+fn token_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#""accessToken":"([^"]+)""#).expect("spotify token regex is a valid literal")
+    })
+}
+
+fn expiry_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#""accessTokenExpirationTimestampMs":(\d+)"#)
+            .expect("spotify expiry regex is a valid literal")
+    })
+}
 
 #[derive(Clone, Debug)]
 pub struct SpotifyToken {
@@ -17,8 +32,6 @@ pub struct SpotifyToken {
 pub struct SpotifyTokenTracker {
     client: Arc<reqwest::Client>,
     token: SharedRw<Option<SpotifyToken>>,
-    token_regex: Regex,
-    expiry_regex: Regex,
 }
 
 impl SpotifyTokenTracker {
@@ -26,8 +39,6 @@ impl SpotifyTokenTracker {
         Self {
             client,
             token: Arc::new(RwLock::new(None)),
-            token_regex: Regex::new(r#""accessToken":"([^"]+)""#).unwrap(),
-            expiry_regex: Regex::new(r#""accessTokenExpirationTimestampMs":(\d+)"#).unwrap(),
         }
     }
 
@@ -62,7 +73,7 @@ impl SpotifyTokenTracker {
         let resp = match request.send().await {
             Ok(r) => r,
             Err(e) => {
-                error!("Failed to fetch Spotify embed page: {}", e);
+                error!("Failed to fetch Spotify embed page: {e}");
                 return None;
             }
         };
@@ -75,13 +86,13 @@ impl SpotifyTokenTracker {
         let html = match resp.text().await {
             Ok(t) => t,
             Err(e) => {
-                error!("Failed to read Spotify embed HTML: {}", e);
+                error!("Failed to read Spotify embed HTML: {e}");
                 return None;
             }
         };
 
-        let token_caps = self.token_regex.captures(&html);
-        let expiry_caps = self.expiry_regex.captures(&html);
+        let token_caps = token_regex().captures(&html);
+        let expiry_caps = expiry_regex().captures(&html);
 
         if token_caps.is_none() || expiry_caps.is_none() {
             error!("Token or expiry not found in embed page");
@@ -89,7 +100,7 @@ impl SpotifyTokenTracker {
         }
 
         let token = match token_caps.and_then(|c| c.get(1)) {
-            Some(m) => m.as_str().to_string(),
+            Some(m) => m.as_str().to_owned(),
             None => {
                 error!("Successfully found token caps but group 1 was missing");
                 return None;
@@ -109,10 +120,7 @@ impl SpotifyTokenTracker {
             expiry_ms,
         });
 
-        debug!(
-            "Successfully refreshed Spotify token. Expiry: {}",
-            expiry_ms
-        );
+        debug!("Successfully refreshed Spotify token. Expiry: {expiry_ms}");
         Some(token)
     }
 

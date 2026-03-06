@@ -1,16 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
-use reqwest::Client;
+use reqwest::{Client, Proxy};
 use tracing::warn;
 
-use crate::configs::HttpProxyConfig;
-
-pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
-
-pub fn default_user_agent() -> String {
-    DEFAULT_USER_AGENT.to_string()
-}
+use crate::common::utils::default_user_agent;
+use crate::config::HttpProxyConfig;
 
 /// A pool of `reqwest::Client` instances shared across sources.
 pub struct HttpClientPool {
@@ -26,42 +21,39 @@ impl HttpClientPool {
 
     /// Get a shared client for the given proxy configuration.
     pub fn get(&self, proxy: Option<HttpProxyConfig>) -> Arc<Client> {
-        if let Some(client) = self.clients.get(&proxy) {
-            return client.clone();
-        }
-
-        // Slow path: create and insert
-        let client = Arc::new(self.create_client(proxy.clone()));
-        self.clients.insert(proxy, client.clone());
-        client
+        self.clients
+            .entry(proxy.clone())
+            .or_insert_with(|| Arc::new(self.create_client(proxy)))
+            .clone()
     }
 
     fn create_client(&self, proxy: Option<HttpProxyConfig>) -> Client {
         let mut builder = Client::builder()
             .user_agent(default_user_agent())
             .gzip(true)
+            .deflate(true)
             .timeout(Duration::from_secs(15))
             .connect_timeout(Duration::from_secs(5))
             .tcp_nodelay(true)
-            .tcp_keepalive(Duration::from_secs(25))
-            .pool_idle_timeout(Duration::from_secs(70))
-            .http2_adaptive_window(true);
+            .pool_max_idle_per_host(10)
+            .pool_idle_timeout(Duration::from_secs(70));
 
-        if let Some(proxy_config) = proxy {
-            if let Some(p_url) = &proxy_config.url {
-                match reqwest::Proxy::all(p_url) {
-                    Ok(mut proxy_obj) => {
-                        if let (Some(u), Some(p)) = (proxy_config.username, proxy_config.password) {
-                            proxy_obj = proxy_obj.basic_auth(&u, &p);
-                        }
-                        builder = builder.proxy(proxy_obj);
+        if let Some(url) = proxy.as_ref().and_then(|config| config.url.as_ref()) {
+            match Proxy::all(url) {
+                Ok(mut proxy_obj) => {
+                    if let Some((u, p)) = proxy
+                        .as_ref()
+                        .and_then(|c| c.username.as_ref().zip(c.password.as_ref()))
+                    {
+                        proxy_obj = proxy_obj.basic_auth(u, p);
                     }
-                    Err(e) => {
-                        warn!(
-                            "HttpClientPool: failed to parse proxy URL '{}': {} — proxy will be ignored",
-                            p_url, e
-                        );
-                    }
+                    builder = builder.proxy(proxy_obj);
+                }
+                Err(e) => {
+                    warn!(
+                        "HttpClientPool: failed to parse proxy URL '{}': {} — proxy will be ignored",
+                        url, e
+                    );
                 }
             }
         }

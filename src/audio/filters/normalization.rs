@@ -4,7 +4,6 @@ pub struct NormalizationFilter {
     max_amplitude: f32,
     adaptive: bool,
 
-    // For adaptive mode, envelope tracker
     envelope: f32,
     attack_coef: f32,
     release_coef: f32,
@@ -14,8 +13,6 @@ impl NormalizationFilter {
     pub fn new(max_amplitude: f32, adaptive: bool) -> Self {
         let max_amplitude = max_amplitude.max(0.01);
 
-        // standard attack/release for a limiter
-        // typically attack is very fast, release is slower
         let attack_ms = 1.0;
         let release_ms = 100.0;
         let fs = 48000.0;
@@ -40,16 +37,12 @@ impl AudioFilter for NormalizationFilter {
         }
 
         if !self.adaptive {
-            // Static normalization / hard limiting
-            // LavaDSPX just does: `out = in * (targetMax / currentMax)` block-wise
-            // But doing it sample-by-sample or hard-clipping is often safer in a streaming context
             for sample in samples.iter_mut() {
                 let v = (*sample as f32) / 32768.0;
                 let scaled = v.clamp(-self.max_amplitude, self.max_amplitude);
                 *sample = (scaled * 32768.0) as i16;
             }
         } else {
-            // Adaptive normalization (limiter approach)
             for chunk in samples.chunks_exact_mut(2) {
                 let left_in = chunk[0] as f32 / 32768.0;
                 let right_in = chunk[1] as f32 / 32768.0;
@@ -62,10 +55,8 @@ impl AudioFilter for NormalizationFilter {
                     self.envelope = self.release_coef * (self.envelope - abs_peak) + abs_peak;
                 }
 
-                // Protect against div-by-zero
                 let envelope_safe = self.envelope.max(0.001);
 
-                // If the signal peak exceeds our target max_amplitude, reduce gain
                 let gain = if envelope_safe > self.max_amplitude {
                     self.max_amplitude / envelope_safe
                 } else {

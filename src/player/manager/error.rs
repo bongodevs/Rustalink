@@ -15,7 +15,7 @@ pub async fn send_load_failed(player: &PlayerContext, session: &Session, message
     let guild_id = player.guild_id.clone();
 
     session.send_message(&protocol::OutgoingMessage::Event {
-        event: RustalinkEvent::TrackException {
+        event: Box::new(RustalinkEvent::TrackException {
             guild_id: guild_id.clone(),
             track: track.clone(),
             exception: TrackException {
@@ -24,14 +24,14 @@ pub async fn send_load_failed(player: &PlayerContext, session: &Session, message
                 cause: message.clone(),
                 cause_stack_trace: Some(message),
             },
-        },
+        }),
     });
 
     session.send_message(&protocol::OutgoingMessage::Event {
-        event: RustalinkEvent::TrackEnd {
+        event: Box::new(RustalinkEvent::TrackEnd {
             guild_id,
             track,
             reason: TrackEndReason::LoadFailed,
-        },
+        }),
     });
 }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -12,24 +12,29 @@ use crate::{
 
 pub mod track;
 
+static URL_PATTERN: OnceLock<Regex> = OnceLock::new();
+static IDENTIFIER_PATTERN: OnceLock<Regex> = OnceLock::new();
+static RESULT_BLOCKS_PATTERN: OnceLock<Regex> = OnceLock::new();
+static ART_URL_PATTERN: OnceLock<Regex> = OnceLock::new();
+static TITLE_PATTERN: OnceLock<Regex> = OnceLock::new();
+static SUBHEAD_PATTERN: OnceLock<Regex> = OnceLock::new();
+static ARTWORK_PATTERN: OnceLock<Regex> = OnceLock::new();
+static TRALBUM_PATTERN: OnceLock<Regex> = OnceLock::new();
+
 pub struct BandcampSource {
     client: Arc<reqwest::Client>,
-    url_regex: Regex,
-    identifier_pattern: Regex,
     search_prefixes: Vec<String>,
     search_limit: usize,
 }
 
 impl BandcampSource {
     pub fn new(
-        config: Option<crate::configs::BandcampConfig>,
+        config: Option<crate::config::BandcampConfig>,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         Ok(Self {
             client,
-            url_regex: Regex::new(r"(?i)^https?://(?P<subdomain>[^/]+)\.bandcamp\.com/(?P<type>track|album)/(?P<slug>[^/?]+)").unwrap(),
-            identifier_pattern: Regex::new(r"^(?P<subdomain>[a-zA-Z0-9\-]+):(?P<slug>[a-zA-Z0-9\-]+)$").unwrap(),
-            search_prefixes: vec!["bcsearch:".to_string()],
+            search_prefixes: vec!["bcsearch:".to_owned()],
             search_limit: config.map(|c| c.search_limit).unwrap_or(10),
         })
     }
@@ -43,7 +48,7 @@ impl BandcampSource {
         let resp = match self.base_request(self.client.get(url)).send().await {
             Ok(r) => r,
             Err(e) => {
-                error!("Bandcamp search request failed: {}", e);
+                error!("Bandcamp search request failed: {e}");
                 return LoadResult::Empty {};
             }
         };
@@ -57,38 +62,40 @@ impl BandcampSource {
             Err(_) => return LoadResult::Empty {},
         };
 
-        let result_blocks_re =
-            Regex::new(r"(?s)<li class=.searchresult data-search.[\s\S]*?</li>").unwrap();
-        let url_re = Regex::new(r#"<a class="artcont" href="([^"]+)">"#).unwrap();
-        let title_re =
-            Regex::new(r#"(?s)<div class="heading">\s*<a[^>]*>\s*(.+?)\s*</a>"#).unwrap();
-        let subhead_re = Regex::new(r#"(?s)<div class="subhead">([\s\S]*?)</div>"#).unwrap();
-        let artwork_re = Regex::new(r#"(?s)<div class="art">\s*<img src="([^"]+)""#).unwrap();
+        let result_blocks_re = RESULT_BLOCKS_PATTERN.get_or_init(|| {
+            Regex::new(r"(?s)<li class=.searchresult data-search.[\s\S]*?</li>").unwrap()
+        });
+        let url_re = ART_URL_PATTERN
+            .get_or_init(|| Regex::new(r#"<a class="artcont" href="([^"]+)">"#).unwrap());
+        let title_re = TITLE_PATTERN.get_or_init(|| {
+            Regex::new(r#"(?s)<div class="heading">\s*<a[^>]*>\s*(.+?)\s*</a>"#).unwrap()
+        });
+        let subhead_re = SUBHEAD_PATTERN
+            .get_or_init(|| Regex::new(r#"(?s)<div class="subhead">([\s\S]*?)</div>"#).unwrap());
+        let artwork_re = ARTWORK_PATTERN
+            .get_or_init(|| Regex::new(r#"(?s)<div class="art">\s*<img src="([^"]+)""#).unwrap());
 
         let mut tracks = Vec::new();
         for block in result_blocks_re.find_iter(&body) {
             let block_str = block.as_str();
 
-            let url_match = url_re.captures(block_str);
-            let title_match = title_re.captures(block_str);
-            let subhead_match = subhead_re.captures(block_str);
-            let artwork_match = artwork_re.captures(block_str);
-
-            if let (Some(url_m), Some(title_m), Some(subhead_m)) =
-                (url_match, title_match, subhead_match)
-            {
-                let uri = url_m[1].split('?').next().unwrap_or(&url_m[1]).to_string();
-                let title = title_m[1].trim().to_string();
+            if let (Some(url_m), Some(title_m), Some(subhead_m)) = (
+                url_re.captures(block_str),
+                title_re.captures(block_str),
+                subhead_re.captures(block_str),
+            ) {
+                let uri = url_m[1].split('?').next().unwrap_or(&url_m[1]).to_owned();
+                let title = title_m[1].trim().to_owned();
                 let subhead = subhead_m[1].trim();
                 let artist = subhead
                     .split(" de ")
                     .last()
                     .unwrap_or(subhead)
                     .trim()
-                    .to_string();
-                let artwork_url = artwork_match.map(|m| m[1].to_string());
+                    .to_owned();
+                let artwork_url = artwork_re.captures(block_str).map(|m| m[1].to_owned());
 
-                let info = TrackInfo {
+                tracks.push(Track::new(TrackInfo {
                     identifier: self.get_identifier_from_url(&uri),
                     is_seekable: true,
                     author: artist,
@@ -99,9 +106,8 @@ impl BandcampSource {
                     uri: Some(uri),
                     artwork_url,
                     isrc: None,
-                    source_name: "bandcamp".to_string(),
-                };
-                tracks.push(Track::new(info));
+                    source_name: "bandcamp".to_owned(),
+                }));
 
                 if tracks.len() >= self.search_limit {
                     break;
@@ -110,10 +116,10 @@ impl BandcampSource {
         }
 
         if tracks.is_empty() {
-            return LoadResult::Empty {};
+            LoadResult::Empty {}
+        } else {
+            LoadResult::Search(tracks)
         }
-
-        LoadResult::Search(tracks)
     }
 
     async fn resolve(&self, url: &str) -> LoadResult {
@@ -125,25 +131,25 @@ impl BandcampSource {
         let artist = tralbum_data["artist"]
             .as_str()
             .unwrap_or("Unknown Artist")
-            .to_string();
-        let art_id = tralbum_data["art_id"].as_u64();
-        let artwork_url = art_id.map(|id| format!("https://f4.bcbits.com/img/a{}_10.jpg", id));
+            .to_owned();
+        let artwork_url = tralbum_data["art_id"]
+            .as_u64()
+            .map(|id| format!("https://f4.bcbits.com/img/a{id}_10.jpg"));
 
         if let Some(trackinfo) = tralbum_data["trackinfo"].as_array() {
             if trackinfo.len() > 1 {
                 let mut tracks = Vec::new();
                 for item in trackinfo {
                     let title = match item["title"].as_str() {
-                        Some(t) => t.to_string(),
+                        Some(t) => t.to_owned(),
                         None => continue,
                     };
-                    let track_url_suffix = item["title_link"].as_str();
-                    if let Some(suffix) = track_url_suffix {
+                    if let Some(suffix) = item["title_link"].as_str() {
                         let track_url = if suffix.starts_with("http") {
-                            suffix.to_string()
+                            suffix.to_owned()
                         } else {
                             let base = url.split(".bandcamp.com").next().unwrap_or("");
-                            format!("{}.bandcamp.com{}", base, suffix)
+                            format!("{base}.bandcamp.com{suffix}")
                         };
 
                         let duration = (item["duration"].as_f64().unwrap_or(0.0) * 1000.0) as u64;
@@ -164,7 +170,7 @@ impl BandcampSource {
                             uri: Some(track_url),
                             artwork_url: artwork_url.clone(),
                             isrc: None,
-                            source_name: "bandcamp".to_string(),
+                            source_name: "bandcamp".to_owned(),
                         }));
                     }
                 }
@@ -172,7 +178,7 @@ impl BandcampSource {
                 let playlist_name = tralbum_data["current"]["title"]
                     .as_str()
                     .unwrap_or("Bandcamp Album")
-                    .to_string();
+                    .to_owned();
 
                 return LoadResult::Playlist(PlaylistData {
                     info: PlaylistInfo {
@@ -186,7 +192,7 @@ impl BandcampSource {
                 let title = track_data["title"]
                     .as_str()
                     .unwrap_or("Unknown Title")
-                    .to_string();
+                    .to_owned();
                 let duration = (track_data["duration"].as_f64().unwrap_or(0.0) * 1000.0) as u64;
                 let identifier = track_data["track_id"]
                     .as_u64()
@@ -202,10 +208,10 @@ impl BandcampSource {
                     is_stream: false,
                     position: 0,
                     title,
-                    uri: Some(url.to_string()),
+                    uri: Some(url.to_owned()),
                     artwork_url,
                     isrc: None,
-                    source_name: "bandcamp".to_string(),
+                    source_name: "bandcamp".to_owned(),
                 }));
             }
         }
@@ -221,7 +227,8 @@ impl BandcampSource {
 
         let body = resp.text().await.ok()?;
 
-        let tralbum_re = Regex::new(r#"data-tralbum=["'](.+?)["']"#).unwrap();
+        let tralbum_re =
+            TRALBUM_PATTERN.get_or_init(|| Regex::new(r#"data-tralbum=["'](.+?)["']"#).unwrap());
         let tralbum_data = if let Some(match_cap) = tralbum_re.captures(&body) {
             let decoded = match_cap[1].replace("&quot;", "\"");
             serde_json::from_str(&decoded).ok()?
@@ -229,19 +236,17 @@ impl BandcampSource {
             return None;
         };
 
-        let stream_re = Regex::new(r"https?://t4\.bcbits\.com/stream/[a-zA-Z0-9]+/mp3-128/\d+\?p=\d+&amp;ts=\d+&amp;t=[a-zA-Z0-9]+&amp;token=\d+_[a-zA-Z0-9]+").unwrap();
-        let stream_url = stream_re
-            .find(&body)
-            .map(|m| m.as_str().replace("&amp;", "&"));
+        let stream_url = track::extract_stream_url(&body);
 
         Some((tralbum_data, stream_url))
     }
 
     fn get_identifier_from_url(&self, url: &str) -> String {
-        if let Some(caps) = self.url_regex.captures(url) {
+        let url_re = URL_PATTERN.get_or_init(|| Regex::new(r"(?i)^https?://(?P<subdomain>[^/]+)\.bandcamp\.com/(?P<type>track|album)/(?P<slug>[^/?]+)").unwrap());
+        if let Some(caps) = url_re.captures(url) {
             return format!("{}:{}", &caps["subdomain"], &caps["slug"]);
         }
-        url.to_string()
+        url.to_owned()
     }
 
     pub fn base_request(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -256,10 +261,11 @@ impl SourcePlugin for BandcampSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
+        let url_re = URL_PATTERN.get_or_init(|| Regex::new(r"(?i)^https?://(?P<subdomain>[^/]+)\.bandcamp\.com/(?P<type>track|album)/(?P<slug>[^/?]+)").unwrap());
         self.search_prefixes
             .iter()
             .any(|p| identifier.starts_with(p))
-            || self.url_regex.is_match(identifier)
+            || url_re.is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
@@ -271,13 +277,16 @@ impl SourcePlugin for BandcampSource {
         identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        for prefix in &self.search_prefixes {
-            if identifier.starts_with(prefix) {
-                return self.search(&identifier[prefix.len()..]).await;
-            }
+        if let Some(prefix) = self
+            .search_prefixes
+            .iter()
+            .find(|p| identifier.starts_with(*p))
+        {
+            return self.search(&identifier[prefix.len()..]).await;
         }
 
-        if self.url_regex.is_match(identifier) {
+        let url_re = URL_PATTERN.get_or_init(|| Regex::new(r"(?i)^https?://(?P<subdomain>[^/]+)\.bandcamp\.com/(?P<type>track|album)/(?P<slug>[^/?]+)").unwrap());
+        if url_re.is_match(identifier) {
             return self.resolve(identifier).await;
         }
 
@@ -289,9 +298,12 @@ impl SourcePlugin for BandcampSource {
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<BoxedTrack> {
+        let id_re = IDENTIFIER_PATTERN.get_or_init(|| {
+            Regex::new(r"^(?P<subdomain>[a-zA-Z0-9\-]+):(?P<slug>[a-zA-Z0-9\-]+)$").unwrap()
+        });
         let url = if identifier.starts_with("http") {
-            identifier.to_string()
-        } else if let Some(caps) = self.identifier_pattern.captures(identifier) {
+            identifier.to_owned()
+        } else if let Some(caps) = id_re.captures(identifier) {
             format!(
                 "https://{}.bandcamp.com/track/{}",
                 &caps["subdomain"], &caps["slug"]

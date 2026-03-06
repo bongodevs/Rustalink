@@ -1,6 +1,3 @@
-//! Opus encoder — wraps `audiopus` for encoding mixed PCM into Opus packets
-//! sent over Discord UDP.
-
 use audiopus::{Application, Bitrate, Channels, SampleRate, coder::Encoder as OpusEncoder};
 
 pub struct Encoder {

@@ -51,16 +51,18 @@ impl TvClient {
         oauth: &Arc<YouTubeOAuth>,
     ) -> AnyResult<Value> {
         crate::sources::youtube::clients::common::make_player_request(
-            &self.http,
-            &self.config(),
-            video_id,
-            None,
-            visitor_data,
-            signature_timestamp,
-            oauth.get_auth_header().await,
-            None,
-            None,
-            None,
+            crate::sources::youtube::clients::common::PlayerRequestOptions {
+                http: &self.http,
+                config: &self.config(),
+                video_id,
+                params: None,
+                visitor_data,
+                signature_timestamp,
+                auth_header: oauth.get_auth_header().await,
+                referer: None,
+                origin: None,
+                po_token: None,
+            },
         )
         .await
     }

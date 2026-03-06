@@ -1,26 +1,30 @@
-//! `AudioProcessor` — ties source → demux → decode → resample → engine.
-//!
-//! The processor owns the decode loop and delegates all downstream routing to
-//! whichever [`Engine`] implementation was injected at construction time:
-//!
-//! - [`TranscodeEngine`] — PCM → `FlowController` → Mixer
-//! - [`PassthroughEngine`] — raw Opus → Mixer passthrough lane
-
 use flume::Receiver;
-use symphonia::core::{audio::SampleBuffer, codecs::Decoder, errors::Error, formats::FormatReader};
+use std::io::ErrorKind;
+use symphonia::core::{
+    audio::SampleBuffer,
+    codecs::Decoder,
+    errors::Error,
+    formats::FormatReader,
+    formats::{SeekMode, SeekTo},
+    io::MediaSource,
+    units::Time,
+};
 use tracing::{Level, debug, info, span, warn};
 
-use crate::audio::{
-    buffer::PooledBuffer,
-    constants::TARGET_SAMPLE_RATE,
-    demux::{DemuxResult, open_format},
-    engine::{BoxedEngine, TranscodeEngine},
-    resample::Resampler,
+use crate::{
+    audio::{
+        buffer::PooledBuffer,
+        constants::TARGET_SAMPLE_RATE,
+        demux::{DemuxResult, open_format},
+        engine::{BoxedEngine, TranscodeEngine},
+        resample::Resampler,
+    },
+    common::types::AudioFormat,
+    config::player::{PlayerConfig, ResamplingQuality},
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecoderCommand {
-    /// Seek to the given position in milliseconds.
     Seek(u64),
     Stop,
 }
@@ -33,8 +37,6 @@ pub enum CommandOutcome {
     None,
 }
 
-/// Decodes any supported container to 48 kHz stereo PCM i16 and drives the
-/// injected [`Engine`] with the resulting samples.
 pub struct AudioProcessor {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn Decoder>,
@@ -49,39 +51,31 @@ pub struct AudioProcessor {
 }
 
 impl AudioProcessor {
-    /// Open `source`, detect its format/codec, initialise the resampler and
-    /// wire up a [`TranscodeEngine`] that pushes PCM onto `pcm_tx`.
     pub fn new(
-        source: Box<dyn symphonia::core::io::MediaSource>,
-        kind: Option<crate::common::types::AudioFormat>,
+        source: Box<dyn MediaSource>,
+        kind: Option<AudioFormat>,
         pcm_tx: flume::Sender<PooledBuffer>,
         cmd_rx: Receiver<DecoderCommand>,
         error_tx: Option<flume::Sender<String>>,
-        config: crate::configs::player::PlayerConfig,
+        config: PlayerConfig,
     ) -> Result<Self, Error> {
-        let engine: BoxedEngine = Box::new(TranscodeEngine::new(pcm_tx));
-        Self::build(source, kind, engine, cmd_rx, error_tx, config)
+        Self::with_engine(
+            source,
+            kind,
+            Box::new(TranscodeEngine::new(pcm_tx)),
+            cmd_rx,
+            error_tx,
+            config,
+        )
     }
 
-    /// Same as [`new`] but accepts a pre-built engine (e.g. `PassthroughEngine`).
     pub fn with_engine(
-        source: Box<dyn symphonia::core::io::MediaSource>,
-        kind: Option<crate::common::types::AudioFormat>,
+        source: Box<dyn MediaSource>,
+        kind: Option<AudioFormat>,
         engine: BoxedEngine,
         cmd_rx: Receiver<DecoderCommand>,
         error_tx: Option<flume::Sender<String>>,
-        config: crate::configs::player::PlayerConfig,
-    ) -> Result<Self, Error> {
-        Self::build(source, kind, engine, cmd_rx, error_tx, config)
-    }
-
-    fn build(
-        source: Box<dyn symphonia::core::io::MediaSource>,
-        kind: Option<crate::common::types::AudioFormat>,
-        engine: BoxedEngine,
-        cmd_rx: Receiver<DecoderCommand>,
-        error_tx: Option<flume::Sender<String>>,
-        config: crate::configs::player::PlayerConfig,
+        config: PlayerConfig,
     ) -> Result<Self, Error> {
         let DemuxResult::Transcode {
             format,
@@ -99,7 +93,6 @@ impl AudioProcessor {
         let resampler = if sample_rate == TARGET_SAMPLE_RATE {
             Resampler::linear(sample_rate, TARGET_SAMPLE_RATE, channels)
         } else {
-            use crate::configs::player::ResamplingQuality;
             match config.resampling_quality {
                 ResamplingQuality::Low => {
                     Resampler::linear(sample_rate, TARGET_SAMPLE_RATE, channels)
@@ -127,8 +120,6 @@ impl AudioProcessor {
         })
     }
 
-    /// Run the decode loop until the stream ends naturally or a `Stop` command
-    /// arrives.
     pub fn run(&mut self) -> Result<(), Error> {
         let _span = span!(Level::DEBUG, "audio_processor").entered();
 
@@ -144,11 +135,9 @@ impl AudioProcessor {
 
             let packet = match self.format.next_packet() {
                 Ok(p) => p,
-                Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(Error::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => break,
                 Err(e) => {
-                    if let Some(tx) = &self.error_tx {
-                        let _ = tx.send(format!("Packet read error: {e}"));
-                    }
+                    self.send_error(format!("Packet read error: {e}"));
                     return Err(e);
                 }
             };
@@ -168,7 +157,7 @@ impl AudioProcessor {
                     let samples = buf.samples();
 
                     if !samples.is_empty() {
-                        let mut pooled: PooledBuffer = Vec::with_capacity(samples.len());
+                        let mut pooled = Vec::with_capacity(samples.len());
                         if self.resampler.is_passthrough() {
                             pooled.extend_from_slice(samples);
                         } else {
@@ -176,21 +165,16 @@ impl AudioProcessor {
                         }
 
                         if !pooled.is_empty() && !self.engine.push_pcm(pooled) {
-                            return Ok(()); // Engine/Mixer disconnected — clean exit
+                            return Ok(());
                         }
                     }
 
                     self.sample_buf = Some(buf);
                 }
-                Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                Err(Error::DecodeError(e)) => {
-                    warn!("Decode error (recoverable): {e}");
-                    continue;
-                }
+                Err(Error::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => break,
+                Err(Error::DecodeError(e)) => warn!("Decode error (recoverable): {e}"),
                 Err(e) => {
-                    if let Some(tx) = &self.error_tx {
-                        let _ = tx.send(format!("Decode error: {e}"));
-                    }
+                    self.send_error(format!("Decode error: {e}"));
                     return Err(e);
                 }
             }
@@ -203,12 +187,12 @@ impl AudioProcessor {
     fn check_commands(&mut self) -> CommandOutcome {
         match self.cmd_rx.try_recv() {
             Ok(DecoderCommand::Seek(ms)) => {
-                let time = symphonia::core::units::Time::from(ms as f64 / 1000.0);
+                let time = Time::from(ms as f64 / 1000.0);
                 if self
                     .format
                     .seek(
-                        symphonia::core::formats::SeekMode::Coarse,
-                        symphonia::core::formats::SeekTo::Time {
+                        SeekMode::Coarse,
+                        SeekTo::Time {
                             time,
                             track_id: Some(self.track_id),
                         },
@@ -218,8 +202,6 @@ impl AudioProcessor {
                     self.resampler.reset();
                     self.decoder.reset();
                     self.sample_buf = None;
-                    // Send a flush sentinel so the FlowController drops stale
-                    // pre-seek audio from pending_pcm immediately.
                     let _ = self.engine.push_pcm(Vec::new());
                     CommandOutcome::Seeked
                 } else {
@@ -231,6 +213,12 @@ impl AudioProcessor {
                 CommandOutcome::Stop
             }
             _ => CommandOutcome::None,
+        }
+    }
+
+    fn send_error(&self, msg: String) {
+        if let Some(tx) = &self.error_tx {
+            let _ = tx.send(msg);
         }
     }
 }

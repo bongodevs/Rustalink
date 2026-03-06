@@ -30,7 +30,7 @@ pub fn spawn_lyrics_fetch(
             *lock = Some(lyrics.clone());
 
             protocol::OutgoingMessage::Event {
-                event: RustalinkEvent::LyricsFound {
+                event: Box::new(RustalinkEvent::LyricsFound {
                     guild_id,
                     lyrics: RustalinkLyrics {
                         source_name: track_info.source_name,
@@ -49,11 +49,11 @@ pub fn spawn_lyrics_fetch(
                         }),
                         plugin: serde_json::json!({}),
                     },
-                },
+                }),
             }
         } else {
             protocol::OutgoingMessage::Event {
-                event: RustalinkEvent::LyricsNotFound { guild_id },
+                event: Box::new(RustalinkEvent::LyricsNotFound { guild_id }),
             }
         };
 
@@ -72,10 +72,10 @@ pub async fn sync_lyrics(
     let Ok(lock) = lyrics_data.try_lock() else {
         return;
     };
+
     let Some(lyrics) = &*lock else { return };
     let Some(lines) = &lyrics.lines else { return };
 
-    // Find the highest line index whose timestamp <= current position.
     let target = lines
         .iter()
         .rposition(|l| pos_ms >= l.timestamp)
@@ -88,11 +88,10 @@ pub async fn sync_lyrics(
     }
 
     if target > last {
-        // Forward: emit any lines we skipped.
         for i in (last + 1)..=target {
             let line = &lines[i as usize];
             session.send_message(&protocol::OutgoingMessage::Event {
-                event: RustalinkEvent::LyricsLine {
+                event: Box::new(RustalinkEvent::LyricsLine {
                     guild_id: guild_id.clone(),
                     line_index: i as i32,
                     line: RustalinkLyricsLine {
@@ -102,14 +101,13 @@ pub async fn sync_lyrics(
                         plugin: serde_json::json!({}),
                     },
                     skipped: i != target,
-                },
+                }),
             });
         }
     } else if target >= 0 {
-        // Backward seek - emit the new current line.
         let line = &lines[target as usize];
         session.send_message(&protocol::OutgoingMessage::Event {
-            event: RustalinkEvent::LyricsLine {
+            event: Box::new(RustalinkEvent::LyricsLine {
                 guild_id: guild_id.clone(),
                 line_index: target as i32,
                 line: RustalinkLyricsLine {
@@ -119,9 +117,9 @@ pub async fn sync_lyrics(
                     plugin: serde_json::json!({}),
                 },
                 skipped: false,
-            },
+            }),
         });
     }
 
-    last_idx.store(target, Ordering::SeqCst);
+    last_idx.store(target, Ordering::Release);
 }

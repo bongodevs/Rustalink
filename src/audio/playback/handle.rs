@@ -5,7 +5,7 @@ use std::sync::{
 
 use crate::audio::{constants::OPUS_SAMPLE_RATE, processor::DecoderCommand};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PlaybackState {
     Playing = 0,
@@ -15,8 +15,8 @@ pub enum PlaybackState {
     Starting = 4,
 }
 
-impl PlaybackState {
-    pub fn from_u8(v: u8) -> Self {
+impl From<u8> for PlaybackState {
+    fn from(v: u8) -> Self {
         match v {
             0 => Self::Playing,
             1 => Self::Paused,
@@ -90,7 +90,7 @@ impl TrackHandle {
 
     pub fn get_state(&self) -> PlaybackState {
         let s = self.state.load(Ordering::Acquire);
-        let mut state = PlaybackState::from_u8(s);
+        let mut state = PlaybackState::from(s);
 
         if state != PlaybackState::Stopped && self.command_tx.is_disconnected() {
             state = PlaybackState::Stopped;

@@ -86,16 +86,19 @@ pub struct PhonographFilter {
     rng: XorShift32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PhonographConfig {
+    pub frequency: f32,
+    pub depth: f32,
+    pub crackle: f32,
+    pub flutter: f32,
+    pub room: f32,
+    pub mic_agc: f32,
+    pub drive: f32,
+}
+
 impl PhonographFilter {
-    pub fn new(
-        frequency: f32,
-        depth: f32,
-        crackle: f32,
-        flutter: f32,
-        room: f32,
-        mic_agc: f32,
-        drive: f32,
-    ) -> Self {
+    pub fn new(config: PhonographConfig) -> Self {
         let mut filter = Self {
             frequency: 0.8,
             depth: 0.25,
@@ -144,7 +147,7 @@ impl PhonographFilter {
         };
 
         filter.recompute_filters();
-        filter.update(frequency, depth, crackle, flutter, room, mic_agc, drive);
+        filter.update(config);
         filter
     }
 
@@ -202,25 +205,16 @@ impl PhonographFilter {
         }
     }
 
-    pub fn update(
-        &mut self,
-        frequency: f32,
-        depth: f32,
-        crackle: f32,
-        flutter: f32,
-        room: f32,
-        mic_agc: f32,
-        drive: f32,
-    ) {
-        self.frequency = frequency;
-        self.depth = depth.clamp(0.0, 1.0);
-        self.crackle = crackle.clamp(0.0, 1.0);
-        self.flutter = flutter.clamp(0.0, 1.0);
-        self.room = room.clamp(0.0, 1.0);
-        self.mic_agc = mic_agc.clamp(0.0, 1.0);
-        self.drive = drive.clamp(0.0, 1.0);
+    pub fn update(&mut self, config: PhonographConfig) {
+        self.frequency = config.frequency;
+        self.depth = config.depth.clamp(0.0, 1.0);
+        self.crackle = config.crackle.clamp(0.0, 1.0);
+        self.flutter = config.flutter.clamp(0.0, 1.0);
+        self.room = config.room.clamp(0.0, 1.0);
+        self.mic_agc = config.mic_agc.clamp(0.0, 1.0);
+        self.drive = config.drive.clamp(0.0, 1.0);
 
-        self.wow_lfo.update(self.frequency.into(), 1.0);
+        self.wow_lfo.update(self.frequency as f64, 1.0);
         self.flutter_lfo.update(7.5, 1.0);
     }
 
@@ -263,7 +257,6 @@ impl AudioFilter for PhonographFilter {
             let left_sample = chunk[0] as f32;
             let right_sample = chunk[1] as f32;
 
-            // Phonograph natively converts stereo to mono initially
             let mut x = ((left_sample + right_sample) * 0.5) / 32768.0;
 
             let d_noise = self.rng.next_noise();

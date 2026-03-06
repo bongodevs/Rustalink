@@ -5,7 +5,7 @@ use tracing::{debug, error};
 
 use crate::{
     audio::processor::{AudioProcessor, DecoderCommand},
-    configs::HttpProxyConfig,
+    config::HttpProxyConfig,
     sources::{deezer::reader::DeezerReader, plugin::PlayableTrack},
 };
 
@@ -22,7 +22,7 @@ pub struct DeezerTrack {
 impl PlayableTrack for DeezerTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::buffer::PooledBuffer>,
         Sender<DecoderCommand>,
@@ -45,16 +45,16 @@ impl PlayableTrack for DeezerTrack {
         let handle = tokio::runtime::Handle::current();
         std::thread::spawn(move || {
             let _guard = handle.enter();
-            // Clone for use after block_on (async move consumes track_id)
             let track_id_for_log = track_id.clone();
 
             let playback_url = handle.block_on(async move {
-
                 let mut retry_count = 0;
                 let max_retries = 3;
 
                 loop {
-                    if retry_count > max_retries { break None; }
+                    if retry_count > max_retries {
+                        break None;
+                    }
 
                     let tokens = match token_tracker.get_token().await {
                         Some(t) => t,
@@ -71,15 +71,22 @@ impl PlayableTrack for DeezerTrack {
                     );
                     let body = serde_json::json!({ "sng_id": track_id });
 
-                    let res = match client.post(&url)
-                        .header("Cookie", format!("sid={}; dzr_uniq_id={}", tokens.session_id, tokens.dzr_uniq_id))
+                    let res = match client
+                        .post(&url)
+                        .header(
+                            "Cookie",
+                            format!(
+                                "sid={}; dzr_uniq_id={}",
+                                tokens.session_id, tokens.dzr_uniq_id
+                            ),
+                        )
                         .json(&body)
                         .send()
                         .await
                     {
                         Ok(r) => r,
                         Err(e) => {
-                            debug!("DeezerTrack: Failed to get song data: {}", e);
+                            debug!("DeezerTrack: Failed to get song data: {e}");
                             retry_count += 1;
                             continue;
                         }
@@ -93,14 +100,22 @@ impl PlayableTrack for DeezerTrack {
                         }
                     };
 
-                    if let Some(error) = json.get("error").and_then(|v| v.as_array()).filter(|v| !v.is_empty()) {
-                        debug!("DeezerTrack: API error: {:?}", error);
+                    if let Some(error) = json
+                        .get("error")
+                        .and_then(|v| v.as_array())
+                        .filter(|v| !v.is_empty())
+                    {
+                        debug!("DeezerTrack: API error: {error:?}");
                         token_tracker.invalidate_token(tokens.arl_index).await;
                         retry_count += 1;
                         continue;
                     }
 
-                    let track_token = match json.get("results").and_then(|r| r.get("TRACK_TOKEN")).and_then(|v| v.as_str()) {
+                    let track_token = match json
+                        .get("results")
+                        .and_then(|r| r.get("TRACK_TOKEN"))
+                        .and_then(|v| v.as_str())
+                    {
                         Some(t) => t,
                         None => {
                             token_tracker.invalidate_token(tokens.arl_index).await;
@@ -126,7 +141,7 @@ impl PlayableTrack for DeezerTrack {
                     let res = match client.post(media_url).json(&media_body).send().await {
                         Ok(r) => r,
                         Err(e) => {
-                            debug!("DeezerTrack: Failed to get media URL: {}", e);
+                            debug!("DeezerTrack: Failed to get media URL: {e}");
                             retry_count += 1;
                             continue;
                         }
@@ -140,17 +155,31 @@ impl PlayableTrack for DeezerTrack {
                         }
                     };
 
-                    if let Some(errors) = json.get("data").and_then(|d| d.get(0)).and_then(|d| d.get("errors")).and_then(|e| e.as_array()).filter(|e| !e.is_empty()) {
-                        debug!("DeezerTrack: get_url errors: {:?}", errors);
+                    if let Some(errors) = json
+                        .get("data")
+                        .and_then(|d| d.get(0))
+                        .and_then(|d| d.get("errors"))
+                        .and_then(|e| e.as_array())
+                        .filter(|e| !e.is_empty())
+                    {
+                        debug!("DeezerTrack: get_url errors: {errors:?}");
                         token_tracker.invalidate_token(tokens.arl_index).await;
                         retry_count += 1;
                         continue;
                     }
 
-                    let url_opt = json.get("data").and_then(|d| d.get(0)).and_then(|d| d.get("media")).and_then(|m| m.get(0)).and_then(|m| m.get("sources")).and_then(|s| s.get(0)).and_then(|s| s.get("url")).and_then(|u| u.as_str());
+                    let url_opt = json
+                        .get("data")
+                        .and_then(|d| d.get(0))
+                        .and_then(|d| d.get("media"))
+                        .and_then(|m| m.get(0))
+                        .and_then(|m| m.get("sources"))
+                        .and_then(|s| s.get(0))
+                        .and_then(|s| s.get("url"))
+                        .and_then(|u| u.as_str());
 
                     if let Some(url) = url_opt {
-                        return Some(format!("deezer_encrypted:{}:{}", track_id, url));
+                        return Some(format!("deezer_encrypted:{track_id}:{url}"));
                     } else {
                         token_tracker.invalidate_token(tokens.arl_index).await;
                         retry_count += 1;
@@ -160,11 +189,11 @@ impl PlayableTrack for DeezerTrack {
             });
 
             if let Some(url) = playback_url {
-                let custom_reader = if url.starts_with("deezer_encrypted:") {
-                    let parts: Vec<&str> = url.splitn(3, ':').collect();
-                    if parts.len() == 3 {
-                        let track_id = parts[1];
-                        let media_url = parts[2];
+                let custom_reader = if let Some(stripped) = url.strip_prefix("deezer_encrypted:") {
+                    let parts: Vec<&str> = stripped.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        let track_id = parts[0];
+                        let media_url = parts[1];
                         DeezerReader::new(
                             media_url,
                             track_id,
@@ -197,29 +226,19 @@ impl PlayableTrack for DeezerTrack {
                     .and_then(|s| s.to_str())
                     .map(crate::common::types::AudioFormat::from_ext);
 
-                match AudioProcessor::new(
-                    reader,
-                    kind,
-                    tx,
-                    cmd_rx,
-                    Some(err_tx.clone()),
-                    config.clone(),
-                ) {
+                match AudioProcessor::new(reader, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
                     Ok(mut processor) => {
                         if let Err(e) = processor.run() {
-                            error!("DeezerTrack audio processor error: {}", e);
+                            error!("DeezerTrack audio processor error: {e}");
                         }
                     }
                     Err(e) => {
-                        error!("DeezerTrack failed to initialize processor: {}", e);
-                        let _ = err_tx.send(format!("Failed to initialize processor: {}", e));
+                        error!("DeezerTrack failed to initialize processor: {e}");
+                        let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
                     }
                 }
             } else {
-                error!(
-                    "DeezerTrack: Failed to resolve playback URL for {}",
-                    track_id_for_log
-                );
+                error!("DeezerTrack: Failed to resolve playback URL for {track_id_for_log}");
             }
         });
 

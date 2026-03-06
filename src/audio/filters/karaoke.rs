@@ -45,7 +45,6 @@ impl KaraokeFilter {
 
     fn compute_coefficients(band: f64, width: f64) -> (BiquadCoeffs, BiquadCoeffs) {
         if band <= 0.0 || width <= 0.0 {
-            // Passthrough coefficients
             let passthrough = BiquadCoeffs {
                 b0: 1.0,
                 b1: 0.0,
@@ -56,7 +55,7 @@ impl KaraokeFilter {
             return (passthrough.clone(), passthrough);
         }
 
-        let fc = band.max(1.0).min(SAMPLE_RATE * 0.49);
+        let fc = band.clamp(1.0, SAMPLE_RATE * 0.49);
         let w = width.max(1e-6);
         let q = (fc / w).max(1e-4);
 
@@ -79,7 +78,6 @@ impl AudioFilter for KaraokeFilter {
 
         let do_filter = self.level > 0.0 && self.filter_band > 0.0 && self.filter_width > 0.0;
 
-        // First pass: compute filtered output + energy
         let mut out_left_buf = vec![0.0f64; num_frames];
         let mut out_right_buf = vec![0.0f64; num_frames];
         let mut original_energy = 0.0f64;
@@ -92,7 +90,6 @@ impl AudioFilter for KaraokeFilter {
 
             original_energy += left * left + right * right;
 
-            // Mono level: subtract mid from both channels
             if self.mono_level > 0.0 {
                 let mid = (left + right) * 0.5;
                 let sub = mid * self.mono_level as f64;
@@ -116,7 +113,6 @@ impl AudioFilter for KaraokeFilter {
             processed_energy += left * left + right * right;
         }
 
-        // Calculate normalization gain
         let denom = (num_frames * 2) as f64;
         original_energy /= denom;
         processed_energy /= denom;
@@ -128,13 +124,11 @@ impl AudioFilter for KaraokeFilter {
             MAX_OUTPUT_GAIN
         };
 
-        // Smooth gain transition
         let smooth = if gain > self.prev_gain { 0.06 } else { 0.3 };
         let target = self.prev_gain + (gain - self.prev_gain) * smooth;
         let step = (target - self.prev_gain) / num_frames as f64;
         let mut current = self.prev_gain;
 
-        // Second pass: apply gain and write output
         for frame in 0..num_frames {
             let offset = frame * 2;
             current += step;
@@ -142,7 +136,6 @@ impl AudioFilter for KaraokeFilter {
             let mut out_l = out_left_buf[frame] * current;
             let mut out_r = out_right_buf[frame] * current;
 
-            // Peak limiter
             let peak = out_l.abs().max(out_r.abs());
             if peak > 0.9999 {
                 let s = 0.9999 / peak;

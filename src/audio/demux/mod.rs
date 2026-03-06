@@ -83,7 +83,6 @@ pub fn open_format(
         .map(|c| c.count())
         .unwrap_or(MIXER_CHANNELS);
 
-    // Build the right decoder for this codec.
     let decoder: Box<dyn Decoder> = if codec == symphonia::core::codecs::CODEC_TYPE_OPUS {
         Box::new(
             crate::audio::codec::opus_decoder::OpusCodecDecoder::try_new(

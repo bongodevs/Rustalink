@@ -15,7 +15,7 @@ const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 impl MixcloudReader {
     pub fn new(url: &str, local_addr: Option<std::net::IpAddr>) -> AnyResult<Self> {
-        let client = create_client(USER_AGENT.to_string(), local_addr, None, None)?;
+        let client = create_client(USER_AGENT.to_owned(), local_addr, None, None)?;
         let inner = HttpSource::new(client, url)?;
 
         Ok(Self { inner })

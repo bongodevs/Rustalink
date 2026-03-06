@@ -2,7 +2,7 @@
 //!
 //! Uses Cubic Hermite Spline (Catmull-Rom) interpolation for smooth pitch/speed ramps.
 
-use crate::configs::player::TapeCurve;
+use crate::config::player::TapeCurve;
 
 struct TapeState {
     start_rate: f32,
@@ -19,14 +19,12 @@ pub struct TapeEffect {
     tape: Option<TapeState>,
     ramp_completed: bool,
 
-    // Resampling buffer
     input_buffer: Vec<f32>,
     read_pos: f64,
 }
 
 impl TapeEffect {
     pub fn new(sample_rate: u32, channels: usize) -> Self {
-        // 10 second buffer
         let max_size = (sample_rate as usize * channels * 10).max(96000);
         Self {
             sample_rate,
@@ -40,7 +38,7 @@ impl TapeEffect {
     }
 
     pub fn set_rate(&mut self, rate: f32) {
-        self.current_rate = rate.max(0.01).min(2.0);
+        self.current_rate = rate.clamp(0.01, 2.0);
         self.tape = None;
         self.ramp_completed = false;
     }
@@ -90,7 +88,6 @@ impl TapeEffect {
 
         let channels = self.channels;
 
-        // Push current frame to input float buffer
         for &s in frame.iter() {
             self.input_buffer.push(s as f32 / 32767.0);
         }
@@ -99,7 +96,6 @@ impl TapeEffect {
         let sample_duration_ms = 1000.0 / self.sample_rate as f32;
 
         while out_idx < frame.len() {
-            // Update rate ramp
             if let Some(state) = &mut self.tape {
                 state.elapsed_ms += sample_duration_ms;
                 let t = (state.elapsed_ms / state.duration_ms).min(1.0);
@@ -115,7 +111,6 @@ impl TapeEffect {
             }
 
             if self.current_rate <= 0.01 && self.tape.is_none() {
-                // Silenced
                 while out_idx < frame.len() {
                     frame[out_idx] = 0;
                     out_idx += 1;
@@ -123,10 +118,8 @@ impl TapeEffect {
                 break;
             }
 
-            // Cubic Hermite Spline Interpolation
             let i_pos = (self.read_pos.floor() as usize / channels) * channels;
             if i_pos + channels * 3 >= self.input_buffer.len() {
-                // Not enough data to interpolate, fill remainder with zero and break
                 while out_idx < frame.len() {
                     frame[out_idx] = 0;
                     out_idx += 1;
@@ -146,7 +139,6 @@ impl TapeEffect {
                 let p2 = self.input_buffer[i_pos + channels + c];
                 let p3 = self.input_buffer[i_pos + channels * 2 + c];
 
-                // Catmull-Rom
                 let val = 0.5
                     * (2.0 * p1
                         + (-p0 + p2) * frac
@@ -162,7 +154,6 @@ impl TapeEffect {
             self.read_pos += self.current_rate as f64 * channels as f64;
         }
 
-        // Compact buffer
         if self.read_pos > (self.sample_rate as f64 * channels as f64 * 2.0) {
             let integral = (self.read_pos.floor() as usize / channels) * channels;
             self.input_buffer.drain(0..integral);

@@ -30,7 +30,7 @@ impl FlangerFilter {
         self.depth = depth.clamp(0.0, 1.0);
         self.feedback = feedback.clamp(0.0, 0.95);
 
-        self.lfo.update(self.rate.into(), self.depth.into());
+        self.lfo.update(self.rate as f64, self.depth as f64);
     }
 }
 
@@ -44,12 +44,11 @@ impl AudioFilter for FlangerFilter {
         let max_delay_width = self.depth * (fs * 0.005);
         let center_delay = max_delay_width;
 
-        // Note:  processes mono chunk equivalents (i+=2), but works on both channels equally
         for sample in samples.iter_mut() {
             let lfo_value = self.lfo.get_value() as f32;
             let delay = center_delay + lfo_value * max_delay_width;
 
-            let delayed = self.delay_line.read(delay.into());
+            let delayed = self.delay_line.read(delay);
             let input = (*sample as f32) + delayed * self.feedback;
             self.delay_line
                 .write(input.clamp(i16::MIN as f32, i16::MAX as f32));

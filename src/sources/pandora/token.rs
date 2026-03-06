@@ -33,10 +33,10 @@ impl PandoraTokenTracker {
     pub async fn get_tokens(&self) -> Option<PandoraTokens> {
         {
             let tokens = self.tokens.read().await;
-            if let Some(t) = &*tokens {
-                if t.expires_at > Instant::now() {
-                    return Some(t.clone());
-                }
+            if let Some(t) = &*tokens
+                && t.expires_at > Instant::now()
+            {
+                return Some(t.clone());
             }
         }
 
@@ -54,33 +54,25 @@ impl PandoraTokenTracker {
     async fn perform_refresh(&self, force: bool) -> Option<PandoraTokens> {
         let mut tokens_lock = self.tokens.write().await;
 
-        if !force {
-            if let Some(t) = &*tokens_lock {
-                if t.expires_at > Instant::now() {
-                    return Some(t.clone());
-                }
-            }
-        }
-
-        // Check again after acquiring write lock
-        if let Some(t) = &*tokens_lock {
-            if t.expires_at > Instant::now() {
-                return Some(t.clone());
-            }
+        if !force
+            && let Some(t) = &*tokens_lock
+            && t.expires_at > Instant::now()
+        {
+            return Some(t.clone());
         }
 
         debug!("Refreshing Pandora tokens...");
 
         let (csrf_raw, csrf_parsed) = if let Some(csrf) = &self.csrf_override {
             (
-                format!("csrftoken={};Path=/;Domain=.pandora.com;Secure", csrf),
+                format!("csrftoken={csrf};Path=/;Domain=.pandora.com;Secure"),
                 csrf.clone(),
             )
         } else {
             match self.fetch_csrf_token().await {
                 Ok(res) => res,
                 Err(e) => {
-                    error!("Failed to fetch Pandora CSRF token: {}", e);
+                    error!("Failed to fetch Pandora CSRF token: {e}");
                     return None;
                 }
             }
@@ -89,7 +81,7 @@ impl PandoraTokenTracker {
         let auth_token = match self.perform_anonymous_login(&csrf_raw, &csrf_parsed).await {
             Ok(token) => token,
             Err(e) => {
-                error!("Failed to perform Pandora anonymous login: {}", e);
+                error!("Failed to perform Pandora anonymous login: {e}");
                 return None;
             }
         };
@@ -119,18 +111,16 @@ impl PandoraTokenTracker {
         let regex = regex::Regex::new(r"csrftoken=([a-f0-9]{16})").unwrap();
         for cookie in cookies {
             let cookie_str = cookie.to_str().unwrap_or("");
-            if cookie_str.starts_with("csrftoken=") {
-                let raw = cookie_str.split(';').next().unwrap_or("").to_string();
-                if let Some(captures) = regex.captures(&raw) {
-                    if let Some(parsed_match) = captures.get(1) {
-                        let parsed = parsed_match.as_str().to_string();
-                        return Ok((raw, parsed));
-                    }
-                }
+            if let Some(raw) = cookie_str.split(';').next()
+                && raw.starts_with("csrftoken=")
+                && let Some(captures) = regex.captures(raw)
+                && let Some(parsed_match) = captures.get(1)
+            {
+                return Ok((raw.to_owned(), parsed_match.as_str().to_owned()));
             }
         }
 
-        Err("CSRF token not found in cookies".to_string())
+        Err("CSRF token not found in cookies".to_owned())
     }
 
     async fn perform_anonymous_login(
@@ -159,16 +149,16 @@ impl PandoraTokenTracker {
 
         let body: Value = resp.json().await.map_err(|e| e.to_string())?;
 
-        if let Some(error_code) = body.get("errorCode") {
-            if error_code.as_i64() == Some(0) {
-                return Err("Anonymous login returned error code 0".to_string());
-            }
+        if let Some(error_code) = body.get("errorCode")
+            && error_code.as_i64() == Some(0)
+        {
+            return Err("Anonymous login returned error code 0".to_owned());
         }
 
         body.get("authToken")
             .and_then(|t| t.as_str())
-            .map(|s| s.to_string())
-            .ok_or_else(|| "Auth token not found in response".to_string())
+            .map(|s| s.to_owned())
+            .ok_or_else(|| "Auth token not found in response".to_owned())
     }
 
     pub fn init(self: Arc<Self>) {

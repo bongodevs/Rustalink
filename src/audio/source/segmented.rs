@@ -19,16 +19,10 @@ use crate::{
     common::types::AnyResult,
 };
 
-// ─── Internal types ──────────────────────────────────────────────────────────
-
-/// State of a single downloaded chunk.
 #[derive(Clone)]
 enum ChunkState {
-    /// Not yet scheduled; inner value is the number of previous failed attempts.
     Empty(u32),
-    /// A worker has claimed this chunk and is downloading it.
     Downloading,
-    /// Data is available for reading.
     Ready(Bytes),
 }
 
@@ -40,21 +34,14 @@ struct ReaderState {
     fatal_error: Option<String>,
 }
 
-// ─── SegmentedSource ──────────────────────────────────────────────────────────
-
-/// Parallel-chunk HTTP source for large, seekable streams (e.g. YouTube audio).
 pub struct SegmentedSource {
     pos: u64,
     len: u64,
-    /// Stored as `Arc<str>` so `content_type()` clones are pointer-bump cheap.
     content_type: Option<Arc<str>>,
     shared: Arc<(Mutex<ReaderState>, Condvar)>,
 }
 
 impl SegmentedSource {
-    /// Open `url` and start the background fetch workers.
-    ///
-    /// Performs a Range probe on `bytes=0-0` to determine content length.
     pub fn new(client: reqwest::Client, url: &str) -> AnyResult<Self> {
         let handle = tokio::runtime::Handle::current();
 
@@ -71,7 +58,7 @@ impl SegmentedSource {
             .headers()
             .get(reqwest::header::CONTENT_RANGE)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split('/').last())
+            .and_then(|v| v.split('/').next_back())
             .and_then(|v| v.parse::<u64>().ok())
             .or_else(|| probe.content_length())
             .ok_or_else(|| {
@@ -110,8 +97,6 @@ impl SegmentedSource {
             let shared_clone = shared.clone();
             let client_clone = client.clone();
             let url_str = url.to_string();
-            // Spawn async tasks instead of OS threads so they scale with the
-            // Tokio thread pool rather than creating N OS threads per source.
             tokio::spawn(async move {
                 fetch_worker(worker_id, shared_clone, client_clone, url_str).await;
             });
@@ -126,11 +111,8 @@ impl SegmentedSource {
     }
 }
 
-// ─── Trait impls ──────────────────────────────────────────────────────────────
-
 impl AudioSource for SegmentedSource {
     fn content_type(&self) -> Option<String> {
-        // Arc<str> clone is a pointer-bump — no string copy.
         self.content_type.as_deref().map(str::to_string)
     }
 }
@@ -147,7 +129,7 @@ impl Read for SegmentedSource {
 
         loop {
             if let Some(ref err) = state.fatal_error {
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, err.clone()));
+                return Err(std::io::Error::other(err.clone()));
             }
 
             let chunk_idx = (self.pos / CHUNK_SIZE as u64) as usize;
@@ -159,7 +141,6 @@ impl Read for SegmentedSource {
                     let available = bytes.len().saturating_sub(offset_in_chunk);
 
                     if available == 0 {
-                        // Chunk is exhausted; advance to the next one.
                         self.pos = ((chunk_idx + 1) * CHUNK_SIZE) as u64;
                         state.current_pos = self.pos;
                         continue;
@@ -170,8 +151,6 @@ impl Read for SegmentedSource {
                     self.pos += n as u64;
                     state.current_pos = self.pos;
 
-                    // Evict chunks that are no longer needed, keeping one behind the
-                    // cursor as a small backward-seek buffer.
                     if chunk_idx > 1 {
                         state.chunks.retain(|&idx, _| idx >= chunk_idx - 1);
                     }
@@ -233,12 +212,6 @@ impl Drop for SegmentedSource {
     }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Fetch the byte range `[offset, offset + size)` in a single async operation
-/// and return it as a `Bytes` value. Combining the send + body collection into
-/// one async fn avoids two separate `block_on` calls for a single logical HTTP
-/// fetch.
 async fn fetch_chunk(
     client: &reqwest::Client,
     url: &str,
@@ -253,20 +226,12 @@ async fn fetch_chunk(
         .send()
         .await?;
 
-    // 206 Partial Content is what we expect; any non-2xx is an error.
     if !res.status().is_success() {
         return Err(format!("fetch_chunk: HTTP {}", res.status()).into());
     }
     Ok(res.bytes().await?)
 }
 
-// ─── Fetch worker ─────────────────────────────────────────────────────────────
-
-/// Async worker task that claims and downloads chunks on behalf of the reader.
-///
-/// Implemented as an `async fn` and spawned via `tokio::spawn` so it runs on
-/// the Tokio thread pool rather than creating a new OS thread per worker per
-/// source.
 async fn fetch_worker(
     worker_id: usize,
     shared: Arc<(Mutex<ReaderState>, Condvar)>,
@@ -276,7 +241,6 @@ async fn fetch_worker(
     let (lock, cvar) = &*shared;
 
     loop {
-        // ── Claim a chunk to download ─────────────────────────────────────────
         let target = {
             let mut state = lock.lock();
 
@@ -287,8 +251,6 @@ async fn fetch_worker(
             let current_chunk = (state.current_pos / CHUNK_SIZE as u64) as usize;
             let total_len = state.total_len;
 
-            // Try to claim the cursor chunk first; if it is already handled,
-            // look ahead in the prefetch window.
             let claimed = try_claim_chunk(&mut state, current_chunk, total_len);
 
             if claimed.is_none() {
@@ -312,7 +274,6 @@ async fn fetch_worker(
                 claimed
             }
             .map(|(idx, retries)| {
-                // Mark as in-flight *before* releasing the lock.
                 state.chunks.insert(idx, ChunkState::Downloading);
                 (idx, retries, total_len)
             })
@@ -321,13 +282,11 @@ async fn fetch_worker(
         let (idx, prior_retries, total_len) = match target {
             Some(t) => t,
             None => {
-                // Nothing to do — yield and wait briefly.
                 tokio::time::sleep(Duration::from_millis(WORKER_IDLE_MS)).await;
                 continue;
             }
         };
 
-        // ── Download the chunk ────────────────────────────────────────────────
         let offset = (idx * CHUNK_SIZE) as u64;
         let size = CHUNK_SIZE.min((total_len - offset) as usize) as u64;
 
@@ -359,10 +318,6 @@ async fn fetch_worker(
     }
 }
 
-/// Try to claim a chunk at `idx` if it is in `Empty` state.
-///
-/// Returns `Some((idx, retry_count))` on success, `None` if the chunk is
-/// already `Downloading` or `Ready`.
 #[inline]
 fn try_claim_chunk(state: &mut ReaderState, idx: usize, total_len: u64) -> Option<(usize, u32)> {
     if (idx * CHUNK_SIZE) as u64 >= total_len {
@@ -370,16 +325,11 @@ fn try_claim_chunk(state: &mut ReaderState, idx: usize, total_len: u64) -> Optio
     }
     match state.chunks.get(&idx) {
         Some(ChunkState::Empty(r)) => Some((idx, *r)),
-        None => {
-            // Newly seen chunk — treat as Empty(0).
-            Some((idx, 0))
-        }
+        None => Some((idx, 0)),
         _ => None,
     }
 }
 
-/// On a download failure, either requeue the chunk for retry or mark the
-/// source as fatally errored if `MAX_FETCH_RETRIES` is exceeded.
 #[inline]
 fn requeue_or_fatal(
     lock: &Mutex<ReaderState>,

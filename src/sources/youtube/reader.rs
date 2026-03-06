@@ -16,11 +16,11 @@ impl YoutubeReader {
     pub fn new(
         url: &str,
         local_addr: Option<std::net::IpAddr>,
-        proxy: Option<crate::configs::HttpProxyConfig>,
+        proxy: Option<crate::config::HttpProxyConfig>,
     ) -> AnyResult<Self> {
         let user_agent = get_youtube_ua(url)
             .map(str::to_string)
-            .unwrap_or_else(crate::common::http::default_user_agent);
+            .unwrap_or_else(crate::common::utils::default_user_agent);
 
         let client = create_client(user_agent, local_addr, proxy, None)?;
         let inner = SegmentedSource::new(client, url)?;

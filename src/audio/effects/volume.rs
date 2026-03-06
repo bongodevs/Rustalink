@@ -19,17 +19,14 @@ pub struct VolumeEffect {
     target_volume: f32,
     start_volume: f32,
 
-    // Fade state
     fade_frames_total: usize,
     fade_frames_elapsed: usize,
     fade_active: bool,
     fade_curve: FadeCurve,
 
-    // Soft limiter parameters
     _limiter_threshold: f32, // 0.0 – 1.0 relative to INT16_MAX
     limiter_softness: f32,
 
-    // Computed from threshold
     threshold_value: f32,
     limit_headroom: f32,
 
@@ -44,8 +41,7 @@ impl VolumeEffect {
         let threshold_value = limiter_threshold * INT16_MAX_F;
         let limit_headroom = INT16_MAX_F - threshold_value;
 
-        // 1000 ms fade duration by default
-        let fade_frames_total = (sample_rate as usize * 1000) / 1000; // 1 s
+        let fade_frames_total = (sample_rate as usize * 1000) / 1000;
 
         Self {
             current_volume: volume,
@@ -108,7 +104,6 @@ impl VolumeEffect {
             return;
         }
 
-        // Compute per-call gain range (start → end)
         let (gain_start, gain_end) = if self.fade_active && self.fade_frames_total > 0 {
             let frames = sample_count / self.channels;
             let prev = self.fade_frames_elapsed;

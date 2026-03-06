@@ -9,7 +9,7 @@ impl AppleMusicSource {
         let origin = self.token_tracker.get_origin().await;
 
         let url = if path.starts_with("http") {
-            path.to_string()
+            path.to_owned()
         } else {
             format!("{}{}", API_BASE, path)
         };

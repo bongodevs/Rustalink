@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 
 use async_trait::async_trait;
 use rand::{Rng, distributions::Alphanumeric, thread_rng};
@@ -14,45 +17,28 @@ use crate::{
 
 const API_BASE: &str = "https://api.audiomack.com/v1";
 
+static SONG_REGEX: OnceLock<Regex> = OnceLock::new();
+static ALBUM_REGEX: OnceLock<Regex> = OnceLock::new();
+static PLAYLIST_REGEX: OnceLock<Regex> = OnceLock::new();
+static ARTIST_REGEX: OnceLock<Regex> = OnceLock::new();
+static LIKES_REGEX: OnceLock<Regex> = OnceLock::new();
+
 pub struct AudiomackSource {
     client: Arc<reqwest::Client>,
-    song_regex: Regex,
-    album_regex: Regex,
-    playlist_regex: Regex,
-    artist_regex: Regex,
-    likes_regex: Regex,
     search_prefixes: Vec<String>,
     search_limit: usize,
 }
 
 impl AudiomackSource {
     pub fn new(
-        config: Option<crate::configs::AudiomackConfig>,
+        config: Option<crate::config::AudiomackConfig>,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         let search_limit = config.map(|c| c.search_limit).unwrap_or(20);
 
         Ok(Self {
             client,
-            song_regex: Regex::new(
-                r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/]+)/song/(?P<slug>[^/?#]+)",
-            )
-            .unwrap(),
-            album_regex: Regex::new(
-                r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/]+)/album/(?P<slug>[^/?#]+)",
-            )
-            .unwrap(),
-            playlist_regex: Regex::new(
-                r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/]+)/playlist/(?P<slug>[^/?#]+)",
-            )
-            .unwrap(),
-            artist_regex: Regex::new(
-                r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/?#]+)(?:/songs)?/?$",
-            )
-            .unwrap(),
-            likes_regex: Regex::new(r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/]+)/likes")
-                .unwrap(),
-            search_prefixes: vec!["amksearch:".to_string()],
+            search_prefixes: vec!["amksearch:".to_owned()],
             search_limit,
         })
     }
@@ -71,22 +57,17 @@ impl AudiomackSource {
         endpoint: &str,
         query_params: Option<BTreeMap<String, String>>,
     ) -> Option<Value> {
-        let url = format!("{}{}", API_BASE, endpoint);
-        tracing::debug!(
-            "Audiomack request: {} {} params: {:?}",
-            method,
-            url,
-            query_params
-        );
+        let url = format!("{API_BASE}{endpoint}");
+        tracing::debug!("Audiomack request: {method} {url} params: {query_params:?}");
 
         let mut request_builder = self.base_request(self.client.request(method.clone(), &url));
 
         let nonce = self.generate_nonce();
-        let timestamp = (std::time::SystemTime::now()
+        let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs())
-        .to_string();
+            .unwrap_or_default()
+            .as_secs()
+            .to_string();
 
         let auth_header = build_auth_header(
             method.as_str(),
@@ -104,7 +85,7 @@ impl AudiomackSource {
         let resp = match request_builder.send().await {
             Ok(r) => r,
             Err(e) => {
-                error!("Audiomack request failed: {}", e);
+                error!("Audiomack request failed: {e}");
                 return None;
             }
         };
@@ -113,23 +94,20 @@ impl AudiomackSource {
         let text = match resp.text().await {
             Ok(t) => t,
             Err(e) => {
-                error!("Failed to read Audiomack response text: {}", e);
+                error!("Failed to read Audiomack response text: {e}");
                 return None;
             }
         };
 
         if !status.is_success() {
-            warn!(
-                "Audiomack API error status: {} for endpoint: {}",
-                status, endpoint
-            );
+            warn!("Audiomack API error status: {status} for endpoint: {endpoint}");
             return None;
         }
 
         match serde_json::from_str(&text) {
             Ok(v) => Some(v),
             Err(e) => {
-                error!("Failed to parse Audiomack JSON: {} body: {}", e, text);
+                error!("Failed to parse Audiomack JSON: {e} body: {text}");
                 None
             }
         }
@@ -152,295 +130,321 @@ impl AudiomackSource {
 
     fn parse_track(&self, json: &Value) -> Option<Track> {
         let id_val = json.get("id").or_else(|| json.get("song_id"));
-        let id = if let Some(id) = id_val.and_then(|v| v.as_str()) {
-            id.to_string()
-        } else if let Some(id) = id_val.and_then(|v| v.as_i64()) {
-            id.to_string()
-        } else if let Some(id) = id_val.and_then(|v| v.as_u64()) {
-            id.to_string()
-        } else {
-            tracing::debug!("Audiomack track missing id or song_id: {:?}", json);
-            return None;
-        };
-
-        let title = match json.get("title").and_then(|v| v.as_str()) {
-            Some(t) => t.to_string(),
-            None => {
-                tracing::debug!("Audiomack track missing title: {:?}", json);
+        let id = match id_val {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => {
+                tracing::debug!("Audiomack track missing id: {json:?}");
                 return None;
             }
         };
 
-        let author = match json.get("artist").and_then(|v| v.as_str()) {
-            Some(a) => a.to_string(),
-            None => {
-                tracing::debug!("Audiomack track missing artist: {:?}", json);
-                return None;
-            }
-        };
+        let title = json.get("title")?.as_str()?.to_owned();
+        let author = json.get("artist")?.as_str()?.to_owned();
 
-        let duration_sec = if let Some(d) = json.get("duration").and_then(|v| v.as_u64()) {
-            d
-        } else if let Some(d) = json.get("duration").and_then(|v| v.as_i64()) {
-            d as u64
-        } else if let Some(d) = json
+        let duration_sec = json
             .get("duration")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<u64>().ok())
-        {
-            d
-        } else {
-            0
-        };
-        let length = duration_sec * 1000;
+            .and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_i64().map(|i| i as u64))
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+            .unwrap_or_default();
 
         let uploader_slug = json
             .pointer("/uploader/url_slug")
             .and_then(|v| v.as_str())
             .or_else(|| json.get("uploader_url_slug").and_then(|v| v.as_str()))
             .unwrap_or("unknown");
-        let url_slug = match json.get("url_slug").and_then(|v| v.as_str()) {
-            Some(s) => s,
-            None => {
-                tracing::debug!("Audiomack track missing url_slug: {:?}", json);
-                return None;
-            }
-        };
+
+        let url_slug = json.get("url_slug")?.as_str()?;
         let uri = Some(format!(
-            "https://audiomack.com/{}/song/{}",
-            uploader_slug, url_slug
+            "https://audiomack.com/{uploader_slug}/song/{url_slug}"
         ));
 
         let artwork_url = json
             .get("image")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
+
         let isrc = json
             .get("isrc")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
-        let track_info = TrackInfo {
+        Some(Track::new(TrackInfo {
             identifier: id,
             is_seekable: true,
             author,
-            length,
+            length: duration_sec * 1000,
             is_stream: false,
             position: 0,
             title,
             uri,
             artwork_url,
             isrc,
-            source_name: "audiomack".to_string(),
-        };
-
-        Some(Track::new(track_info))
+            source_name: "audiomack".to_owned(),
+        }))
     }
 
     async fn search(&self, query: &str) -> LoadResult {
         let mut params = BTreeMap::new();
-        params.insert("q".to_string(), query.to_string());
-        params.insert("limit".to_string(), self.search_limit.to_string());
-        params.insert("show".to_string(), "songs".to_string());
-        params.insert("sort".to_string(), "popular".to_string());
+        params.insert("q".to_owned(), query.to_owned());
+        params.insert("limit".to_owned(), self.search_limit.to_string());
+        params.insert("show".to_owned(), "songs".to_owned());
+        params.insert("sort".to_owned(), "popular".to_owned());
 
-        if let Some(json) = self
+        let json = match self
             .make_request(reqwest::Method::GET, "/search", Some(params))
             .await
         {
-            if let Some(results) = json.get("results").and_then(|v| v.as_array()) {
-                let tracks: Vec<Track> = results
-                    .iter()
-                    .filter_map(|item| self.parse_track(item))
-                    .collect();
+            Some(j) => j,
+            None => return LoadResult::Empty {},
+        };
 
-                if tracks.is_empty() {
-                    return LoadResult::Empty {};
-                }
-                return LoadResult::Search(tracks);
-            }
+        let results = match json.get("results").and_then(|v| v.as_array()) {
+            Some(r) => r,
+            None => return LoadResult::Empty {},
+        };
+
+        let tracks: Vec<_> = results
+            .iter()
+            .filter_map(|item| self.parse_track(item))
+            .collect();
+
+        if tracks.is_empty() {
+            LoadResult::Empty {}
+        } else {
+            LoadResult::Search(tracks)
         }
-        LoadResult::Empty {}
     }
 
     async fn get_song(&self, artist: &str, slug: &str) -> LoadResult {
-        let endpoint = format!("/music/song/{}/{}", artist, slug);
-        if let Some(json) = self
+        let endpoint = format!("/music/song/{artist}/{slug}");
+        let json = match self
             .make_request(reqwest::Method::GET, &endpoint, None)
             .await
         {
-            if let Some(track) = json.get("results").and_then(|v| self.parse_track(v)) {
-                return LoadResult::Track(track);
-            }
+            Some(j) => j,
+            None => return LoadResult::Empty {},
+        };
+
+        if let Some(track) = json.get("results").and_then(|v| self.parse_track(v)) {
+            LoadResult::Track(track)
+        } else {
+            LoadResult::Empty {}
         }
-        LoadResult::Empty {}
     }
 
     async fn get_playlist_items(&self, type_: &str, artist: &str, slug: &str) -> LoadResult {
         let endpoint = if type_ == "playlist" {
-            format!("/playlist/{}/{}", artist, slug)
+            format!("/playlist/{artist}/{slug}")
         } else {
-            format!("/music/album/{}/{}", artist, slug)
+            format!("/music/album/{artist}/{slug}")
         };
 
-        if let Some(json) = self
+        let json = match self
             .make_request(reqwest::Method::GET, &endpoint, None)
             .await
         {
-            if let Some(results) = json.get("results") {
-                let name = results
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown")
-                    .to_string();
-                let tracks_val = results.get("tracks");
+            Some(j) => j,
+            None => return LoadResult::Empty {},
+        };
 
-                if tracks_val.is_none() {
-                    tracing::debug!(
-                        "Audiomack {} results missing tracks field: {:?}",
-                        type_,
-                        results
-                    );
-                }
+        let results = match json.get("results") {
+            Some(r) => r,
+            None => return LoadResult::Empty {},
+        };
 
-                let tracks: Vec<Track> = tracks_val
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|item| self.parse_track(item))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+        let name = results
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown")
+            .to_owned();
 
-                if tracks.is_empty() {
-                    tracing::debug!("Audiomack {} parsed 0 tracks: {:?}", type_, results);
-                    return LoadResult::Empty {};
-                }
+        let tracks: Vec<_> = results
+            .get("tracks")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| self.parse_track(item))
+                    .collect()
+            })
+            .unwrap_or_default();
 
-                return LoadResult::Playlist(PlaylistData {
-                    info: PlaylistInfo {
-                        name,
-                        selected_track: -1,
-                    },
-                    plugin_info: serde_json::json!({ "type": type_, "url": results.get("url").and_then(|v| v.as_str()).map(|s| format!("https://audiomack.com{}", s)).or_else(|| Some(format!("https://audiomack.com/{}/{}/{}", artist, type_, slug))), "artworkUrl": results.get("image").and_then(|v| v.as_str()), "author": results.get("artist").and_then(|v| v.as_str()), "totalTracks": tracks.len() }),
-                    tracks,
-                });
-            } else {
-                tracing::debug!(
-                    "Audiomack {} response missing results field: {:?}",
-                    type_,
-                    json
-                );
-            }
+        if tracks.is_empty() {
+            return LoadResult::Empty {};
         }
-        LoadResult::Empty {}
+
+        let url = results
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| format!("https://audiomack.com{s}"))
+            .unwrap_or_else(|| format!("https://audiomack.com/{artist}/{type_}/{slug}"));
+
+        LoadResult::Playlist(PlaylistData {
+            info: PlaylistInfo {
+                name,
+                selected_track: -1,
+            },
+            plugin_info: serde_json::json!({
+                "type": type_,
+                "url": url,
+                "artworkUrl": results.get("image").and_then(|v| v.as_str()),
+                "author": results.get("artist").and_then(|v| v.as_str()),
+                "totalTracks": tracks.len()
+            }),
+            tracks,
+        })
     }
 
     async fn get_artist(&self, artist_slug: &str) -> LoadResult {
-        if let Some(json) = self
+        let json = match self
             .make_request(
                 reqwest::Method::GET,
-                &format!("/artist/{}", artist_slug),
+                &format!("/artist/{artist_slug}"),
                 None,
             )
             .await
         {
-            let Some(results) = json.get("results") else {
-                return LoadResult::Empty {};
-            };
-            let artist_id = if let Some(id) = results.get("id").and_then(|v| v.as_str()) {
-                id.to_string()
-            } else if let Some(id) = results.get("id").and_then(|v| v.as_i64()) {
-                id.to_string()
-            } else {
-                return LoadResult::Empty {};
-            };
-            let Some(name) = results.get("name").and_then(|v| v.as_str()) else {
-                return LoadResult::Empty {};
-            };
+            Some(j) => j,
+            None => return LoadResult::Empty {},
+        };
 
-            let mut params = BTreeMap::new();
-            params.insert("artist_id".to_string(), artist_id.to_string());
-            params.insert("limit".to_string(), "100".to_string());
-            params.insert("sort".to_string(), "rank".to_string());
-            params.insert("type".to_string(), "songs".to_string());
+        let results = match json.get("results") {
+            Some(r) => r,
+            None => return LoadResult::Empty {},
+        };
 
-            if let Some(tracks_json) = self
-                .make_request(reqwest::Method::GET, "/search_artist_content", Some(params))
-                .await
-            {
-                if let Some(track_results) = tracks_json.get("results").and_then(|v| v.as_array()) {
-                    let tracks: Vec<Track> = track_results
-                        .iter()
-                        .filter_map(|item| self.parse_track(item))
-                        .collect();
+        let artist_id = results
+            .get("id")
+            .and_then(|v| {
+                v.as_str()
+                    .map(|s| s.to_owned())
+                    .or_else(|| v.as_i64().map(|i| i.to_string()))
+            })
+            .unwrap_or_default();
 
-                    if tracks.is_empty() {
-                        return LoadResult::Empty {};
-                    }
-
-                    return LoadResult::Playlist(PlaylistData {
-                        info: PlaylistInfo {
-                            name: format!("{}'s Top Tracks", name),
-                            selected_track: -1,
-                        },
-                        plugin_info: serde_json::json!({ "type": "artist", "url": results.get("url").and_then(|v| v.as_str()).map(|s| format!("https://audiomack.com{}", s)).or_else(|| Some(format!("https://audiomack.com/{}", artist_slug))), "artworkUrl": results.get("image").and_then(|v| v.as_str()), "author": name, "totalTracks": tracks.len() }),
-                        tracks,
-                    });
-                }
-            }
+        if artist_id.is_empty() {
+            return LoadResult::Empty {};
         }
-        LoadResult::Empty {}
+
+        let name = results
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Artist")
+            .to_owned();
+
+        let mut params = BTreeMap::new();
+        params.insert("artist_id".to_owned(), artist_id);
+        params.insert("limit".to_owned(), "100".to_owned());
+        params.insert("sort".to_owned(), "rank".to_owned());
+        params.insert("type".to_owned(), "songs".to_owned());
+
+        let tracks_json = match self
+            .make_request(reqwest::Method::GET, "/search_artist_content", Some(params))
+            .await
+        {
+            Some(j) => j,
+            None => return LoadResult::Empty {},
+        };
+
+        let tracks: Vec<_> = tracks_json
+            .get("results")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| self.parse_track(item))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if tracks.is_empty() {
+            return LoadResult::Empty {};
+        }
+
+        let url = results
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| format!("https://audiomack.com{s}"))
+            .unwrap_or_else(|| format!("https://audiomack.com/{artist_slug}"));
+
+        LoadResult::Playlist(PlaylistData {
+            info: PlaylistInfo {
+                name: format!("{name}'s Top Tracks"),
+                selected_track: -1,
+            },
+            plugin_info: serde_json::json!({
+                "type": "artist",
+                "url": url,
+                "artworkUrl": results.get("image").and_then(|v| v.as_str()),
+                "author": name,
+                "totalTracks": tracks.len()
+            }),
+            tracks,
+        })
     }
 
     async fn get_artist_likes(&self, artist_slug: &str) -> LoadResult {
-        if let Some(json) = self
+        let json = match self
             .make_request(
                 reqwest::Method::GET,
-                &format!("/artist/{}", artist_slug),
+                &format!("/artist/{artist_slug}"),
                 None,
             )
             .await
         {
-            let Some(results) = json.get("results") else {
-                return LoadResult::Empty {};
-            };
-            let Some(name) = results.get("name").and_then(|v| v.as_str()) else {
-                return LoadResult::Empty {};
-            };
+            Some(j) => j,
+            None => return LoadResult::Empty {},
+        };
 
-            if let Some(likes_json) = self
-                .make_request(
-                    reqwest::Method::GET,
-                    &format!("/artist/{}/favorites", artist_slug),
-                    None,
-                )
-                .await
-            {
-                if let Some(like_results) = likes_json.get("results").and_then(|v| v.as_array()) {
-                    let tracks: Vec<Track> = like_results
-                        .iter()
-                        .filter_map(|item| self.parse_track(item))
-                        .collect();
+        let results = match json.get("results") {
+            Some(r) => r,
+            None => return LoadResult::Empty {},
+        };
 
-                    if tracks.is_empty() {
-                        return LoadResult::Empty {};
-                    }
+        let name = results
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Artist")
+            .to_owned();
 
-                    return LoadResult::Playlist(PlaylistData {
-                        info: PlaylistInfo {
-                            name: format!("{}'s Liked Tracks", name),
-                            selected_track: -1,
-                        },
-                        plugin_info: serde_json::json!({}),
-                        tracks,
-                    });
-                }
-            }
+        let likes_json = match self
+            .make_request(
+                reqwest::Method::GET,
+                &format!("/artist/{artist_slug}/favorites"),
+                None,
+            )
+            .await
+        {
+            Some(j) => j,
+            None => return LoadResult::Empty {},
+        };
+
+        let tracks: Vec<_> = likes_json
+            .get("results")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| self.parse_track(item))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if tracks.is_empty() {
+            return LoadResult::Empty {};
         }
-        LoadResult::Empty {}
+
+        LoadResult::Playlist(PlaylistData {
+            info: PlaylistInfo {
+                name: format!("{name}'s Liked Tracks"),
+                selected_track: -1,
+            },
+            plugin_info: serde_json::json!({}),
+            tracks,
+        })
     }
 }
 
@@ -451,14 +455,22 @@ impl SourcePlugin for AudiomackSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
-            .iter()
-            .any(|p| identifier.starts_with(p))
-            || self.song_regex.is_match(identifier)
-            || self.album_regex.is_match(identifier)
-            || self.playlist_regex.is_match(identifier)
-            || self.artist_regex.is_match(identifier)
-            || self.likes_regex.is_match(identifier)
+        self.search_prefixes.iter().any(|p| identifier.starts_with(p))
+            || SONG_REGEX
+                .get_or_init(|| Regex::new(r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/]+)/song/(?P<slug>[^/?#]+)").unwrap())
+                .is_match(identifier)
+            || ALBUM_REGEX
+                .get_or_init(|| Regex::new(r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/]+)/album/(?P<slug>[^/?#]+)").unwrap())
+                .is_match(identifier)
+            || PLAYLIST_REGEX
+                .get_or_init(|| Regex::new(r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/]+)/playlist/(?P<slug>[^/?#]+)").unwrap())
+                .is_match(identifier)
+            || ARTIST_REGEX
+                .get_or_init(|| Regex::new(r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/?#]+)(?:/songs)?/?$").unwrap())
+                .is_match(identifier)
+            || LIKES_REGEX
+                .get_or_init(|| Regex::new(r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/]+)/likes").unwrap())
+                .is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
@@ -479,30 +491,30 @@ impl SourcePlugin for AudiomackSource {
             return self.search(query).await;
         }
 
-        if let Some(caps) = self.song_regex.captures(identifier) {
+        if let Some(caps) = SONG_REGEX.get().and_then(|r| r.captures(identifier)) {
             let artist = caps.name("artist").map(|m| m.as_str()).unwrap_or("");
             let slug = caps.name("slug").map(|m| m.as_str()).unwrap_or("");
             return self.get_song(artist, slug).await;
         }
 
-        if let Some(caps) = self.album_regex.captures(identifier) {
+        if let Some(caps) = ALBUM_REGEX.get().and_then(|r| r.captures(identifier)) {
             let artist = caps.name("artist").map(|m| m.as_str()).unwrap_or("");
             let slug = caps.name("slug").map(|m| m.as_str()).unwrap_or("");
             return self.get_playlist_items("album", artist, slug).await;
         }
 
-        if let Some(caps) = self.playlist_regex.captures(identifier) {
+        if let Some(caps) = PLAYLIST_REGEX.get().and_then(|r| r.captures(identifier)) {
             let artist = caps.name("artist").map(|m| m.as_str()).unwrap_or("");
             let slug = caps.name("slug").map(|m| m.as_str()).unwrap_or("");
             return self.get_playlist_items("playlist", artist, slug).await;
         }
 
-        if let Some(caps) = self.likes_regex.captures(identifier) {
+        if let Some(caps) = LIKES_REGEX.get().and_then(|r| r.captures(identifier)) {
             let artist = caps.name("artist").map(|m| m.as_str()).unwrap_or("");
             return self.get_artist_likes(artist).await;
         }
 
-        if let Some(caps) = self.artist_regex.captures(identifier) {
+        if let Some(caps) = ARTIST_REGEX.get().and_then(|r| r.captures(identifier)) {
             let artist = caps.name("artist").map(|m| m.as_str()).unwrap_or("");
             return self.get_artist(artist).await;
         }
@@ -515,10 +527,13 @@ impl SourcePlugin for AudiomackSource {
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<Box<dyn PlayableTrack>> {
-        let mut track_id = identifier.to_string();
+        let mut track_id = identifier.to_owned();
 
-        // If it's a URL, we need to get the numeric ID first
-        if self.song_regex.is_match(identifier) {
+        if SONG_REGEX
+            .get()
+            .map(|r| r.is_match(identifier))
+            .unwrap_or(false)
+        {
             if let LoadResult::Track(track) = self.load(identifier, None).await {
                 track_id = track.info.identifier;
             } else {
@@ -533,7 +548,7 @@ impl SourcePlugin for AudiomackSource {
         }))
     }
 
-    fn get_proxy_config(&self) -> Option<crate::configs::HttpProxyConfig> {
+    fn get_proxy_config(&self) -> Option<crate::config::HttpProxyConfig> {
         None
     }
 }

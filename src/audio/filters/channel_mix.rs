@@ -1,6 +1,5 @@
 use super::AudioFilter;
 
-/// Channel mix filter — 2×2 matrix mixing of left/right channels.
 pub struct ChannelMixFilter {
     left_to_left: f32,
     left_to_right: f32,

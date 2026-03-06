@@ -17,11 +17,9 @@ pub struct CrossfadeController {
     channels: usize,
     bytes_per_ms: usize,
 
-    // Buffering state
     ring_buffer: Option<RingBuffer>,
     next_rx: Option<Receiver<PooledBuffer>>,
 
-    // Fade state
     active_fade: Option<CrossfadeState>,
     target_buffer_bytes: usize,
 }
@@ -63,10 +61,8 @@ impl CrossfadeController {
             return;
         };
 
-        // Drain pending frames into the ring buffer
         while !rx.is_empty() {
             if let Ok(pooled) = rx.try_recv() {
-                // Convert i16 slice to u8 slice safely
                 let bytes = unsafe {
                     std::slice::from_raw_parts(pooled.as_ptr() as *const u8, pooled.len() * 2)
                 };
@@ -160,10 +156,10 @@ impl CrossfadeController {
         let mut g_out = out_start;
         let mut g_in = in_start;
 
-        for i in 0..sample_count {
+        for (i, sample) in frame.iter_mut().enumerate() {
             let next_val = next_samples.get(i).copied().unwrap_or(0);
-            let mixed = (frame[i] as f32 * g_out) + (next_val as f32 * g_in);
-            frame[i] = mixed.clamp(INT16_MIN_F, INT16_MAX_F).round() as i16;
+            let mixed = (*sample as f32 * g_out) + (next_val as f32 * g_in);
+            *sample = mixed.clamp(INT16_MIN_F, INT16_MAX_F).round() as i16;
             g_out += step_out;
             g_in += step_in;
         }

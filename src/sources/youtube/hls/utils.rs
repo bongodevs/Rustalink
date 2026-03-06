@@ -14,9 +14,9 @@ pub fn extract_attr_str(line: &str, key: &str) -> Option<String> {
 
     let rest = &line[pos + key_eq.len()..];
 
-    if rest.starts_with('"') {
-        let end = rest[1..].find('"')?;
-        Some(rest[1..1 + end].to_string())
+    if let Some(stripped) = rest.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        Some(stripped[..end].to_string())
     } else {
         let end = rest.find(',').unwrap_or(rest.len());
         Some(rest[..end].trim().to_string())
@@ -34,15 +34,15 @@ pub fn resolve_url(base: &str, maybe_relative: &str) -> String {
     let base_clean = base_clean.split('#').next().unwrap_or(base_clean);
 
     // Absolute path → replace host + path.
-    if maybe_relative.starts_with('/') {
-        if let Some(scheme_end) = base_clean.find("://") {
-            let host_start = scheme_end + 3;
-            let host_end = base_clean[host_start..]
-                .find('/')
-                .map(|p| host_start + p)
-                .unwrap_or(base_clean.len());
-            return format!("{}{}", &base_clean[..host_end], maybe_relative);
-        }
+    if maybe_relative.starts_with('/')
+        && let Some(scheme_end) = base_clean.find("://")
+    {
+        let host_start = scheme_end + 3;
+        let host_end = base_clean[host_start..]
+            .find('/')
+            .map(|p| host_start + p)
+            .unwrap_or(base_clean.len());
+        return format!("{}{}", &base_clean[..host_end], maybe_relative);
     }
 
     // Relative path → strip last path component from base and append.

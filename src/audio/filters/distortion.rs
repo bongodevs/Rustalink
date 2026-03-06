@@ -2,7 +2,6 @@ use super::AudioFilter;
 
 const MAX_INT_16: f64 = 32767.0;
 
-/// Distortion filter — wave shaping via sin/cos/tan with configurable offsets and scales.
 pub struct DistortionFilter {
     sin_offset: f32,
     sin_scale: f32,
@@ -14,26 +13,29 @@ pub struct DistortionFilter {
     scale: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DistortionConfig {
+    pub sin_offset: f32,
+    pub sin_scale: f32,
+    pub cos_offset: f32,
+    pub cos_scale: f32,
+    pub tan_offset: f32,
+    pub tan_scale: f32,
+    pub offset: f32,
+    pub scale: f32,
+}
+
 impl DistortionFilter {
-    pub fn new(
-        sin_offset: f32,
-        sin_scale: f32,
-        cos_offset: f32,
-        cos_scale: f32,
-        tan_offset: f32,
-        tan_scale: f32,
-        offset: f32,
-        scale: f32,
-    ) -> Self {
+    pub fn new(config: DistortionConfig) -> Self {
         Self {
-            sin_offset,
-            sin_scale,
-            cos_offset,
-            cos_scale,
-            tan_offset,
-            tan_scale,
-            offset,
-            scale,
+            sin_offset: config.sin_offset,
+            sin_scale: config.sin_scale,
+            cos_offset: config.cos_offset,
+            cos_scale: config.cos_scale,
+            tan_offset: config.tan_offset,
+            tan_scale: config.tan_scale,
+            offset: config.offset,
+            scale: config.scale,
         }
     }
 }

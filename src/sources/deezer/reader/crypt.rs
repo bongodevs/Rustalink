@@ -26,7 +26,7 @@ impl DeezerCrypt {
     }
 
     pub fn decrypt_chunk(&self, chunk_index: u64, chunk: &[u8], dest: &mut Vec<u8>) {
-        if chunk_index % 3 == 0 {
+        if chunk_index.is_multiple_of(3) {
             let iv = [0, 1, 2, 3, 4, 5, 6, 7];
             let mut buffer = [0u8; CHUNK_SIZE];
             let len = std::cmp::min(chunk.len(), CHUNK_SIZE);

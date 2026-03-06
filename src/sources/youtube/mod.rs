@@ -8,7 +8,7 @@ use tracing::{debug, warn};
 
 use crate::{
     common::types::SharedRw,
-    configs::sources::YouTubeConfig,
+    config::sources::YouTubeConfig,
     protocol::tracks::*,
     sources::{SourcePlugin, plugin::BoxedTrack},
 };
@@ -19,7 +19,6 @@ pub mod extractor;
 pub mod hls;
 pub mod oauth;
 pub mod reader;
-pub mod sabr;
 pub mod ua;
 pub mod utils;
 
@@ -57,15 +56,14 @@ pub struct YoutubeStreamContext {
     pub http: Arc<reqwest::Client>,
 }
 
-
 impl YouTubeSource {
     pub fn new(config: Option<YouTubeConfig>, http: Arc<reqwest::Client>) -> Self {
         let config = config.unwrap_or_default();
-        let oauth = Arc::new(YouTubeOAuth::new(config.clients.refresh_tokens.clone()));
+        let oauth = Arc::new(YouTubeOAuth::new(config.refresh_tokens.clone()));
         let cipher_manager = Arc::new(YouTubeCipherManager::new(config.cipher.clone()));
 
         // Call initialization in background if no tokens provided and enabled in config
-        if config.clients.get_oauth_token && config.clients.refresh_tokens.is_empty() {
+        if config.get_oauth_token && config.refresh_tokens.is_empty() {
             let oauth_clone = oauth.clone();
             tokio::spawn(async move {
                 oauth_clone.initialize_access_token().await;
@@ -220,18 +218,17 @@ impl YouTubeSource {
             .await
         {
             Ok(res) => {
-                if let Ok(json) = res.json::<Value>().await {
-                    if let Some(vd) = json
+                if let Ok(json) = res.json::<Value>().await
+                    && let Some(vd) = json
                         .get("responseContext")
                         .and_then(|rc| rc.get("visitorData"))
                         .and_then(|vd| vd.as_str())
-                    {
-                        // Always URL-decode to ensure clean base64 is stored (no %3D%3D etc.)
-                        let decoded = urlencoding::decode(vd)
-                            .map(|s| s.into_owned())
-                            .unwrap_or_else(|_| vd.to_string());
-                        return Some(decoded);
-                    }
+                {
+                    // Always URL-decode to ensure clean base64 is stored (no %3D%3D etc.)
+                    let decoded = urlencoding::decode(vd)
+                        .map(|s| s.into_owned())
+                        .unwrap_or_else(|_| vd.to_string());
+                    return Some(decoded);
                 }
             }
             Err(e) => {
@@ -304,29 +301,61 @@ impl YouTubeSource {
         clients: &'a [Arc<dyn YouTubeClient>],
         prefer_music: bool,
     ) -> Vec<&'a Arc<dyn YouTubeClient>> {
+        let is_music =
+            |c: &&Arc<dyn YouTubeClient>| c.name().contains("Music") || c.name().contains("Remix");
         let mut ordered = Vec::with_capacity(clients.len());
         if prefer_music {
-            ordered.extend(
-                clients
-                    .iter()
-                    .filter(|c| c.name().contains("Music") || c.name().contains("Remix")),
-            );
-            ordered.extend(
-                clients
-                    .iter()
-                    .filter(|c| !c.name().contains("Music") && !c.name().contains("Remix")),
-            );
+            ordered.extend(clients.iter().filter(|c| is_music(c)));
+            ordered.extend(clients.iter().filter(|c| !is_music(c)));
         } else {
-            ordered.extend(
-                clients
-                    .iter()
-                    .filter(|c| !c.name().contains("Music") && !c.name().contains("Remix")),
-            );
-            ordered.extend(
-                clients
-                    .iter()
-                    .filter(|c| c.name().contains("Music") || c.name().contains("Remix")),
-            );
+            ordered.extend(clients.iter().filter(|c| !is_music(c)));
+            ordered.extend(clients.iter().filter(|c| is_music(c)));
+        }
+        ordered
+    }
+
+    /// Returns all clients not already tried, drawn from all three pools,
+    /// deduped by name and ordered by music preference.
+    fn fallback_clients<'a>(
+        &'a self,
+        tried: &[&Arc<dyn YouTubeClient>],
+        prefer_music: bool,
+    ) -> Vec<&'a Arc<dyn YouTubeClient>> {
+        let tried_names: std::collections::HashSet<&str> = tried.iter().map(|c| c.name()).collect();
+
+        let all_pools: &[&[Arc<dyn YouTubeClient>]] = &[
+            &self.resolve_clients,
+            &self.playback_clients,
+            &self.search_clients,
+        ];
+
+        let mut seen = tried_names.clone();
+        let mut fallback: Vec<&Arc<dyn YouTubeClient>> = Vec::new();
+        for pool in all_pools {
+            for client in pool.iter() {
+                if seen.insert(client.name()) {
+                    fallback.push(client);
+                }
+            }
+        }
+
+        self.prioritize_clients_slice(&fallback, prefer_music)
+    }
+
+    fn prioritize_clients_slice<'a>(
+        &self,
+        clients: &[&'a Arc<dyn YouTubeClient>],
+        prefer_music: bool,
+    ) -> Vec<&'a Arc<dyn YouTubeClient>> {
+        let is_music =
+            |c: &&&Arc<dyn YouTubeClient>| c.name().contains("Music") || c.name().contains("Remix");
+        let mut ordered = Vec::with_capacity(clients.len());
+        if prefer_music {
+            ordered.extend(clients.iter().filter(|c| is_music(c)).copied());
+            ordered.extend(clients.iter().filter(|c| !is_music(c)).copied());
+        } else {
+            ordered.extend(clients.iter().filter(|c| !is_music(c)).copied());
+            ordered.extend(clients.iter().filter(|c| is_music(c)).copied());
         }
         ordered
     }
@@ -417,21 +446,36 @@ impl SourcePlugin for YouTubeSource {
 
 impl YouTubeSource {
     async fn handle_search(&self, identifier: &str, prefix: &str, context: &Value) -> LoadResult {
-        let (query, prefer_music) = if prefix == "ytmsearch:" {
-            (&identifier[prefix.len()..], true)
-        } else {
-            (&identifier[prefix.len()..], false)
-        };
+        let prefer_music = prefix == "ytmsearch:";
+        let query = &identifier[prefix.len()..];
 
-        let clients = self.prioritize_clients(&self.search_clients, prefer_music);
-        for client in clients {
+        let primary = self.prioritize_clients(&self.search_clients, prefer_music);
+        for client in &primary {
             tracing::debug!("Searching '{}' with {}", query, client.name());
             match client.search(query, context, self.oauth.clone()).await {
                 Ok(tracks) if !tracks.is_empty() => return LoadResult::Search(tracks),
                 Ok(_) => continue,
-                Err(e) => tracing::error!("Search error with {}: {}", client.name(), e),
+                Err(e) => tracing::warn!("Search error with {}: {}", client.name(), e),
             }
         }
+
+        // All configured search clients failed — try remaining clients as fallback.
+        let fallback = self.fallback_clients(&primary, prefer_music);
+        if !fallback.is_empty() {
+            tracing::debug!(
+                "All search clients failed for '{}', trying fallback clients",
+                query
+            );
+        }
+        for client in fallback {
+            tracing::debug!("Fallback search '{}' with {}", query, client.name());
+            match client.search(query, context, self.oauth.clone()).await {
+                Ok(tracks) if !tracks.is_empty() => return LoadResult::Search(tracks),
+                Ok(_) => continue,
+                Err(e) => tracing::warn!("Fallback search error with {}: {}", client.name(), e),
+            }
+        }
+
         LoadResult::Empty {}
     }
 
@@ -478,25 +522,25 @@ impl YouTubeSource {
 
         // Playlist handling
         if let Some(playlist_id) = self.extract_playlist_id(identifier) {
-            let mut clients = Vec::new();
-
-            // Try Android first as it's most reliable for playlists
-            if let Some(android) = self
-                .resolve_clients
-                .iter()
-                .chain(self.search_clients.iter())
-                .find(|c| c.name() == "Android")
-            {
-                clients.push(android);
+            // Prioritize resolve clients; prefer Android first for reliability.
+            let mut playlist_clients: Vec<&Arc<dyn YouTubeClient>> = Vec::new();
+            if let Some(android) = self.resolve_clients.iter().find(|c| c.name() == "Android") {
+                playlist_clients.push(android);
             }
-
             for c in self.prioritize_clients(&self.resolve_clients, is_music_url) {
-                if !clients.iter().any(|&x| x.name() == c.name()) {
-                    clients.push(c);
+                if !playlist_clients.iter().any(|x| x.name() == c.name()) {
+                    playlist_clients.push(c);
+                }
+            }
+            // Fallback: include remaining clients not yet in the list.
+            for c in self.fallback_clients(&playlist_clients, is_music_url) {
+                if !playlist_clients.iter().any(|x| x.name() == c.name()) {
+                    playlist_clients.push(c);
                 }
             }
 
-            for client in clients {
+            for client in &playlist_clients {
+                tracing::debug!("Fetching playlist '{}' with {}", playlist_id, client.name());
                 match client
                     .get_playlist(&playlist_id, context, self.oauth.clone())
                     .await
@@ -508,10 +552,10 @@ impl YouTubeSource {
                                 selected_track: -1,
                             },
                             plugin_info: json!({
-                              "type": "playlist",
-                              "url": format!("https://www.youtube.com/playlist?list={}", playlist_id),
-                              "artworkUrl": tracks.first().and_then(|t| t.info.artwork_url.clone()),
-                              "totalTracks": tracks.len()
+                                "type": "playlist",
+                                "url": format!("https://www.youtube.com/playlist?list={}", playlist_id),
+                                "artworkUrl": tracks.first().and_then(|t| t.info.artwork_url.clone()),
+                                "totalTracks": tracks.len()
                             }),
                             tracks,
                         });
@@ -521,26 +565,33 @@ impl YouTubeSource {
             }
         }
 
-        // Track info handling
+        // Track info: try resolve clients first.
         let id = self.extract_id(identifier);
-
         let resolve_clients = self.prioritize_clients(&self.resolve_clients, is_music_url);
+
         for client in &resolve_clients {
+            tracing::debug!("Resolving track '{}' with {}", id, client.name());
             match client
                 .get_track_info(&id, context, self.oauth.clone())
                 .await
             {
                 Ok(Some(track)) => return LoadResult::Track(track),
-                _ => continue,
+                Ok(None) => continue,
+                Err(e) => tracing::warn!("Resolve error with {}: {}", client.name(), e),
             }
         }
 
-        // Partial Fallback to Playback Clients for info
-        let playback_clients = self.prioritize_clients(&self.playback_clients, is_music_url);
-        for client in playback_clients {
-            if resolve_clients.iter().any(|&rc| rc.name() == client.name()) {
-                continue;
-            }
+        // All resolve clients failed — fall back to all remaining clients.
+        let fallback = self.fallback_clients(&resolve_clients, is_music_url);
+        if !fallback.is_empty() {
+            tracing::debug!(
+                "All resolve clients failed for '{}', trying {} fallback client(s)",
+                id,
+                fallback.len()
+            );
+        }
+        for client in fallback {
+            tracing::debug!("Fallback resolve '{}' with {}", id, client.name());
             if let Ok(Some(track)) = client
                 .get_track_info(&id, context, self.oauth.clone())
                 .await

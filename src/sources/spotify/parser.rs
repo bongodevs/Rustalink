@@ -25,9 +25,9 @@ impl SpotifyParser {
         };
 
         let uri = track.get("uri").and_then(|v| v.as_str())?;
-        let id = uri.split(':').last()?.to_string();
+        let id = uri.split(':').next_back()?.to_owned();
 
-        let title = track.get("name").and_then(|v| v.as_str())?.to_string();
+        let title = track.get("name").and_then(|v| v.as_str())?.to_owned();
 
         // Artist name resolution — handles multiple API response shapes
         let author = Self::extract_author(track);
@@ -52,7 +52,7 @@ impl SpotifyParser {
                 .and_then(|s| s.first())
                 .and_then(|i| i.get("url"))
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+                .map(|s| s.to_owned())
                 .or_else(|| {
                     track
                         .get("album")
@@ -61,7 +61,7 @@ impl SpotifyParser {
                         .and_then(|i| i.first())
                         .and_then(|i| i.get("url"))
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
+                        .map(|s| s.to_owned())
                 })
         });
 
@@ -73,10 +73,10 @@ impl SpotifyParser {
             length,
             identifier: id.clone(),
             is_stream: false,
-            uri: Some(format!("https://open.spotify.com/track/{}", id)),
+            uri: Some(format!("https://open.spotify.com/track/{id}")),
             artwork_url: final_artwork,
             isrc,
-            source_name: "spotify".to_string(),
+            source_name: "spotify".to_owned(),
             is_seekable: true,
             position: 0,
         })
@@ -158,7 +158,7 @@ impl SpotifyParser {
             .and_then(|a| a.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Artist")
-            .to_string()
+            .to_owned()
     }
 
     pub fn extract_isrc_inline(track: &Value) -> Option<String> {
@@ -172,7 +172,7 @@ impl SpotifyParser {
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
                 {
-                    return Some(isrc.to_string());
+                    return Some(isrc.to_owned());
                 }
                 // Items list (common in fetchTrack)
                 ids.get("items")
@@ -185,7 +185,7 @@ impl SpotifyParser {
                     .and_then(|i| i.get("id"))
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
+                    .map(|s| s.to_owned())
             })
     }
 }

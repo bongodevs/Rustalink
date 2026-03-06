@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionUpdate {
-    #[serde(default)]
     pub resuming: Option<bool>,
-    #[serde(default)]
     pub timeout: Option<u64>,
 }
 

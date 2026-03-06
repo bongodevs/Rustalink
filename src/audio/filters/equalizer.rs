@@ -9,83 +9,81 @@ struct Coefficients {
     gamma: f32,
 }
 
-// Hardcoded coefficients from LavaPlayer for 48kHz
-// Order: beta, alpha, gamma
 const COEFFICIENTS_48000: [Coefficients; BAND_COUNT] = [
     Coefficients {
-        beta: 9.9847546664e-01,
-        alpha: 7.6226668143e-04,
-        gamma: 1.9984647656e+00,
+        beta: 0.9984755,
+        alpha: 0.0007622667,
+        gamma: 1.9984648,
     },
     Coefficients {
-        beta: 9.9756184654e-01,
-        alpha: 1.2190767289e-03,
-        gamma: 1.9975344645e+00,
+        beta: 0.9975618,
+        alpha: 0.0012190767,
+        gamma: 1.9975345,
     },
     Coefficients {
-        beta: 9.9616261379e-01,
-        alpha: 1.9186931041e-03,
-        gamma: 1.9960947369e+00,
+        beta: 0.9961626,
+        alpha: 0.0019186931,
+        gamma: 1.9960947,
     },
     Coefficients {
-        beta: 9.9391578543e-01,
-        alpha: 3.0421072865e-03,
-        gamma: 1.9937449618e+00,
+        beta: 0.9939158,
+        alpha: 0.0030421073,
+        gamma: 1.993745,
     },
     Coefficients {
-        beta: 9.9028307215e-01,
-        alpha: 4.8584639242e-03,
-        gamma: 1.9898465702e+00,
+        beta: 0.9902831,
+        alpha: 0.004858464,
+        gamma: 1.9898466,
     },
     Coefficients {
-        beta: 9.8485897264e-01,
-        alpha: 7.5705136795e-03,
-        gamma: 1.9837962543e+00,
+        beta: 0.984859,
+        alpha: 0.0075705137,
+        gamma: 1.9837963,
     },
     Coefficients {
-        beta: 9.7588512657e-01,
-        alpha: 1.2057436715e-02,
-        gamma: 1.9731772447e+00,
+        beta: 0.9758851,
+        alpha: 0.012057437,
+        gamma: 1.9731772,
     },
     Coefficients {
-        beta: 9.6228521814e-01,
-        alpha: 1.8857390928e-02,
-        gamma: 1.9556164694e+00,
+        beta: 0.9622852,
+        alpha: 0.018857391,
+        gamma: 1.9556165,
     },
     Coefficients {
-        beta: 9.4080933132e-01,
-        alpha: 2.9595334338e-02,
-        gamma: 1.9242054384e+00,
+        beta: 0.9408093,
+        alpha: 0.029595335,
+        gamma: 1.9242054,
     },
     Coefficients {
-        beta: 9.0702059196e-01,
-        alpha: 4.6489704022e-02,
-        gamma: 1.8653476166e+00,
+        beta: 0.9070206,
+        alpha: 0.046489704,
+        gamma: 1.8653476,
     },
     Coefficients {
-        beta: 8.5868004289e-01,
-        alpha: 7.0659978553e-02,
-        gamma: 1.7600401337e+00,
+        beta: 0.85868,
+        alpha: 0.07065998,
+        gamma: 1.7600402,
     },
     Coefficients {
-        beta: 7.8409610788e-01,
-        alpha: 1.0795194606e-01,
-        gamma: 1.5450725522e+00,
+        beta: 0.7840961,
+        alpha: 0.10795194,
+        gamma: 1.5450726,
     },
     Coefficients {
-        beta: 6.8332861002e-01,
-        alpha: 1.5833569499e-01,
-        gamma: 1.1426447155e+00,
+        beta: 0.6833286,
+        alpha: 0.1583357,
+        gamma: 1.1426447,
     },
     Coefficients {
-        beta: 5.5267518228e-01,
-        alpha: 2.2366240886e-01,
-        gamma: 4.0186190803e-01,
+        beta: 0.5526752,
+        alpha: 0.2236624,
+        gamma: 0.4018619,
     },
     Coefficients {
-        beta: 4.1811888447e-01,
-        alpha: 2.9094055777e-01,
-        gamma: -7.0905944223e-01,
+        beta: 0.41811886,
+        alpha: 0.29094055,
+        gamma: -0.7090594,
     },
 ];
 
@@ -99,18 +97,13 @@ struct EqBandState {
 
 impl EqBandState {
     fn process(&mut self, sample: f32, coeffs: &Coefficients) -> f32 {
-        // LavaPlayer logic:
-        // result = alpha * (sample - history[x-2]) + gamma * history[y-1] - beta * history[y-2]
-        // history[x-2] corresponds to x2
         let result =
             coeffs.alpha * (sample - self.x2) + coeffs.gamma * self.y1 - coeffs.beta * self.y2;
 
-        // Update history
         self.x2 = self.x1;
         self.x1 = sample;
         self.y2 = self.y1;
 
-        // Check for NaN/Inf
         if !result.is_finite() {
             self.y1 = 0.0;
             return 0.0;
@@ -130,7 +123,6 @@ impl EqBandState {
 
 pub struct EqualizerFilter {
     gains: [f32; BAND_COUNT],
-    // Per-channel state (left, right) for each band
     states: [[EqBandState; 2]; BAND_COUNT],
     makeup_gain: f32,
 }
@@ -147,8 +139,6 @@ impl EqualizerFilter {
         let states: [[EqBandState; 2]; BAND_COUNT] =
             std::array::from_fn(|_| [EqBandState::default(), EqBandState::default()]);
 
-        // Calculate makeup gain
-        // LavaPlayer: 1.0 + (sum - 1.0) * 0.5
         let positive_sum: f32 = gains.iter().filter(|g| **g > 0.0).sum();
         let makeup_gain = if positive_sum > 1.0 {
             DEFAULT_MAKEUP_GAIN / (1.0 + (positive_sum - 1.0) * 0.5)
@@ -174,29 +164,24 @@ impl AudioFilter for EqualizerFilter {
             let left_f = samples[offset] as f32 / 32768.0;
             let right_f = samples[offset + 1] as f32 / 32768.0;
 
-            // Start with dry signal scaled down by 0.25
             let mut result_left = left_f * 0.25;
             let mut result_right = right_f * 0.25;
 
-            // Sum parallel band contributions
-            for b in 0..BAND_COUNT {
+            for (b, coeffs) in COEFFICIENTS_48000.iter().enumerate() {
                 let gain = self.gains[b];
-                // Optimization: skip bands with effectively zero gain
                 if gain.abs() < f32::EPSILON {
-                    // Update state even if gain is zero to avoid clicks on gain change
-                    self.states[b][0].process(left_f, &COEFFICIENTS_48000[b]);
-                    self.states[b][1].process(right_f, &COEFFICIENTS_48000[b]);
+                    self.states[b][0].process(left_f, coeffs);
+                    self.states[b][1].process(right_f, coeffs);
                     continue;
                 }
 
-                let band_left = self.states[b][0].process(left_f, &COEFFICIENTS_48000[b]);
-                let band_right = self.states[b][1].process(right_f, &COEFFICIENTS_48000[b]);
+                let band_left = self.states[b][0].process(left_f, coeffs);
+                let band_right = self.states[b][1].process(right_f, coeffs);
 
                 result_left += band_left * gain;
                 result_right += band_right * gain;
             }
 
-            // Apply makeup gain and soft-clip via tanh
             let out_left = (result_left * self.makeup_gain).tanh();
             let out_right = (result_right * self.makeup_gain).tanh();
 
@@ -206,7 +191,6 @@ impl AudioFilter for EqualizerFilter {
     }
 
     fn is_enabled(&self) -> bool {
-        // Enabled if any band has non-zero gain
         self.gains.iter().any(|g| g.abs() > f32::EPSILON)
     }
 

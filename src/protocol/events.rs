@@ -13,6 +13,7 @@ pub enum OutgoingMessage {
     },
     #[serde(rename = "playerUpdate")]
     PlayerUpdate {
+        #[serde(rename = "guildId")]
         guild_id: crate::common::types::GuildId,
         state: PlayerState,
     },
@@ -24,7 +25,7 @@ pub enum OutgoingMessage {
     #[serde(rename = "event")]
     Event {
         #[serde(flatten)]
-        event: RustalinkEvent,
+        event: Box<RustalinkEvent>,
     },
 }
 

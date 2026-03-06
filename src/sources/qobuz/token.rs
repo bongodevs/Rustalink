@@ -21,6 +21,33 @@ pub struct QobuzTokenTracker {
     config_app_secret: Option<String>,
 }
 
+fn bundle_regex() -> &'static Regex {
+    static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"<script src="(/resources/\d+\.\d+\.\d+-[a-z]\d{3}/bundle\.js)""#).unwrap()
+    })
+}
+
+fn app_id_regex() -> &'static Regex {
+    static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r#"production:\{api:\{appId:"(.*?)""#).unwrap())
+}
+
+fn seed_regex() -> &'static Regex {
+    static REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r#"\):[a-z]\.initialSeed\("(.*?)",window\.utimezone\.(.*?)\)"#).unwrap()
+    })
+}
+
+fn info_extras_regex(timezone: &str) -> Regex {
+    Regex::new(&format!(
+        r#"(?s)timezones:\[.*?name:.*?/{}",info:"(?P<info>.*?)",extras:"(?P<extras>.*?)""#,
+        regex::escape(timezone)
+    ))
+    .unwrap()
+}
+
 impl QobuzTokenTracker {
     pub fn new(
         client: Arc<reqwest::Client>,
@@ -42,9 +69,9 @@ impl QobuzTokenTracker {
             let tokens = self.tokens.read().await;
             if let Some(t) = &*tokens {
                 return Some(Arc::new(QobuzTokens {
-                    app_id: t.app_id.clone(),
-                    app_secret: t.app_secret.clone(),
-                    user_token: t.user_token.clone(),
+                    app_id: t.app_id.to_owned(),
+                    app_secret: t.app_secret.to_owned(),
+                    user_token: t.user_token.to_owned(),
                 }));
             }
         }
@@ -58,9 +85,9 @@ impl QobuzTokenTracker {
         // Double check after lock
         if let Some(t) = &*tokens_lock {
             return Some(Arc::new(QobuzTokens {
-                app_id: t.app_id.clone(),
-                app_secret: t.app_secret.clone(),
-                user_token: t.user_token.clone(),
+                app_id: t.app_id.to_owned(),
+                app_secret: t.app_secret.to_owned(),
+                user_token: t.user_token.to_owned(),
             }));
         }
 
@@ -68,8 +95,8 @@ impl QobuzTokenTracker {
         let app_secret;
 
         if let (Some(id), Some(secret)) = (&self.config_app_id, &self.config_app_secret) {
-            app_id = id.clone();
-            app_secret = secret.clone();
+            app_id = id.to_owned();
+            app_secret = secret.to_owned();
             debug!("Using configured Qobuz app_id and app_secret");
         } else {
             debug!("Fetching Qobuz bundle.js for credential extraction...");
@@ -77,10 +104,10 @@ impl QobuzTokenTracker {
                 Ok((id, secret)) => {
                     app_id = id;
                     app_secret = secret;
-                    info!("Successfully extracted Qobuz credentials: appId={}", app_id);
+                    info!("Successfully extracted Qobuz credentials: appId={app_id}");
                 }
                 Err(e) => {
-                    error!("Failed to extract Qobuz credentials: {}", e);
+                    error!("Failed to extract Qobuz credentials: {e}");
                     return None;
                 }
             }
@@ -89,13 +116,13 @@ impl QobuzTokenTracker {
         let new_tokens = QobuzTokens {
             app_id,
             app_secret,
-            user_token: self.config_user_token.clone(),
+            user_token: self.config_user_token.to_owned(),
         };
 
         let arc_tokens = Arc::new(QobuzTokens {
-            app_id: new_tokens.app_id.clone(),
-            app_secret: new_tokens.app_secret.clone(),
-            user_token: new_tokens.user_token.clone(),
+            app_id: new_tokens.app_id.to_owned(),
+            app_secret: new_tokens.app_secret.to_owned(),
+            user_token: new_tokens.user_token.to_owned(),
         });
 
         *tokens_lock = Some(new_tokens);
@@ -105,7 +132,7 @@ impl QobuzTokenTracker {
     async fn fetch_credentials_from_web(&self) -> Result<(String, String), String> {
         let login_page = self
             .client
-            .get(format!("{}/login", WEB_PLAYER_BASE_URL))
+            .get(format!("{WEB_PLAYER_BASE_URL}/login"))
             .send()
             .await
             .map_err(|e| e.to_string())?
@@ -113,18 +140,15 @@ impl QobuzTokenTracker {
             .await
             .map_err(|e| e.to_string())?;
 
-        let bundle_regex =
-            Regex::new(r#"<script src="(/resources/\d+\.\d+\.\d+-[a-z]\d{3}/bundle\.js)""#)
-                .unwrap();
-        let bundle_path = bundle_regex
+        let bundle_path = bundle_regex()
             .captures(&login_page)
             .and_then(|c| c.get(1))
             .map(|m| m.as_str())
-            .ok_or_else(|| "Failed to find bundle.js path in Qobuz login page".to_string())?;
+            .ok_or_else(|| "Failed to find bundle.js path in Qobuz login page".to_owned())?;
 
         let bundle_js = self
             .client
-            .get(format!("{}{}", WEB_PLAYER_BASE_URL, bundle_path))
+            .get(format!("{WEB_PLAYER_BASE_URL}{bundle_path}"))
             .send()
             .await
             .map_err(|e| e.to_string())?
@@ -132,18 +156,15 @@ impl QobuzTokenTracker {
             .await
             .map_err(|e| e.to_string())?;
 
-        let app_id_regex = Regex::new(r#"production:\{api:\{appId:"(.*?)""#).unwrap();
-        let app_id = app_id_regex
+        let app_id = app_id_regex()
             .captures(&bundle_js)
             .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string())
-            .ok_or_else(|| "Failed to extract appId from bundle.js".to_string())?;
+            .map(|m| m.as_str().to_owned())
+            .ok_or_else(|| "Failed to extract appId from bundle.js".to_owned())?;
 
-        let seed_regex =
-            Regex::new(r#"\):[a-z]\.initialSeed\("(.*?)",window\.utimezone\.(.*?)\)"#).unwrap();
-        let seed_captures = seed_regex
+        let seed_captures = seed_regex()
             .captures(&bundle_js)
-            .ok_or_else(|| "Failed to extract seed and timezone from bundle.js".to_string())?;
+            .ok_or_else(|| "Failed to extract seed and timezone from bundle.js".to_owned())?;
 
         let seed = seed_captures.get(1).unwrap().as_str();
         let timezone_raw = seed_captures.get(2).unwrap().as_str();
@@ -153,27 +174,24 @@ impl QobuzTokenTracker {
             &timezone_raw[1..].to_lowercase()
         );
 
-        let info_extras_regex = Regex::new(&format!(
-            r#"(?s)timezones:\[.*?name:.*?/{}",info:"(?P<info>.*?)",extras:"(?P<extras>.*?)""#,
-            regex::escape(&timezone)
-        ))
-        .unwrap();
-        let info_extras = info_extras_regex
+        let info_extras = info_extras_regex(&timezone)
             .captures(&bundle_js)
-            .ok_or_else(|| format!("Failed to extract info/extras for timezone {}", timezone))?;
+            .ok_or_else(|| format!("Failed to extract info/extras for timezone {timezone}"))?;
 
         let info = info_extras.name("info").unwrap().as_str();
         let extras = info_extras.name("extras").unwrap().as_str();
 
-        let encoded = format!("{}{}{}", seed, info, extras);
-        let encoded = &encoded[..encoded.len() - 44];
+        let mut encoded = format!("{seed}{info}{extras}");
+        if encoded.len() > 44 {
+            encoded.truncate(encoded.len() - 44);
+        }
 
         let decoded = general_purpose::STANDARD
             .decode(encoded)
-            .map_err(|e| format!("Failed to decode appSecret: {}", e))?;
+            .map_err(|e| format!("Failed to decode appSecret: {e}"))?;
 
         let app_secret =
-            String::from_utf8(decoded).map_err(|e| format!("Invalid UTF-8 in appSecret: {}", e))?;
+            String::from_utf8(decoded).map_err(|e| format!("Invalid UTF-8 in appSecret: {e}"))?;
 
         Ok((app_id, app_secret))
     }

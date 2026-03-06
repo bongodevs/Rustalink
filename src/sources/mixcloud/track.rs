@@ -18,7 +18,7 @@ pub struct MixcloudTrack {
 impl PlayableTrack for MixcloudTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::buffer::PooledBuffer>,
         Sender<DecoderCommand>,
@@ -62,7 +62,7 @@ impl PlayableTrack for MixcloudTrack {
                             Some(crate::common::types::AudioFormat::Aac),
                         ),
                         Err(e) => {
-                            tracing::error!("Mixcloud HlsReader failed to initialize: {}", e);
+                            tracing::error!("Mixcloud HlsReader failed to initialize: {e}");
                             (None, None)
                         }
                     }
@@ -77,7 +77,7 @@ impl PlayableTrack for MixcloudTrack {
                                 .or(Some(crate::common::types::AudioFormat::Mp4)),
                         ),
                         Err(e) => {
-                            tracing::error!("MixcloudReader failed to initialize: {}", e);
+                            tracing::error!("MixcloudReader failed to initialize: {e}");
                             (None, None)
                         }
                     }
@@ -86,27 +86,20 @@ impl PlayableTrack for MixcloudTrack {
                 };
 
                 if let Some(r) = reader {
-                    match AudioProcessor::new(
-                        r,
-                        kind,
-                        tx,
-                        cmd_rx,
-                        Some(err_tx.clone()),
-                        config.clone(),
-                    ) {
+                    match AudioProcessor::new(r, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
                         Ok(mut processor) => {
                             if let Err(e) = processor.run() {
-                                tracing::error!("Mixcloud audio processor error: {}", e);
+                                tracing::error!("Mixcloud audio processor error: {e}");
                             }
                         }
                         Err(e) => {
-                            tracing::error!("Mixcloud failed to initialize processor: {}", e);
-                            let _ = err_tx.send(format!("Failed to initialize processor: {}", e));
+                            tracing::error!("Mixcloud failed to initialize processor: {e}");
+                            let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
                         }
                     }
                 } else {
                     tracing::error!("Mixcloud: failed to create reader");
-                    let _ = err_tx.send("Mixcloud: failed to create reader".to_string());
+                    let _ = err_tx.send("Mixcloud: failed to create reader".to_owned());
                 }
             });
         });

@@ -1,7 +1,5 @@
 use audiopus::{Application, Channels, SampleRate, coder::Encoder as OpusEncoder};
 
-/// PCM i16 → Opus bytes encoder.
-/// Encodes 960-sample (20 ms) stereo frames at 48 kHz.
 pub struct OpusCodecEncoder {
     encoder: OpusEncoder,
 }
@@ -11,7 +9,6 @@ impl OpusCodecEncoder {
     pub fn new(quality: u8) -> Result<Self, audiopus::Error> {
         let mut encoder =
             OpusEncoder::new(SampleRate::Hz48000, Channels::Stereo, Application::Audio)?;
-        // quality is 0-10, audiopus set_complexity expects u8 in range 0-10.
         encoder.set_complexity(quality)?;
         Ok(Self { encoder })
     }

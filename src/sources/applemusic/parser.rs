@@ -11,17 +11,17 @@ impl AppleMusicSource {
     ) -> Option<Track> {
         let attributes = item.get("attributes")?;
 
-        let id = item.get("id")?.as_str()?.to_string();
+        let id = item.get("id")?.as_str()?.to_owned();
         let title = attributes
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Title")
-            .to_string();
+            .to_owned();
         let author = attributes
             .get("artistName")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Artist")
-            .to_string();
+            .to_owned();
         let length = attributes
             .get("durationInMillis")
             .and_then(|v| v.as_u64())
@@ -30,7 +30,7 @@ impl AppleMusicSource {
         let isrc = attributes
             .get("isrc")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
         let artwork_url = artwork_override.or_else(|| {
             attributes
@@ -45,7 +45,7 @@ impl AppleMusicSource {
             .get("url")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
         let mut track = Track::new(TrackInfo {
             title,
@@ -56,7 +56,7 @@ impl AppleMusicSource {
             uri: url,
             artwork_url,
             isrc,
-            source_name: "applemusic".to_string(),
+            source_name: "applemusic".to_owned(),
             is_seekable: true,
             position: 0,
         });
@@ -71,7 +71,8 @@ impl AppleMusicSource {
             .info
             .uri
             .as_ref()
-            .and_then(|u| u.split('?').next().map(|s| s.to_string()));
+            .and_then(|u| u.split('?').next().map(|s| s.to_owned()));
+
         track.plugin_info = json!({
             "albumName": album_name,
             "albumUrl": album_url,

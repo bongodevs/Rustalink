@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -14,12 +14,23 @@ use crate::{
 const API_URL: &str = "https://gaana.com/apiv2";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 
+const SEARCH_PREFIX_GN: &str = "gnsearch:";
+const SEARCH_PREFIX_GAANA: &str = "gaanasearch:";
+
+fn url_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+        r"(?:https?://)?(?:www\.)?gaana\.com/(?P<type>song|album|playlist|artist)/(?P<seokey>[\w-]+)",
+      )
+      .unwrap()
+    })
+}
+
 pub struct GaanaSource {
     client: Arc<reqwest::Client>,
-    url_regex: Regex,
-    search_prefixes: Vec<String>,
     stream_quality: String,
-    proxy: Option<crate::configs::HttpProxyConfig>,
+    proxy: Option<crate::config::HttpProxyConfig>,
     // Limits
     search_limit: usize,
     playlist_load_limit: usize,
@@ -29,7 +40,7 @@ pub struct GaanaSource {
 
 impl GaanaSource {
     pub fn new(
-        config: Option<crate::configs::GaanaConfig>,
+        config: Option<crate::config::GaanaConfig>,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         let (
@@ -41,7 +52,7 @@ impl GaanaSource {
             proxy,
         ) = if let Some(c) = config {
             (
-                c.stream_quality.unwrap_or_else(|| "high".to_string()),
+                c.stream_quality.unwrap_or_else(|| "high".to_owned()),
                 c.search_limit,
                 c.playlist_load_limit,
                 c.album_load_limit,
@@ -49,23 +60,18 @@ impl GaanaSource {
                 c.proxy,
             )
         } else {
-            ("high".to_string(), 10, 50, 50, 20, None)
+            ("high".to_owned(), 10, 50, 50, 20, None)
         };
 
         Ok(Self {
-      client,
-      url_regex: Regex::new(
-        r"(?:https?://)?(?:www\.)?gaana\.com/(?P<type>song|album|playlist|artist)/(?P<seokey>[\w-]+)",
-      )
-      .unwrap(),
-      search_prefixes: vec!["gnsearch:".to_string(), "gaanasearch:".to_string()],
-      stream_quality,
-      proxy,
-      search_limit,
-      playlist_load_limit,
-      album_load_limit,
-      artist_load_limit,
-    })
+            client,
+            stream_quality,
+            proxy,
+            search_limit,
+            playlist_load_limit,
+            album_load_limit,
+            artist_load_limit,
+        })
     }
 
     async fn get_json(&self, params: &[(&str, &str)], referer_path: &str) -> Option<Value> {
@@ -122,14 +128,16 @@ impl GaanaSource {
 
     async fn load_song(&self, seokey: &str) -> LoadResult {
         let params = [("type", "songDetail"), ("seokey", seokey)];
-        let data = match self.get_json(&params, &format!("song/{}", seokey)).await {
+        let data = match self.get_json(&params, &format!("song/{seokey}")).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
         };
+
         let tracks = match data.get("tracks").and_then(|v| v.as_array()) {
             Some(arr) if !arr.is_empty() => arr,
             _ => return LoadResult::Empty {},
         };
+
         match self.parse_track(&tracks[0]) {
             Some(track) => LoadResult::Track(track),
             None => LoadResult::Empty {},
@@ -138,69 +146,88 @@ impl GaanaSource {
 
     async fn load_album(&self, seokey: &str) -> LoadResult {
         let params = [("type", "albumDetail"), ("seokey", seokey)];
-        let data = match self.get_json(&params, &format!("album/{}", seokey)).await {
+        let data = match self.get_json(&params, &format!("album/{seokey}")).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
         };
+
         let tracks_arr = match data.get("tracks").and_then(|v| v.as_array()) {
             Some(arr) if !arr.is_empty() => arr,
             _ => return LoadResult::Empty {},
         };
+
         let album = data.get("album").unwrap_or(&Value::Null);
         let name = album
             .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Album");
+
         let tracks: Vec<Track> = tracks_arr
             .iter()
             .take(self.album_load_limit)
             .filter_map(|t| self.parse_track(t))
             .collect();
+
         if tracks.is_empty() {
             return LoadResult::Empty {};
         }
+
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: name.to_string(),
+                name: name.to_owned(),
                 selected_track: -1,
             },
-            plugin_info: serde_json::json!({ "type": "album", "url": format!("https://gaana.com/album/{}", seokey), "artworkUrl": album.get("atw").or_else(|| album.get("artwork_large")).and_then(|v| v.as_str()), "author": album.get("artist").and_then(|a| a.as_array()).and_then(|arr| arr.first()).and_then(|a| a.get("name")).and_then(|v| v.as_str()), "totalTracks": tracks.len() }),
+            plugin_info: serde_json::json!({
+                "type": "album",
+                "url": format!("https://gaana.com/album/{seokey}"),
+                "artworkUrl": album.get("atw").or_else(|| album.get("artwork_large")).and_then(|v| v.as_str()),
+                "author": album.get("artist").and_then(|a| a.as_array()).and_then(|arr| arr.first()).and_then(|a| a.get("name")).and_then(|v| v.as_str()),
+                "totalTracks": tracks.len()
+            }),
             tracks,
         })
     }
 
     async fn load_playlist(&self, seokey: &str) -> LoadResult {
         let params = [("type", "playlistDetail"), ("seokey", seokey)];
-        let data = match self
-            .get_json(&params, &format!("playlist/{}", seokey))
-            .await
-        {
+        let data = match self.get_json(&params, &format!("playlist/{seokey}")).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
         };
+
         let tracks_arr = match data.get("tracks").and_then(|v| v.as_array()) {
             Some(arr) if !arr.is_empty() => arr,
             _ => return LoadResult::Empty {},
         };
+
         let playlist = data.get("playlist").unwrap_or(&Value::Null);
         let name = playlist
             .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Playlist");
+
         let tracks: Vec<Track> = tracks_arr
             .iter()
             .take(self.playlist_load_limit)
             .filter_map(|t| self.parse_track(t))
             .collect();
+
         if tracks.is_empty() {
             return LoadResult::Empty {};
         }
+
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: name.to_string(),
+                name: name.to_owned(),
                 selected_track: -1,
             },
-            plugin_info: serde_json::json!({ "type": "playlist", "url": format!("https://gaana.com/playlist/{}", seokey), "artworkUrl": playlist.get("atw").or_else(|| playlist.get("artwork_large")).and_then(|v| v.as_str()), "author": playlist.get("created_by").and_then(|v| v.as_str()), "totalTracks": tracks.len() }),
+            plugin_info: serde_json::json!({
+                "type": "playlist",
+                "url": format!("https://gaana.com/playlist/{seokey}"),
+                "artworkUrl": playlist.get("atw").or_else(|| playlist.get("artwork_large")).and_then(|v| v.as_str()),
+                "author": playlist.get("created_by").and_then(|v| v.as_str()),
+                "totalTracks": tracks.len()
+            }),
             tracks,
         })
     }
@@ -208,29 +235,33 @@ impl GaanaSource {
     async fn load_artist(&self, seokey: &str) -> LoadResult {
         let detail_params = [("type", "artistDetail"), ("seokey", seokey)];
         let detail = match self
-            .get_json(&detail_params, &format!("artist/{}", seokey))
+            .get_json(&detail_params, &format!("artist/{seokey}"))
             .await
         {
             Some(d) => d,
             None => return LoadResult::Empty {},
         };
+
         let artist_arr = match detail.get("artist").and_then(|v| v.as_array()) {
             Some(arr) if !arr.is_empty() => arr,
             _ => return LoadResult::Empty {},
         };
+
         let artist_data = &artist_arr[0];
         let artist_id = match artist_data.get("artist_id").and_then(|v| {
             v.as_str()
-                .map(|s| s.to_string())
+                .map(|s| s.to_owned())
                 .or_else(|| v.as_i64().map(|i| i.to_string()))
         }) {
             Some(id) => id,
             None => return LoadResult::Empty {},
         };
+
         let artist_name = artist_data
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Artist");
+
         let tracks_params = [
             ("language", ""),
             ("order", "0"),
@@ -239,31 +270,42 @@ impl GaanaSource {
             ("type", "artistTrackList"),
             ("id", &artist_id),
         ];
+
         let tracks_data = match self
-            .get_json(&tracks_params, &format!("artist/{}", seokey))
+            .get_json(&tracks_params, &format!("artist/{seokey}"))
             .await
         {
             Some(d) => d,
             None => return LoadResult::Empty {},
         };
+
         let entities_arr = match tracks_data.get("entities").and_then(|v| v.as_array()) {
             Some(arr) if !arr.is_empty() => arr,
             _ => return LoadResult::Empty {},
         };
+
         let tracks: Vec<Track> = entities_arr
             .iter()
             .take(self.artist_load_limit)
             .filter_map(|t| self.parse_entity_track(t))
             .collect();
+
         if tracks.is_empty() {
             return LoadResult::Empty {};
         }
+
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: format!("{}'s Top Tracks", artist_name),
+                name: format!("{artist_name}'s Top Tracks"),
                 selected_track: -1,
             },
-            plugin_info: serde_json::json!({ "type": "artist", "url": format!("https://gaana.com/artist/{}", seokey), "artworkUrl": artist_data.get("atw").and_then(|v| v.as_str()), "author": artist_name, "totalTracks": tracks.len() }),
+            plugin_info: serde_json::json!({
+                "type": "artist",
+                "url": format!("https://gaana.com/artist/{seokey}"),
+                "artworkUrl": artist_data.get("atw").and_then(|v| v.as_str()),
+                "author": artist_name,
+                "totalTracks": tracks.len()
+            }),
             tracks,
         })
     }
@@ -276,6 +318,7 @@ impl GaanaSource {
             ("type", "search"),
             ("keyword", query),
         ];
+
         let data = match self
             .get_json(&params, &format!("search/{}", urlencoding::encode(query)))
             .await
@@ -283,20 +326,23 @@ impl GaanaSource {
             Some(d) => d,
             None => {
                 return LoadResult::Error(LoadError {
-                    message: Some("Gaana search failed".to_string()),
+                    message: Some("Gaana search failed".to_owned()),
                     severity: crate::common::Severity::Common,
                     cause: String::new(),
                     cause_stack_trace: None,
                 });
             }
         };
+
         let gr = match data.get("gr").and_then(|v| v.as_array()) {
             Some(arr) => arr,
             None => return LoadResult::Empty {},
         };
+
         let track_group = gr
             .iter()
             .find(|g| g.get("ty").and_then(|v| v.as_str()) == Some("Track"));
+
         let items = match track_group
             .and_then(|g| g.get("gd"))
             .and_then(|v| v.as_array())
@@ -304,18 +350,21 @@ impl GaanaSource {
             Some(arr) if !arr.is_empty() => arr,
             _ => return LoadResult::Empty {},
         };
+
         let mut results = Vec::new();
         for item in items.iter().take(self.search_limit) {
             let seokey = item
                 .get("seo")
                 .and_then(|v| v.as_str())
                 .or_else(|| item.get("id").and_then(|v| v.as_str()));
-            if let Some(key) = seokey {
-                if let LoadResult::Track(track) = self.load_song(key).await {
-                    results.push(track);
-                }
+
+            if let Some(key) = seokey
+                && let LoadResult::Track(track) = self.load_song(key).await
+            {
+                results.push(track);
             }
         }
+
         if results.is_empty() {
             LoadResult::Empty {}
         } else {
@@ -327,7 +376,7 @@ impl GaanaSource {
         let id = json
             .get("track_id")
             .and_then(|v| {
-                v.as_str().map(|s| s.to_string()).or_else(|| {
+                v.as_str().map(|s| s.to_owned()).or_else(|| {
                     v.as_i64()
                         .map(|i| i.to_string())
                         .or_else(|| v.as_u64().map(|i| i.to_string()))
@@ -336,14 +385,16 @@ impl GaanaSource {
             .or_else(|| {
                 json.get("entity_id").and_then(|v| {
                     v.as_str()
-                        .map(|s| s.to_string())
+                        .map(|s| s.to_owned())
                         .or_else(|| v.as_i64().map(|i| i.to_string()))
                 })
             })?;
+
         let title = json
             .get("track_title")
             .and_then(|v| v.as_str())
             .or_else(|| json.get("name").and_then(|v| v.as_str()))?;
+
         let duration = json
             .get("duration")
             .and_then(|v| {
@@ -352,21 +403,23 @@ impl GaanaSource {
             })
             .unwrap_or(0)
             * 1000;
+
         let author = if let Some(artist_arr) = json.get("artist").and_then(|v| v.as_array()) {
             let names: Vec<&str> = artist_arr
                 .iter()
                 .filter_map(|a| a.get("name").and_then(|v| v.as_str()))
                 .collect();
             if names.is_empty() {
-                "Unknown Artist".to_string()
+                "Unknown Artist".to_owned()
             } else {
                 names.join(", ")
             }
         } else {
-            "Unknown Artist".to_string()
+            "Unknown Artist".to_owned()
         };
+
         let seokey = json.get("seokey").and_then(|v| v.as_str());
-        let uri = seokey.map(|s| format!("https://gaana.com/song/{}", s));
+        let uri = seokey.map(|s| format!("https://gaana.com/song/{s}"));
         let artwork_url = json
             .get("artwork_large")
             .and_then(|v| v.as_str())
@@ -376,7 +429,8 @@ impl GaanaSource {
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
             })
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
+
         let track_info = TrackInfo {
             identifier: id,
             is_seekable: true,
@@ -384,23 +438,26 @@ impl GaanaSource {
             length: duration,
             is_stream: false,
             position: 0,
-            title: title.to_string(),
+            title: title.to_owned(),
             uri,
             artwork_url,
             isrc: None,
-            source_name: "gaana".to_string(),
+            source_name: "gaana".to_owned(),
         };
+
         Some(Track::new(track_info))
     }
 
     fn parse_entity_track(&self, json: &Value) -> Option<Track> {
         let id = json.get("entity_id").and_then(|v| {
             v.as_str()
-                .map(|s| s.to_string())
+                .map(|s| s.to_owned())
                 .or_else(|| v.as_i64().map(|i| i.to_string()))
         })?;
+
         let title = json.get("name").and_then(|v| v.as_str())?;
         let entity_info = json.get("entity_info").and_then(|v| v.as_array());
+
         let get_entity_value = |key: &str| -> Option<&Value> {
             entity_info?.iter().find_map(|e| {
                 if e.get("key").and_then(|k| k.as_str()) == Some(key) {
@@ -410,6 +467,7 @@ impl GaanaSource {
                 }
             })
         };
+
         let duration = get_entity_value("duration")
             .and_then(|v| {
                 v.as_u64()
@@ -417,6 +475,7 @@ impl GaanaSource {
             })
             .unwrap_or(0)
             * 1000;
+
         let author = get_entity_value("artist")
             .and_then(|v| v.as_array())
             .map(|arr| {
@@ -425,13 +484,15 @@ impl GaanaSource {
                     .collect::<Vec<_>>()
                     .join(", ")
             })
-            .unwrap_or_else(|| "Unknown Artist".to_string());
+            .unwrap_or_else(|| "Unknown Artist".to_owned());
+
         let seokey = json.get("seokey").and_then(|v| v.as_str());
-        let uri = seokey.map(|s| format!("https://gaana.com/song/{}", s));
+        let uri = seokey.map(|s| format!("https://gaana.com/song/{s}"));
         let artwork_url = json
             .get("atw")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
+
         let track_info = TrackInfo {
             identifier: id,
             is_seekable: true,
@@ -439,12 +500,13 @@ impl GaanaSource {
             length: duration,
             is_stream: false,
             position: 0,
-            title: title.to_string(),
+            title: title.to_owned(),
             uri,
             artwork_url,
             isrc: None,
-            source_name: "gaana".to_string(),
+            source_name: "gaana".to_owned(),
         };
+
         Some(Track::new(track_info))
     }
 }
@@ -454,36 +516,37 @@ impl SourcePlugin for GaanaSource {
     fn name(&self) -> &str {
         "gaana"
     }
+
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
-            .iter()
-            .any(|p| identifier.starts_with(p))
-            || self.url_regex.is_match(identifier)
+        identifier.starts_with(SEARCH_PREFIX_GN)
+            || identifier.starts_with(SEARCH_PREFIX_GAANA)
+            || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec![SEARCH_PREFIX_GN, SEARCH_PREFIX_GAANA]
     }
+
     async fn load(
         &self,
         identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+        if let Some(query) = identifier
+            .strip_prefix(SEARCH_PREFIX_GN)
+            .or_else(|| identifier.strip_prefix(SEARCH_PREFIX_GAANA))
         {
-            return self
-                .search(identifier.strip_prefix(prefix).unwrap().trim())
-                .await;
+            return self.search(query.trim()).await;
         }
-        if let Some(caps) = self.url_regex.captures(identifier) {
+
+        if let Some(caps) = url_regex().captures(identifier) {
             let type_ = caps.name("type").map(|m| m.as_str()).unwrap_or("");
             let seokey = caps.name("seokey").map(|m| m.as_str()).unwrap_or("");
+
             if seokey.is_empty() || type_.is_empty() {
                 return LoadResult::Empty {};
             }
+
             return match type_ {
                 "song" => self.load_song(seokey).await,
                 "album" => self.load_album(seokey).await,
@@ -492,6 +555,7 @@ impl SourcePlugin for GaanaSource {
                 _ => LoadResult::Empty {},
             };
         }
+
         LoadResult::Empty {}
     }
 
@@ -500,21 +564,22 @@ impl SourcePlugin for GaanaSource {
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<Box<dyn PlayableTrack>> {
-        let track_id = if let Some(caps) = self.url_regex.captures(identifier) {
+        let track_id = if let Some(caps) = url_regex().captures(identifier) {
             if caps.name("type").map(|m| m.as_str()) != Some("song") {
                 return None;
             }
             let seokey = caps.name("seokey").map(|m| m.as_str())?;
             let params = [("type", "songDetail"), ("seokey", seokey)];
-            let data = self.get_json(&params, &format!("song/{}", seokey)).await?;
+            let data = self.get_json(&params, &format!("song/{seokey}")).await?;
+
             data.get("tracks")?
                 .as_array()?
                 .first()?
                 .get("track_id")?
                 .as_str()?
-                .to_string()
+                .to_owned()
         } else {
-            identifier.to_string()
+            identifier.to_owned()
         };
 
         Some(Box::new(GaanaTrack {
@@ -526,7 +591,7 @@ impl SourcePlugin for GaanaSource {
         }))
     }
 
-    fn get_proxy_config(&self) -> Option<crate::configs::HttpProxyConfig> {
+    fn get_proxy_config(&self) -> Option<crate::config::HttpProxyConfig> {
         self.proxy.clone()
     }
 }

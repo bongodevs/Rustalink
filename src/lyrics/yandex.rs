@@ -4,13 +4,10 @@ use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
 
-use super::LyricsProvider;
+use super::{LyricsProvider, utils};
 use crate::{
-    configs::{HttpProxyConfig, lyrics::YandexLyricsConfig},
-    protocol::{
-        models::{LyricsData, LyricsLine},
-        tracks::TrackInfo,
-    },
+    config::{HttpProxyConfig, lyrics::YandexLyricsConfig},
+    protocol::{models::LyricsData, tracks::TrackInfo},
 };
 
 pub struct YandexProvider {
@@ -22,19 +19,19 @@ impl YandexProvider {
     pub fn new(config: &YandexLyricsConfig, proxy_config: Option<&HttpProxyConfig>) -> Self {
         let mut client_builder = reqwest::Client::builder();
 
-        if let Some(proxy_cfg) = proxy_config {
-            if let Some(url) = &proxy_cfg.url {
-                if let Ok(mut proxy_obj) = reqwest::Proxy::all(url) {
-                    if let Some(user) = &proxy_cfg.username {
-                        if let Some(pass) = &proxy_cfg.password {
-                            proxy_obj = proxy_obj.basic_auth(user, pass);
-                        }
-                    }
-                    client_builder = client_builder.proxy(proxy_obj);
-                    tracing::info!("Yandex Lyrics Provider: HTTP Proxy configured");
-                } else {
-                    tracing::warn!("Yandex Lyrics Provider: Invalid proxy URL: {}", url);
+        if let Some(proxy_cfg) = proxy_config
+            && let Some(url) = &proxy_cfg.url
+        {
+            if let Ok(mut proxy_obj) = reqwest::Proxy::all(url) {
+                if let Some(user) = &proxy_cfg.username
+                    && let Some(pass) = &proxy_cfg.password
+                {
+                    proxy_obj = proxy_obj.basic_auth(user, pass);
                 }
+                client_builder = client_builder.proxy(proxy_obj);
+                tracing::info!("Yandex Lyrics Provider: HTTP Proxy configured");
+            } else {
+                tracing::warn!("Yandex Lyrics Provider: Invalid proxy URL: {}", url);
             }
         }
 
@@ -59,47 +56,6 @@ impl YandexProvider {
         let sign = general_purpose::STANDARD.encode(result.into_bytes());
         (urlencoding::encode(&sign).to_string(), ts)
     }
-
-    fn parse_lrc(&self, lrc: &str) -> Vec<LyricsLine> {
-        let mut lines = Vec::new();
-        let re = regex::Regex::new(r#"\[(\d{2}):(\d{2})\.(\d{2})\]\s*(.*?)(?=\n|\[|$)"#).unwrap();
-
-        for cap in re.captures_iter(lrc) {
-            let mins: u64 = cap[1].parse().unwrap_or(0);
-            let secs: u64 = cap[2].parse().unwrap_or(0);
-            let cs: u64 = cap[3].parse().unwrap_or(0);
-            let time = (mins * 60 + secs) * 1000 + cs * 10;
-            let text = cap[4].trim().to_string();
-            if text.is_empty() {
-                continue;
-            }
-            lines.push(LyricsLine {
-                text,
-                timestamp: time,
-                duration: 0,
-            });
-        }
-        lines
-    }
-
-    fn clean(&self, text: &str) -> String {
-        let patterns = [
-            r#"(?i)\s*\([^)]*(?:official|lyrics?|video|audio|mv|visualizer|color\s*coded|hd|4k|prod\.)[^)]*\)"#,
-            r#"(?i)\s*\[[^\]]*(?:official|lyrics?|video|audio|mv|visualizer|color\s*coded|hd|4k|prod\.)[^\]]*\]"#,
-            r#"(?i)\s*[([]\s*(?:ft\.?|feat\.?|featuring)\s+[^)\]]+[)\]]"#,
-            r#"(?i)\s*-\s*Topic$"#,
-            r#"(?i)VEVO$"#,
-            r#"(?i)\s*[(\[]\s*Remastered\s*[\)\]]"#,
-        ];
-
-        let mut result = text.to_string();
-        for pattern in patterns {
-            if let Ok(re) = regex::Regex::new(pattern) {
-                result = re.replace_all(&result, "").to_string();
-            }
-        }
-        result.trim().to_string()
-    }
 }
 
 #[async_trait]
@@ -110,8 +66,8 @@ impl LyricsProvider for YandexProvider {
 
     async fn load_lyrics(&self, track: &TrackInfo) -> Option<LyricsData> {
         let token = self.access_token.as_ref()?;
-        let title = self.clean(&track.title);
-        let author = self.clean(&track.author);
+        let title = utils::clean_text(&track.title);
+        let author = utils::clean_text(&track.author);
 
         let track_id = if track.source_name == "yandexmusic" {
             track.identifier.clone()
@@ -134,7 +90,7 @@ impl LyricsProvider for YandexProvider {
             let search_body: Value = search_resp.json().await.ok()?;
             search_body["result"]["tracks"]["results"]
                 .as_array()?
-                .get(0)?
+                .first()?
                 .get("id")?
                 .as_i64()?
                 .to_string()
@@ -167,7 +123,7 @@ impl LyricsProvider for YandexProvider {
             .ok()?;
 
         let lrc_text = lrc_resp.text().await.ok()?;
-        let lines = self.parse_lrc(&lrc_text);
+        let lines = utils::parse_lrc(&lrc_text);
 
         if lines.is_empty() {
             return None;

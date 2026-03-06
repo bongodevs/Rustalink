@@ -5,7 +5,7 @@ use regex::Regex;
 use tracing::debug;
 
 use crate::{
-    configs::sources::GoogleTtsConfig,
+    config::sources::GoogleTtsConfig,
     protocol::tracks::{LoadResult, Track, TrackInfo},
     sources::{
         http::HttpTrack,

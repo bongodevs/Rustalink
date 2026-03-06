@@ -2,13 +2,14 @@ use std::{fs, path::Path, sync::OnceLock};
 
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
+use crate::common::utils::strip_ansi_escapes;
+use crate::config::LoggingConfig;
+
 pub mod formatter;
 pub mod writer;
 
-pub use formatter::*;
-pub use writer::*;
-
-use crate::configs::Config;
+pub use formatter::CustomFormatter;
+pub use writer::CircularFileWriter;
 
 pub(crate) static GLOBAL_FILE_WRITER: OnceLock<CircularFileWriter> = OnceLock::new();
 
@@ -34,6 +35,7 @@ macro_rules! log_println {
     }};
 }
 
+/// Appends a raw message to the global log file, stripping ANSI escapes.
 pub fn append_to_file_raw(msg: &str) {
     if let Some(mut writer) = GLOBAL_FILE_WRITER.get().cloned() {
         use std::io::Write;
@@ -42,23 +44,12 @@ pub fn append_to_file_raw(msg: &str) {
     }
 }
 
-pub fn init(config: &Config) {
-    let log_level = config
-        .logging
-        .as_ref()
-        .and_then(|l| l.level.as_deref())
-        .unwrap_or("info");
-
-    let filters = config
-        .logging
-        .as_ref()
-        .and_then(|l| l.filters.as_deref())
-        .unwrap_or("");
-
-    let filter_str = if filters.is_empty() {
-        log_level.to_string()
-    } else {
-        format!("{},{}", log_level, filters)
+/// Initializes the global logger with the provided configuration.
+pub fn init(config: &LoggingConfig) {
+    let log_level = config.level.as_deref().unwrap_or("info");
+    let filter_str = match config.filters.as_deref() {
+        Some(f) if !f.is_empty() => format!("{log_level},{f}"),
+        _ => log_level.to_string(),
     };
 
     let env_filter =
@@ -68,28 +59,19 @@ pub fn init(config: &Config) {
         .event_format(CustomFormatter::new(true))
         .with_ansi(true);
 
-    let file_layer = if let Some(logging) = &config.logging {
-        if let Some(file_config) = &logging.file {
-            if let Some(parent) = Path::new(&file_config.path).parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    eprintln!("Failed to create log directory: {}", e);
-                }
-            }
-
-            let writer = CircularFileWriter::new(file_config.path.clone(), file_config.max_lines);
-            let _ = GLOBAL_FILE_WRITER.set(writer.clone());
-            Some(
-                fmt::layer()
-                    .with_writer(writer)
-                    .event_format(CustomFormatter::new(false))
-                    .with_ansi(false),
-            )
-        } else {
-            None
+    let file_layer = config.file.as_ref().map(|file_config| {
+        if let Some(parent) = Path::new(&file_config.path).parent() {
+            let _ = fs::create_dir_all(parent);
         }
-    } else {
-        None
-    };
+
+        let writer = CircularFileWriter::new(file_config.path.clone(), file_config.max_lines);
+        let _ = GLOBAL_FILE_WRITER.set(writer.clone());
+
+        fmt::layer()
+            .with_writer(writer)
+            .event_format(CustomFormatter::new(false))
+            .with_ansi(false)
+    });
 
     tracing_subscriber::registry()
         .with(env_filter)

@@ -48,16 +48,18 @@ impl WebRemixClient {
         _oauth: &Arc<YouTubeOAuth>,
     ) -> AnyResult<Value> {
         crate::sources::youtube::clients::common::make_player_request(
-            &self.http,
-            &self.config(),
-            video_id,
-            None,
-            visitor_data,
-            signature_timestamp,
-            None,
-            None,
-            Some(MUSIC_API),
-            None,
+            crate::sources::youtube::clients::common::PlayerRequestOptions {
+                http: &self.http,
+                config: &self.config(),
+                video_id,
+                params: None,
+                visitor_data,
+                signature_timestamp,
+                auth_header: None,
+                referer: None,
+                origin: Some(MUSIC_API),
+                po_token: None,
+            },
         )
         .await
     }
@@ -82,14 +84,14 @@ impl YouTubeClient for WebRemixClient {
         &self,
         query: &str,
         context: &Value,
-        oauth: Arc<YouTubeOAuth>,
+        _oauth: Arc<YouTubeOAuth>,
     ) -> AnyResult<Vec<Track>> {
         let visitor_data = context
             .get("client")
             .and_then(|c| c.get("visitorData"))
             .and_then(|v| v.as_str())
             .or_else(|| context.get("visitorData").and_then(|v| v.as_str()));
-
+       
         let body = json!({
             "context": self.config().build_context(visitor_data),
             "query": query,
@@ -111,8 +113,6 @@ impl YouTubeClient for WebRemixClient {
 
         let req = req.json(&body);
 
-        let _ = oauth;
-
         let res = req.send().await?;
         if !res.status().is_success() {
             return Err(format!("Music search failed: {}", res.status()).into());
@@ -133,14 +133,14 @@ impl YouTubeClient for WebRemixClient {
         let mut shelf_contents = None;
 
         fn find_shelf(content: &Value) -> Option<&Vec<Value>> {
-            if let Some(section_list) = content.get("sectionListRenderer") {
-                if let Some(sections) = section_list.get("contents").and_then(|c| c.as_array()) {
-                    for section in sections {
-                        if let Some(shelf) = section.get("musicShelfRenderer") {
-                            if let Some(items) = shelf.get("contents").and_then(|c| c.as_array()) {
-                                return Some(items);
-                            }
-                        }
+            if let Some(section_list) = content.get("sectionListRenderer")
+                && let Some(sections) = section_list.get("contents").and_then(|c| c.as_array())
+            {
+                for section in sections {
+                    if let Some(shelf) = section.get("musicShelfRenderer")
+                        && let Some(items) = shelf.get("contents").and_then(|c| c.as_array())
+                    {
+                        return Some(items);
                     }
                 }
             }
@@ -150,12 +150,11 @@ impl YouTubeClient for WebRemixClient {
         if let Some(tab) = tab_content {
             shelf_contents = find_shelf(tab);
 
-            if shelf_contents.is_none() {
-                if let Some(split_view) = tab.get("musicSplitViewRenderer") {
-                    if let Some(main_content) = split_view.get("mainContent") {
-                        shelf_contents = find_shelf(main_content);
-                    }
-                }
+            if shelf_contents.is_none()
+                && let Some(split_view) = tab.get("musicSplitViewRenderer")
+                && let Some(main_content) = split_view.get("mainContent")
+            {
+                shelf_contents = find_shelf(main_content);
             }
         }
 
@@ -202,17 +201,16 @@ impl YouTubeClient for WebRemixClient {
                             renderer.get("flexColumns").and_then(|c| c.as_array())
                         {
                             // Column 1 is usually Artist
-                            if flex_cols.len() > 1 {
-                                if let Some(a) = flex_cols[1]
+                            if flex_cols.len() > 1
+                                && let Some(a) = flex_cols[1]
                                     .get("musicResponsiveListItemFlexColumnRenderer")
                                     .and_then(|r| r.get("text"))
                                     .and_then(|t| t.get("runs"))
                                     .and_then(|r| r.get(0))
                                     .and_then(|r| r.get("text"))
                                     .and_then(|t| t.as_str())
-                                {
-                                    author = a.to_string();
-                                }
+                            {
+                                author = a.to_string();
                             }
 
                             // Scan all columns for duration string
@@ -225,11 +223,10 @@ impl YouTubeClient for WebRemixClient {
                                 {
                                     for run in runs {
                                         if let Some(text) = run.get("text").and_then(|t| t.as_str())
+                                            && is_duration(text)
                                         {
-                                            if is_duration(text) {
-                                                length_ms = parse_duration(text);
-                                                break;
-                                            }
+                                            length_ms = parse_duration(text);
+                                            break;
                                         }
                                     }
                                 }
@@ -240,20 +237,15 @@ impl YouTubeClient for WebRemixClient {
                         }
 
                         // Fallback author if still default
-                        if author == "Unknown Artist" {
-                            if let Some(subtitle_runs) = renderer
+                        if author == "Unknown Artist"
+                            && let Some(subtitle_runs) = renderer
                                 .get("subtitle")
                                 .and_then(|s| s.get("runs"))
                                 .and_then(|r| r.as_array())
-                            {
-                                if !subtitle_runs.is_empty() {
-                                    if let Some(a) =
-                                        subtitle_runs[0].get("text").and_then(|t| t.as_str())
-                                    {
-                                        author = a.to_string();
-                                    }
-                                }
-                            }
+                            && !subtitle_runs.is_empty()
+                            && let Some(a) = subtitle_runs[0].get("text").and_then(|t| t.as_str())
+                        {
+                            author = a.to_string();
                         }
 
                         // Artwork URL extraction

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose};
@@ -16,35 +16,42 @@ pub mod track;
 const DECRYPTION_KEY: &[u8] = b"IFYOUWANTTHEARTISTSTOGETPAIDDONOTDOWNLOADFROMMIXCLOUD";
 const GRAPHQL_URL: &str = "https://app.mixcloud.com/graphql";
 
+fn track_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)^https?://(?:(?:www|beta|m)\.)?mixcloud\.com/(?P<user>[^/]+)/(?P<slug>[^/]+)/?$",
+        )
+        .unwrap()
+    })
+}
+
+fn playlist_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)^https?://(?:(?:www|beta|m)\.)?mixcloud\.com/(?P<user>[^/]+)/playlists/(?P<playlist>[^/]+)/?$").unwrap()
+    })
+}
+
+fn user_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)^https?://(?:(?:www|beta|m)\.)?mixcloud\.com/(?P<id>[^/]+)(?:/(?P<type>uploads|favorites|listens|stream))?/?$").unwrap()
+    })
+}
+
 pub struct MixcloudSource {
     client: Arc<reqwest::Client>,
-    track_url_re: Regex,
-    playlist_url_re: Regex,
-    user_url_re: Regex,
-    search_prefixes: Vec<String>,
     search_limit: usize,
 }
 
 impl MixcloudSource {
     pub fn new(
-        config: Option<crate::configs::MixcloudConfig>,
+        config: Option<crate::config::MixcloudConfig>,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         Ok(Self {
             client,
-            track_url_re: Regex::new(
-                r"(?i)^https?://(?:(?:www|beta|m)\.)?mixcloud\.com/(?P<user>[^/]+)/(?P<slug>[^/]+)/?$",
-            )
-            .unwrap(),
-            playlist_url_re: Regex::new(
-                r"(?i)^https?://(?:(?:www|beta|m)\.)?mixcloud\.com/(?P<user>[^/]+)/playlists/(?P<playlist>[^/]+)/?$",
-            )
-            .unwrap(),
-            user_url_re: Regex::new(
-                r"(?i)^https?://(?:(?:www|beta|m)\.)?mixcloud\.com/(?P<id>[^/]+)(?:/(?P<type>uploads|favorites|listens|stream))?/?$",
-            )
-            .unwrap(),
-            search_prefixes: vec!["mcsearch:".to_string()],
             search_limit: config.map(|c| c.search_limit).unwrap_or(10),
         })
     }
@@ -66,7 +73,7 @@ pub fn decrypt(ciphertext_b64: &str) -> String {
 
 impl MixcloudSource {
     async fn graphql_request(&self, query: &str) -> Option<Value> {
-        let url = format!("{}?query={}", GRAPHQL_URL, urlencoding::encode(query));
+        let url = format!("{GRAPHQL_URL}?query={}", urlencoding::encode(query));
         let resp = self.client.get(url).send().await.ok()?;
         if !resp.status().is_success() {
             return None;
@@ -87,16 +94,18 @@ impl MixcloudSource {
             return None;
         }
 
-        let id = format!("{}_{}", path_parts[0], path_parts[1]);
-        let title = data["name"].as_str()?.to_string();
+        let user_id = path_parts[0];
+        let slug = path_parts[1];
+        let id = format!("{user_id}_{slug}");
+        let title = data["name"].as_str()?.to_owned();
         let author = data["owner"]["displayName"]
             .as_str()
-            .or_else(|| Some(path_parts[0]))?
-            .to_string();
-        let duration_ms = (data["audioLength"].as_u64().unwrap_or(0)) * 1000;
-        let artwork_url = data["picture"]["url"].as_str().map(|s| s.to_string());
+            .unwrap_or(user_id)
+            .to_owned();
+        let duration_ms = data["audioLength"].as_u64().unwrap_or(0) * 1000;
+        let artwork_url = data["picture"]["url"].as_str().map(|s| s.to_owned());
 
-        let track = Track::new(TrackInfo {
+        Some(Track::new(TrackInfo {
             identifier: id,
             is_seekable: true,
             author,
@@ -104,29 +113,26 @@ impl MixcloudSource {
             is_stream: false,
             position: 0,
             title,
-            uri: Some(url_raw.to_string()),
+            uri: Some(url_raw.to_owned()),
             artwork_url,
             isrc: None,
-            source_name: "mixcloud".to_string(),
-        });
-
-        Some(track)
+            source_name: "mixcloud".to_owned(),
+        }))
     }
 
     async fn resolve_track(&self, username: &str, slug: &str) -> LoadResult {
         let query = format!(
             "{{
-        cloudcastLookup(lookup: {{username: \"{}\", slug: \"{}\"}}) {{
-          audioLength
-          name
-          url
-          owner {{ displayName username }}
-          picture(width: 1024, height: 1024) {{ url }}
-          streamInfo {{ hlsUrl url }}
-          restrictedReason
-        }}
-      }}",
-            username, slug
+                cloudcastLookup(lookup: {{username: \"{username}\", slug: \"{slug}\"}}) {{
+                  audioLength
+                  name
+                  url
+                  owner {{ displayName username }}
+                  picture(width: 1024, height: 1024) {{ url }}
+                  streamInfo {{ hlsUrl url }}
+                  restrictedReason
+                }}
+            }}"
         );
 
         match self.graphql_request(&query).await {
@@ -134,9 +140,9 @@ impl MixcloudSource {
                 if let Some(data) = body["data"]["cloudcastLookup"].as_object() {
                     if let Some(reason) = data.get("restrictedReason").and_then(|v| v.as_str()) {
                         return LoadResult::Error(crate::protocol::tracks::LoadError {
-                            message: Some(format!("Track restricted: {}", reason)),
+                            message: Some(format!("Track restricted: {reason}")),
                             severity: crate::common::Severity::Common,
-                            cause: reason.to_string(),
+                            cause: reason.to_owned(),
                             cause_stack_trace: None,
                         });
                     }
@@ -153,38 +159,36 @@ impl MixcloudSource {
 
     async fn resolve_playlist(&self, user: &str, slug: &str) -> LoadResult {
         let query_template = |cursor: Option<&str>| {
+            let cursor_arg = cursor
+                .map(|c| format!(", after: \"{c}\""))
+                .unwrap_or_default();
             format!(
                 "{{
-        playlistLookup(lookup: {{username: \"{}\", slug: \"{}\"}}) {{
-          name
-          items(first: 100{}) {{
-            edges {{
-              node {{
-                cloudcast {{
-                  audioLength
-                  name
-                  url
-                  owner {{ displayName username }}
-                  picture(width: 1024, height: 1024) {{ url }}
-                  streamInfo {{ hlsUrl url }}
-                }}
-              }}
-            }}
-            pageInfo {{ endCursor hasNextPage }}
-          }}
-        }}
-      }}",
-                user,
-                slug,
-                cursor
-                    .map(|c| format!(", after: \"{}\"", c))
-                    .unwrap_or_default()
+                    playlistLookup(lookup: {{username: \"{user}\", slug: \"{slug}\"}}) {{
+                      name
+                      items(first: 100{cursor_arg}) {{
+                        edges {{
+                          node {{
+                            cloudcast {{
+                              audioLength
+                              name
+                              url
+                              owner {{ displayName username }}
+                              picture(width: 1024, height: 1024) {{ url }}
+                              streamInfo {{ hlsUrl url }}
+                            }}
+                          }}
+                        }}
+                        pageInfo {{ endCursor hasNextPage }}
+                      }}
+                    }}
+                }}"
             )
         };
 
         let mut tracks = Vec::new();
         let mut cursor: Option<String> = None;
-        let mut playlist_name = "Mixcloud Playlist".to_string();
+        let mut playlist_name = "Mixcloud Playlist".to_owned();
 
         loop {
             let query = query_template(cursor.as_deref());
@@ -199,7 +203,7 @@ impl MixcloudSource {
             }
 
             if let Some(name) = lookup["name"].as_str() {
-                playlist_name = name.to_string();
+                playlist_name = name.to_owned();
             }
 
             if let Some(edges) = lookup["items"]["edges"].as_array() {
@@ -213,7 +217,7 @@ impl MixcloudSource {
             if lookup["items"]["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
                 cursor = lookup["items"]["pageInfo"]["endCursor"]
                     .as_str()
-                    .map(|s| s.to_string());
+                    .map(|s| s.to_owned());
                 if cursor.is_none() || tracks.len() >= 1000 {
                     break;
                 }
@@ -237,44 +241,41 @@ impl MixcloudSource {
     }
 
     async fn resolve_user(&self, username: &str, list_type: &str) -> LoadResult {
-        let query_type = if list_type == "stream" {
-            "stream"
-        } else {
-            list_type
-        };
-        let node_query = if list_type == "stream" {
-            "... on Cloudcast { audioLength name url owner { displayName username } picture(width: 1024, height: 1024) { url } streamInfo { hlsUrl url } }"
-        } else {
-            "audioLength name url owner { displayName username } picture(width: 1024, height: 1024) { url } streamInfo { hlsUrl url }"
+        let (query_type, node_query) = match list_type {
+            "stream" => (
+                "stream",
+                "... on Cloudcast { audioLength name url owner { displayName username } picture(width: 1024, height: 1024) { url } streamInfo { hlsUrl url } }",
+            ),
+            _ => (
+                list_type,
+                "audioLength name url owner { displayName username } picture(width: 1024, height: 1024) { url } streamInfo { hlsUrl url }",
+            ),
         };
 
         let query_template = |cursor: Option<&str>| {
+            let cursor_arg = cursor
+                .map(|c| format!(", after: \"{c}\""))
+                .unwrap_or_default();
             format!(
                 "{{
-        userLookup(lookup: {{username: \"{}\"}}) {{
-          displayName
-          {}(first: 100{}) {{
-            edges {{
-              node {{
-                {}
-              }}
-            }}
-            pageInfo {{ endCursor hasNextPage }}
-          }}
-        }}
-      }}",
-                username,
-                query_type,
-                cursor
-                    .map(|c| format!(", after: \"{}\"", c))
-                    .unwrap_or_default(),
-                node_query
+                    userLookup(lookup: {{username: \"{username}\"}}) {{
+                      displayName
+                      {query_type}(first: 100{cursor_arg}) {{
+                        edges {{
+                          node {{
+                            {node_query}
+                          }}
+                        }}
+                        pageInfo {{ endCursor hasNextPage }}
+                      }}
+                    }}
+                }}"
             )
         };
 
         let mut tracks = Vec::new();
         let mut cursor: Option<String> = None;
-        let mut display_name = username.to_string();
+        let mut display_name = username.to_owned();
 
         loop {
             let query = query_template(cursor.as_deref());
@@ -291,7 +292,7 @@ impl MixcloudSource {
             display_name = lookup["displayName"]
                 .as_str()
                 .unwrap_or(username)
-                .to_string();
+                .to_owned();
 
             if let Some(edges) = lookup[query_type]["edges"].as_array() {
                 for edge in edges {
@@ -304,7 +305,7 @@ impl MixcloudSource {
             if lookup[query_type]["pageInfo"]["hasNextPage"].as_bool() == Some(true) {
                 cursor = lookup[query_type]["pageInfo"]["endCursor"]
                     .as_str()
-                    .map(|s| s.to_string());
+                    .map(|s| s.to_owned());
                 if cursor.is_none() || tracks.len() >= 1000 {
                     break;
                 }
@@ -319,7 +320,7 @@ impl MixcloudSource {
 
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: format!("{} ({})", display_name, list_type),
+                name: format!("{display_name} ({list_type})"),
                 selected_track: -1,
             },
             plugin_info: json!({}),
@@ -358,27 +359,25 @@ impl MixcloudSource {
                     }
 
                     let id = format!("{}_{}", path_parts[0], path_parts[1]);
-                    let track_info = TrackInfo {
+                    tracks.push(Track::new(TrackInfo {
                         identifier: id,
                         is_seekable: true,
                         author: item["user"]["name"]
                             .as_str()
-                            .or(Some(path_parts[0]))
-                            .unwrap()
-                            .to_string(),
+                            .unwrap_or(path_parts[0])
+                            .to_owned(),
                         length: item["audio_length"].as_u64().unwrap_or(0) * 1000,
                         is_stream: false,
                         position: 0,
-                        title: item["name"].as_str().unwrap_or("Unknown").to_string(),
-                        uri: Some(url_raw.to_string()),
+                        title: item["name"].as_str().unwrap_or("Unknown").to_owned(),
+                        uri: Some(url_raw.to_owned()),
                         artwork_url: item["pictures"]["large"]
                             .as_str()
-                            .or(item["pictures"]["medium"].as_str())
-                            .map(|s| s.to_string()),
+                            .or_else(|| item["pictures"]["medium"].as_str())
+                            .map(|s| s.to_owned()),
                         isrc: None,
-                        source_name: "mixcloud".to_string(),
-                    };
-                    tracks.push(Track::new(track_info));
+                        source_name: "mixcloud".to_owned(),
+                    }));
                 }
 
                 if tracks.len() >= self.search_limit {
@@ -412,26 +411,25 @@ pub async fn fetch_track_stream_info(
 
     let query = format!(
         "{{
-        cloudcastLookup(lookup: {{username: \"{}\", slug: \"{}\"}}) {{
-          streamInfo {{ hlsUrl url }}
-        }}
-      }}",
+            cloudcastLookup(lookup: {{username: \"{}\", slug: \"{}\"}}) {{
+              streamInfo {{ hlsUrl url }}
+            }}
+        }}",
         path_parts[0], path_parts[1]
     );
 
     let body = graphql_request_internal(client, &query).await?;
     let data = body["data"]["cloudcastLookup"].as_object()?;
 
-    let hls = data
-        .get("streamInfo")?
-        .get("hlsUrl")?
-        .as_str()
-        .map(|s| s.to_string());
-    let stream = data
-        .get("streamInfo")?
-        .get("url")?
-        .as_str()
-        .map(|s| s.to_string());
+    let info = data.get("streamInfo")?;
+    let hls = info
+        .get("hlsUrl")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_owned());
+    let stream = info
+        .get("url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_owned());
 
     Some((hls, stream))
 }
@@ -443,16 +441,14 @@ impl SourcePlugin for MixcloudSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
-            .iter()
-            .any(|p| identifier.starts_with(p))
-            || self.track_url_re.is_match(identifier)
-            || self.playlist_url_re.is_match(identifier)
-            || self.user_url_re.is_match(identifier)
+        identifier.starts_with("mcsearch:")
+            || track_url_re().is_match(identifier)
+            || playlist_url_re().is_match(identifier)
+            || user_url_re().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["mcsearch:"]
     }
 
     async fn load(
@@ -460,19 +456,17 @@ impl SourcePlugin for MixcloudSource {
         identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        for prefix in &self.search_prefixes {
-            if identifier.starts_with(prefix) {
-                return self.search(&identifier[prefix.len()..]).await;
-            }
+        if let Some(query) = identifier.strip_prefix("mcsearch:") {
+            return self.search(query).await;
         }
 
-        if let Some(caps) = self.playlist_url_re.captures(identifier) {
+        if let Some(caps) = playlist_url_re().captures(identifier) {
             return self
                 .resolve_playlist(&caps["user"], &caps["playlist"])
                 .await;
         }
 
-        if let Some(caps) = self.user_url_re.captures(identifier) {
+        if let Some(caps) = user_url_re().captures(identifier) {
             return self
                 .resolve_user(
                     &caps["id"],
@@ -481,8 +475,7 @@ impl SourcePlugin for MixcloudSource {
                 .await;
         }
 
-        if let Some(caps) = self.track_url_re.captures(identifier) {
-            // Because this is checked last, we assume it's a track (not 'uploads', etc.)
+        if let Some(caps) = track_url_re().captures(identifier) {
             return self.resolve_track(&caps["user"], &caps["slug"]).await;
         }
 
@@ -521,7 +514,7 @@ impl SourcePlugin for MixcloudSource {
 }
 
 async fn graphql_request_internal(client: &Arc<reqwest::Client>, query: &str) -> Option<Value> {
-    let url = format!("{}?query={}", GRAPHQL_URL, urlencoding::encode(query));
+    let url = format!("{GRAPHQL_URL}?query={}", urlencoding::encode(query));
     let resp = client.get(url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;

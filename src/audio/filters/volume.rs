@@ -1,6 +1,6 @@
 use super::AudioFilter;
 
-/// Volume filter — scales all samples by a float factor.
+/// Volume filter.
 pub struct VolumeFilter {
     volume: f32,
 }

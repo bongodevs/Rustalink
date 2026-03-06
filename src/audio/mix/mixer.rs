@@ -1,9 +1,3 @@
-//! `audio/mix/mixer.rs` — unified mixing layer.
-//!
-//! Contains:
-//! - [`AudioMixer`]: multi-layer overlay mixer (sound effects / secondary tracks)
-//! - [`Mixer`]: main per-track PCM mixer that drives FlowController and feeds Discord
-
 use std::{
     collections::HashMap,
     sync::{
@@ -22,17 +16,20 @@ use crate::{
         flow::FlowController,
         playback::handle::PlaybackState,
     },
-    configs::player::PlayerConfig,
+    config::player::PlayerConfig,
 };
 
-// ─── AudioMixer ──────────────────────────────────────────────────────────────
-
-/// Overlays multiple named [`MixLayer`]s onto a main PCM stream.
 pub struct AudioMixer {
     pub layers: HashMap<String, MixLayer>,
     pub max_layers: usize,
     pub enabled: bool,
     acc_buf: Vec<i32>,
+}
+
+impl Default for AudioMixer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AudioMixer {
@@ -45,7 +42,6 @@ impl AudioMixer {
         }
     }
 
-    /// Add a named layer. Returns `Err` if the layer cap is reached.
     pub fn add_layer(
         &mut self,
         id: String,
@@ -70,7 +66,6 @@ impl AudioMixer {
         }
     }
 
-    /// Mix all active layers into `main_frame`.
     pub fn mix(&mut self, main_frame: &mut [i16]) {
         if !self.enabled || self.layers.is_empty() {
             return;
@@ -81,8 +76,8 @@ impl AudioMixer {
             self.acc_buf.resize(out_len, 0);
         }
 
-        for (i, &s) in main_frame.iter().enumerate() {
-            self.acc_buf[i] = s as i32;
+        for (acc, &sample) in self.acc_buf.iter_mut().zip(main_frame.iter()) {
+            *acc = sample as i32;
         }
 
         self.layers.retain(|_, layer| {
@@ -94,19 +89,12 @@ impl AudioMixer {
             layer.accumulate(&mut self.acc_buf);
         }
 
-        for (i, &sum) in self.acc_buf.iter().enumerate() {
-            main_frame[i] = sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        for (out, &sum) in main_frame.iter_mut().zip(self.acc_buf.iter()) {
+            *out = sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
         }
     }
 }
 
-// ─── Mixer ───────────────────────────────────────────────────────────────────
-
-/// Main per-track PCM mixer.
-///
-/// Each track runs a [`FlowController`] inline (pull-mode via `try_pop_frame`)
-/// covering reassembly → filters → tape → volume → fade → crossfade.
-/// Secondary audio layers are handled by the embedded [`AudioMixer`].
 pub struct Mixer {
     tracks: Vec<MixerTrack>,
     mix_buf: Vec<i32>,
@@ -122,9 +110,7 @@ struct PassthroughTrack {
 }
 
 struct MixerTrack {
-    /// Effects chain: reassembly → filters → tape → volume → fade → crossfade.
     flow: FlowController,
-    /// Overflow from the previous mix tick.
     pending: Vec<i16>,
     pending_pos: usize,
     state: Arc<AtomicU8>,
@@ -187,7 +173,7 @@ impl Mixer {
 
     pub fn take_opus_frame(&mut self) -> Option<Arc<Vec<u8>>> {
         if let Some(ref pt) = self.opus_passthrough {
-            let state = PlaybackState::from_u8(pt.state.load(Ordering::Acquire));
+            let state = PlaybackState::from(pt.state.load(Ordering::Acquire));
             if matches!(
                 state,
                 PlaybackState::Paused
@@ -235,19 +221,17 @@ impl Mixer {
         let mut has_audio = false;
 
         for track in self.tracks.iter_mut() {
-            let state = PlaybackState::from_u8(track.state.load(Ordering::Acquire));
+            let state = PlaybackState::from(track.state.load(Ordering::Acquire));
 
-            if state == PlaybackState::Paused || state == PlaybackState::Stopped {
+            if matches!(state, PlaybackState::Paused | PlaybackState::Stopped) {
                 continue;
             }
 
-            // Sync volume.
             let vol_f = f32::from_bits(track.volume.load(Ordering::Acquire));
             if (vol_f - track.flow.volume.current_volume()).abs() > 0.001 {
                 track.flow.volume.set_volume(vol_f);
             }
 
-            // Tape transition triggers.
             if state == PlaybackState::Stopping && !track.flow.tape.is_ramping() {
                 track.flow.tape.tape_to(
                     track.config.tape.tape_stop_duration_ms as f32,
@@ -268,7 +252,6 @@ impl Mixer {
             track.slice_buf.fill(0);
             let mut filled = 0usize;
 
-            // 1. Drain overflow from previous tick.
             if track.pending_pos < track.pending.len() {
                 let n = (out_len - filled).min(track.pending.len() - track.pending_pos);
                 track.slice_buf[filled..filled + n]
@@ -281,8 +264,7 @@ impl Mixer {
                 }
             }
 
-            // 2. Pull processed frames from FlowController.
-            while filled < out_len && !track.finished {
+            'pull: while filled < out_len && !track.finished {
                 match track.flow.try_pop_frame() {
                     Ok(Some(frame)) => {
                         let can = frame.len().min(out_len - filled);
@@ -293,17 +275,21 @@ impl Mixer {
                         }
                         filled += can;
                     }
-                    Ok(None) => break,
-                    Err(()) => {
+                    Ok(None) => break 'pull,
+                    Err(_) => {
                         track.finished = true;
-                        break;
+                        break 'pull;
                     }
                 }
             }
 
             if filled > 0 {
-                for j in 0..filled {
-                    self.mix_buf[j] += track.slice_buf[j] as i32;
+                for (mix_acc, &sample) in self
+                    .mix_buf
+                    .iter_mut()
+                    .zip(track.slice_buf.iter().take(filled))
+                {
+                    *mix_acc += sample as i32;
                 }
                 has_audio = true;
                 track
@@ -317,7 +303,6 @@ impl Mixer {
                     .store(PlaybackState::Stopped as u8, Ordering::Release);
             }
 
-            // Tape ramp → state transition.
             if track.flow.tape.check_ramp_completed() {
                 match state {
                     PlaybackState::Stopping => {
@@ -339,8 +324,8 @@ impl Mixer {
             self.final_pcm_buf.resize(out_len, 0);
         }
 
-        for (i, &s) in self.mix_buf.iter().enumerate() {
-            self.final_pcm_buf[i] = s.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        for (final_pcm, &sum) in self.final_pcm_buf.iter_mut().zip(self.mix_buf.iter()) {
+            *final_pcm = sum.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
         }
 
         self.audio_mixer.mix(&mut self.final_pcm_buf);

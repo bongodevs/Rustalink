@@ -54,16 +54,18 @@ impl MusicAndroidClient {
         _oauth: &Arc<YouTubeOAuth>,
     ) -> AnyResult<Value> {
         crate::sources::youtube::clients::common::make_player_request(
-            &self.http,
-            &self.config(),
-            video_id,
-            None,
-            visitor_data,
-            signature_timestamp,
-            None,
-            None,
-            Some(INNERTUBE_API),
-            None,
+            crate::sources::youtube::clients::common::PlayerRequestOptions {
+                http: &self.http,
+                config: &self.config(),
+                video_id,
+                params: None,
+                visitor_data,
+                signature_timestamp,
+                auth_header: None,
+                referer: None,
+                origin: Some(INNERTUBE_API),
+                po_token: None,
+            },
         )
         .await
     }
@@ -150,22 +152,19 @@ impl YouTubeClient for MusicAndroidClient {
         }
 
         if let Some(tab) = tab_content {
-            if let Some(section_list) = tab.get("sectionListRenderer") {
-                if let Some(contents) = section_list.get("contents") {
-                    videos = find_shelf(contents);
-                }
+            if let Some(section_list) = tab.get("sectionListRenderer")
+                && let Some(contents) = section_list.get("contents")
+            {
+                videos = find_shelf(contents);
             }
 
-            if videos.is_none() {
-                if let Some(split_view) = tab.get("musicSplitViewRenderer") {
-                    if let Some(main_content) = split_view.get("mainContent") {
-                        if let Some(section_list) = main_content.get("sectionListRenderer") {
-                            if let Some(contents) = section_list.get("contents") {
-                                videos = find_shelf(contents);
-                            }
-                        }
-                    }
-                }
+            if videos.is_none()
+                && let Some(split_view) = tab.get("musicSplitViewRenderer")
+                && let Some(main_content) = split_view.get("mainContent")
+                && let Some(section_list) = main_content.get("sectionListRenderer")
+                && let Some(contents) = section_list.get("contents")
+            {
+                videos = find_shelf(contents);
             }
         }
 
@@ -220,23 +219,19 @@ impl YouTubeClient for MusicAndroidClient {
                             .or_else(|| renderer.get("title").and_then(|t| t.as_str()))
                             .unwrap_or("Unknown Title");
 
-                        if title == "Unknown Title" {
-                            if let Some(flex_cols) =
+                        if title == "Unknown Title"
+                            && let Some(flex_cols) =
                                 renderer.get("flexColumns").and_then(|c| c.as_array())
-                            {
-                                if !flex_cols.is_empty() {
-                                    if let Some(t) = flex_cols[0]
-                                        .get("musicResponsiveListItemFlexColumnRenderer")
-                                        .and_then(|r| r.get("text"))
-                                        .and_then(|t| t.get("runs"))
-                                        .and_then(|r| r.get(0))
-                                        .and_then(|r| r.get("text"))
-                                        .and_then(|t| t.as_str())
-                                    {
-                                        title = t;
-                                    }
-                                }
-                            }
+                            && !flex_cols.is_empty()
+                            && let Some(t) = flex_cols[0]
+                                .get("musicResponsiveListItemFlexColumnRenderer")
+                                .and_then(|r| r.get("text"))
+                                .and_then(|t| t.get("runs"))
+                                .and_then(|r| r.get(0))
+                                .and_then(|r| r.get("text"))
+                                .and_then(|t| t.as_str())
+                        {
+                            title = t;
                         }
 
                         // Author extraction
@@ -255,113 +250,103 @@ impl YouTubeClient for MusicAndroidClient {
                             .and_then(|r| r.as_array());
 
                         if let Some(runs) = subtitle_runs {
-                            if !runs.is_empty() {
-                                if let Some(a) = runs[0].get("text").and_then(|t| t.as_str()) {
-                                    author = a.to_string();
-                                }
+                            if !runs.is_empty()
+                                && let Some(a) = runs[0].get("text").and_then(|t| t.as_str())
+                            {
+                                author = a.to_string();
                             }
                         } else if let Some(runs) = long_byline_runs {
-                            if !runs.is_empty() {
-                                if let Some(a) = runs[0].get("text").and_then(|t| t.as_str()) {
-                                    author = a.to_string();
-                                }
+                            if !runs.is_empty()
+                                && let Some(a) = runs[0].get("text").and_then(|t| t.as_str())
+                            {
+                                author = a.to_string();
                             }
                         } else if let Some(runs) = short_byline_runs {
-                            if !runs.is_empty() {
-                                if let Some(a) = runs[0].get("text").and_then(|t| t.as_str()) {
-                                    author = a.to_string();
-                                }
+                            if !runs.is_empty()
+                                && let Some(a) = runs[0].get("text").and_then(|t| t.as_str())
+                            {
+                                author = a.to_string();
                             }
                         } else if let Some(a) = renderer.get("author").and_then(|a| a.as_str()) {
                             author = a.to_string();
                         }
 
-                        if author == "Unknown Artist" {
-                            if let Some(flex_cols) =
+                        if author == "Unknown Artist"
+                            && let Some(flex_cols) =
                                 renderer.get("flexColumns").and_then(|c| c.as_array())
-                            {
-                                if flex_cols.len() > 1 {
-                                    if let Some(a) = flex_cols[1]
-                                        .get("musicResponsiveListItemFlexColumnRenderer")
-                                        .and_then(|r| r.get("text"))
-                                        .and_then(|t| t.get("runs"))
-                                        .and_then(|r| r.get(0))
-                                        .and_then(|r| r.get("text"))
-                                        .and_then(|t| t.as_str())
-                                    {
-                                        author = a.to_string();
-                                    }
-                                }
-                            }
+                            && flex_cols.len() > 1
+                            && let Some(a) = flex_cols[1]
+                                .get("musicResponsiveListItemFlexColumnRenderer")
+                                .and_then(|r| r.get("text"))
+                                .and_then(|t| t.get("runs"))
+                                .and_then(|r| r.get(0))
+                                .and_then(|r| r.get("text"))
+                                .and_then(|t| t.as_str())
+                        {
+                            author = a.to_string();
                         }
 
                         // Duration extraction
                         let mut length_ms = 0u64;
                         if let Some(runs) = subtitle_runs {
                             for run in runs {
-                                if let Some(text) = run.get("text").and_then(|t| t.as_str()) {
-                                    if is_duration(text) {
-                                        length_ms = parse_duration(text);
-                                        break;
-                                    }
+                                if let Some(text) = run.get("text").and_then(|t| t.as_str())
+                                    && is_duration(text)
+                                {
+                                    length_ms = parse_duration(text);
+                                    break;
                                 }
                             }
                         }
 
-                        if length_ms == 0 {
-                            if let Some(text) = renderer
+                        if length_ms == 0
+                            && let Some(text) = renderer
                                 .get("lengthText")
                                 .and_then(|l| l.get("simpleText"))
                                 .and_then(|t| t.as_str())
-                            {
-                                if is_duration(text) {
+                            && is_duration(text)
+                        {
+                            length_ms = parse_duration(text);
+                        }
+
+                        if length_ms == 0
+                            && let Some(runs) = renderer
+                                .get("lengthText")
+                                .and_then(|l| l.get("runs"))
+                                .and_then(|r| r.as_array())
+                        {
+                            for run in runs {
+                                if let Some(text) = run.get("text").and_then(|t| t.as_str())
+                                    && is_duration(text)
+                                {
                                     length_ms = parse_duration(text);
+                                    break;
                                 }
                             }
                         }
 
-                        if length_ms == 0 {
-                            if let Some(runs) = renderer
-                                .get("lengthText")
-                                .and_then(|l| l.get("runs"))
-                                .and_then(|r| r.as_array())
-                            {
-                                for run in runs {
-                                    if let Some(text) = run.get("text").and_then(|t| t.as_str()) {
-                                        if is_duration(text) {
+                        if length_ms == 0
+                            && let Some(flex_cols) =
+                                renderer.get("flexColumns").and_then(|c| c.as_array())
+                        {
+                            for column in flex_cols {
+                                if let Some(runs) = column
+                                    .get("musicResponsiveListItemFlexColumnRenderer")
+                                    .and_then(|r| r.get("text"))
+                                    .and_then(|t| t.get("runs"))
+                                    .and_then(|r| r.as_array())
+                                {
+                                    for run in runs {
+                                        if let Some(text) = run.get("text").and_then(|t| t.as_str())
+                                            && is_duration(text)
+                                        {
                                             length_ms = parse_duration(text);
                                             break;
                                         }
                                     }
                                 }
-                            }
-                        }
-
-                        if length_ms == 0 {
-                            if let Some(flex_cols) =
-                                renderer.get("flexColumns").and_then(|c| c.as_array())
-                            {
-                                for column in flex_cols {
-                                    if let Some(runs) = column
-                                        .get("musicResponsiveListItemFlexColumnRenderer")
-                                        .and_then(|r| r.get("text"))
-                                        .and_then(|t| t.get("runs"))
-                                        .and_then(|r| r.as_array())
-                                    {
-                                        for run in runs {
-                                            if let Some(text) =
-                                                run.get("text").and_then(|t| t.as_str())
-                                            {
-                                                if is_duration(text) {
-                                                    length_ms = parse_duration(text);
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if length_ms > 0 {
-                                        break;
-                                    }
+                                if length_ms > 0 {
+                                    break;
                                 }
                             }
                         }

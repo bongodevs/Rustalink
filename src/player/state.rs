@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{configs::player::PlayerConfig, protocol::tracks::Track};
+use crate::{config::player::PlayerConfig, protocol::tracks::Track};
 
-/// Full player state as returned by REST endpoints.
+/// Deserializer for track encoded field which can be null or string.
 pub fn deserialize_track_encoded<'de, D>(deserializer: D) -> Result<Option<TrackEncoded>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -32,21 +32,15 @@ pub struct Players {
     pub players: Vec<Player>,
 }
 
-/// Player connection state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerState {
-    /// Unix timestamp in milliseconds.
     pub time: u64,
-    /// Playback position in milliseconds.
     pub position: u64,
-    /// Whether the player is connected to a voice channel.
     pub connected: bool,
-    /// Voice gateway ping in milliseconds. -1 if not connected.
     pub ping: i64,
 }
 
-/// Voice connection state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceState {
@@ -76,20 +70,14 @@ impl From<VoiceState> for VoiceConnectionState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 #[serde(untagged)]
 pub enum EndTime {
-    Clear,    // JSON: null
-    Set(u64), // JSON: number
+    #[default]
+    Clear,
+    Set(u64),
 }
 
-impl Default for EndTime {
-    fn default() -> Self {
-        Self::Clear
-    }
-}
-
-/// Request body for PATCH /v4/sessions/{sessionId}/players/{guildId}.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerUpdate {
@@ -115,17 +103,13 @@ pub struct PlayerUpdate {
     pub config: Option<PlayerConfig>,
 }
 
-/// Track field in a player update request.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerUpdateTrack {
-    /// Base64-encoded track. Null to stop. Omit to keep current.
     #[serde(default, deserialize_with = "deserialize_track_encoded")]
     pub encoded: Option<TrackEncoded>,
-    /// Track identifier to resolve. Mutually exclusive with `encoded`.
     #[serde(default)]
     pub identifier: Option<String>,
-    /// User data to attach to the track.
     #[serde(default)]
     pub user_data: Option<serde_json::Value>,
 }
@@ -133,13 +117,12 @@ pub struct PlayerUpdateTrack {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum TrackEncoded {
-    Clear,       // JSON: null
-    Set(String), // JSON: string
+    Clear,
+    Set(String),
 }
 
 macro_rules! define_filters {
     ($($field:ident : $type:ty => $name:expr),* $(,)?) => {
-        /// All audio filters.
         #[derive(Debug, Clone, Default, Serialize, Deserialize)]
         #[serde(rename_all = "camelCase")]
         pub struct Filters {
@@ -150,14 +133,12 @@ macro_rules! define_filters {
         }
 
         impl Filters {
-            /// Get names of all supported filters in camelCase.
             pub fn names() -> Vec<String> {
                 vec![
                     $($name.into()),*
                 ]
             }
 
-            /// Merge incoming partial filter update with existing state.
             pub fn merge_from(&mut self, incoming: Filters) {
                 $(
                     if incoming.$field.is_some() {
@@ -166,7 +147,6 @@ macro_rules! define_filters {
                 )*
             }
 
-            /// Returns true if every filter field is `None`.
             pub fn is_all_none(&self) -> bool {
                 $(
                     self.$field.is_none() &&

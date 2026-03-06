@@ -48,16 +48,18 @@ impl TvCastClient {
         signature_timestamp: Option<u32>,
     ) -> AnyResult<Value> {
         crate::sources::youtube::clients::common::make_player_request(
-            &self.http,
-            &self.config(),
-            video_id,
-            None,
-            visitor_data,
-            signature_timestamp,
-            None,
-            None,
-            None,
-            None,
+            crate::sources::youtube::clients::common::PlayerRequestOptions {
+                http: &self.http,
+                config: &self.config(),
+                video_id,
+                params: None,
+                visitor_data,
+                signature_timestamp,
+                auth_header: None,
+                referer: None,
+                origin: None,
+                po_token: None,
+            },
         )
         .await
     }
@@ -299,8 +301,6 @@ impl YouTubeClient for TvCastClient {
         visitor_data: Option<&str>,
         _oauth: Arc<YouTubeOAuth>,
     ) -> Option<serde_json::Value> {
-        self.player_request(track_id, visitor_data, None)
-            .await
-            .ok()
+        self.player_request(track_id, visitor_data, None).await.ok()
     }
 }

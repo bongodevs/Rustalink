@@ -6,7 +6,6 @@
 /// PES headers to yield raw ADTS frames consumable by symphonia.
 ///
 /// This mirrors Lavaplayer's `MpegTsElementaryInputStream` + `PesPacketInputStream`.
-
 const TS_PACKET_SIZE: usize = 188;
 const TS_SYNC_BYTE: u8 = 0x47;
 const PAT_PID: u16 = 0x0000;

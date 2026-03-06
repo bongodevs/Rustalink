@@ -1,45 +1,45 @@
 use std::{
     collections::VecDeque,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use axum::extract::ws::Message;
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use tokio::task::AbortHandle;
 
 use crate::{
     common::types::{GuildId, SessionId, UserId},
     player::PlayerContext,
     protocol,
+    server::AppState,
 };
 
-/// Alias for the player registry within a session.
-pub type PlayerMap = DashMap<GuildId, std::sync::Arc<tokio::sync::RwLock<PlayerContext>>>;
+pub type PlayerMap = DashMap<GuildId, Arc<tokio::sync::RwLock<PlayerContext>>>;
 
-/// A client session managing multiple players and WebSocket communication.
 pub struct Session {
     pub session_id: SessionId,
     pub user_id: Option<UserId>,
     pub players: PlayerMap,
-    /// Sender for outgoing WS messages.
     pub sender: Mutex<flume::Sender<Message>>,
     pub resumable: AtomicBool,
     pub resume_timeout: AtomicU64,
     /// True when WS is disconnected but session is kept for resume.
     pub paused: AtomicBool,
-    /// Events queued while session is paused.
     pub event_queue: Mutex<VecDeque<String>>,
     pub max_queue_size: usize,
 
-    /// Last recorded frames sent for stats calculation.
     pub last_stats_sent: AtomicU64,
-    /// Last recorded frames nulled for stats calculation.
     pub last_stats_nulled: AtomicU64,
-
-    /// Historical total frames sent (from closed players).
     pub total_sent_historical: AtomicU64,
-    /// Historical total frames nulled (from closed players).
     pub total_nulled_historical: AtomicU64,
+
+    /// Abort handles for all spawned player tasks (gateway + track).
+    /// Stored separately so shutdown never needs to hold the player write lock.
+    task_handles: Mutex<Vec<AbortHandle>>,
 }
 
 impl Session {
@@ -63,10 +63,49 @@ impl Session {
             last_stats_nulled: AtomicU64::new(0),
             total_sent_historical: AtomicU64::new(0),
             total_nulled_historical: AtomicU64::new(0),
+            task_handles: Mutex::new(Vec::new()),
         }
     }
 
-    /// Sends a JSON message. If paused, queues it for replay.
+    /// Register an abort handle for a spawned player task.
+    ///
+    /// Called by player manager code when it spawns the gateway or track task.
+    /// The handle is aborted during session shutdown without needing the player lock.
+    pub fn register_task(&self, handle: AbortHandle) {
+        self.task_handles.lock().push(handle);
+    }
+
+    pub fn get_or_create_player(
+        &self,
+        guild_id: GuildId,
+        state: Arc<AppState>,
+    ) -> Arc<tokio::sync::RwLock<PlayerContext>> {
+        self.players
+            .entry(guild_id.clone())
+            .or_insert_with(|| {
+                state.player_created();
+                Arc::new(tokio::sync::RwLock::new(PlayerContext::new(
+                    guild_id,
+                    &state.config.player,
+                    state.clone(),
+                )))
+            })
+            .value()
+            .clone()
+    }
+
+    pub async fn destroy_player(&self, guild_id: &GuildId, state: &AppState) -> bool {
+        if let Some((_, player_arc)) = self.players.remove(guild_id) {
+            let mut player = player_arc.write().await;
+            let was_playing = player.is_playing();
+            player.destroy().await;
+            state.player_destroyed(was_playing);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn send_json(&self, json: impl Into<String>) {
         if self.paused.load(Ordering::Relaxed) {
             let mut queue = self.event_queue.lock();
@@ -81,35 +120,24 @@ impl Session {
         }
     }
 
-    /// Sends a typed outgoing message.
     pub fn send_message(&self, msg: &protocol::OutgoingMessage) {
         if let Ok(json) = serde_json::to_string(msg) {
             self.send_json(json);
         }
     }
 
-    /// Shuts down all players in this session.
-    pub fn shutdown(&self) {
+    pub async fn shutdown(&self, state: &AppState) {
         tracing::info!("Shutting down session: {}", self.session_id);
         self.stop_all_players();
-        self.players.clear();
+        let guilds: Vec<GuildId> = self.players.iter().map(|kv| kv.key().clone()).collect();
+        for guild in guilds {
+            self.destroy_player(&guild, state).await;
+        }
     }
 
     fn stop_all_players(&self) {
-        let players: Vec<_> = self
-            .players
-            .iter()
-            .map(|item| item.value().clone())
-            .collect();
-        for player_arc in players {
-            if let Ok(player) = player_arc.try_write() {
-                if let Some(task) = &player.gateway_task {
-                    task.abort();
-                }
-                if let Some(task) = &player.track_task {
-                    task.abort();
-                }
-            }
+        for handle in self.task_handles.lock().drain(..) {
+            handle.abort();
         }
     }
 }

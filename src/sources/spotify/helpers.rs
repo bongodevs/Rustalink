@@ -61,6 +61,7 @@ impl SpotifyHelpers {
         resp.json().await.ok()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn fetch_paginated_items(
         client: &reqwest::Client,
         token_tracker: &Arc<SpotifyTokenTracker>,
@@ -86,12 +87,12 @@ impl SpotifyHelpers {
                 let semaphore = semaphore.clone();
                 let mut vars = base_vars.clone();
                 if let Some(obj) = vars.as_object_mut() {
-                    obj.insert("offset".to_string(), json!(page_idx * page_limit));
-                    obj.insert("limit".to_string(), json!(page_limit));
+                    obj.insert("offset".to_owned(), json!(page_idx * page_limit));
+                    obj.insert("limit".to_owned(), json!(page_limit));
                 }
 
-                let op = operation.to_string();
-                let h = sha256_hash.to_string();
+                let op = operation.to_owned();
+                let h = sha256_hash.to_owned();
                 let c = client.clone();
                 let tt = token_tracker.clone();
 

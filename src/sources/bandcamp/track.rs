@@ -9,6 +9,8 @@ use crate::{
     sources::{http::HttpTrack, plugin::PlayableTrack},
 };
 
+use std::sync::OnceLock;
+
 pub struct BandcampTrack {
     pub client: Arc<reqwest::Client>,
     pub uri: String,
@@ -16,15 +18,17 @@ pub struct BandcampTrack {
     pub local_addr: Option<IpAddr>,
 }
 
+pub static STREAM_PATTERN: OnceLock<Regex> = OnceLock::new();
+
 impl PlayableTrack for BandcampTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::buffer::PooledBuffer>,
         Sender<DecoderCommand>,
         Receiver<String>,
-        Option<Receiver<std::sync::Arc<Vec<u8>>>>,
+        Option<Receiver<Arc<Vec<u8>>>>,
     ) {
         let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
             (config.buffer_duration_ms / 20) as usize,
@@ -49,7 +53,7 @@ impl PlayableTrack for BandcampTrack {
 
                 match final_stream_url {
                     Some(url) => {
-                        debug!("Bandcamp stream URL: {}", url);
+                        debug!("Bandcamp stream URL: {url}");
                         let http_track = HttpTrack {
                             url,
                             local_addr,
@@ -84,8 +88,8 @@ impl PlayableTrack for BandcampTrack {
                         }
                     }
                     None => {
-                        error!("Failed to fetch Bandcamp stream URL for {}", uri);
-                        let _ = err_tx.send("Failed to fetch stream URL".to_string());
+                        error!("Failed to fetch Bandcamp stream URL for {uri}");
+                        let _ = err_tx.send("Failed to fetch stream URL".to_owned());
                     }
                 }
             });
@@ -95,19 +99,25 @@ impl PlayableTrack for BandcampTrack {
     }
 }
 
-async fn fetch_stream_url(client: &Arc<reqwest::Client>, uri: &str) -> Option<String> {
-    let resp = client.get(uri).send().await.ok()?;
+pub async fn fetch_stream_url(client: &Arc<reqwest::Client>, uri: &str) -> Option<String> {
+    let resp = client
+        .get(uri)
+        .header(reqwest::header::USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .send()
+        .await
+        .ok()?;
+
     if !resp.status().is_success() {
         return None;
     }
 
     let body = resp.text().await.ok()?;
+    extract_stream_url(&body)
+}
 
-    let stream_re = Regex::new(r"https?://t4\.bcbits\.com/stream/[a-zA-Z0-9]+/mp3-128/\d+\?p=\d+&amp;ts=\d+&amp;t=[a-zA-Z0-9]+&amp;token=\d+_[a-zA-Z0-9]+").unwrap();
-
-    if let Some(m) = stream_re.find(&body) {
-        return Some(m.as_str().replace("&amp;", "&"));
-    }
-
-    None
+pub fn extract_stream_url(body: &str) -> Option<String> {
+    STREAM_PATTERN
+        .get_or_init(|| Regex::new(r"https?://t4\.bcbits\.com/stream/[a-zA-Z0-9]+/mp3-128/\d+\?p=\d+&amp;ts=\d+&amp;t=[a-zA-Z0-9]+&amp;token=\d+_[a-zA-Z0-9]+").unwrap())
+        .find(body)
+        .map(|m| m.as_str().replace("&amp;", "&"))
 }

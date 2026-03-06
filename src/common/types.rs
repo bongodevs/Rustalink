@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::sync::Arc;
 
 use rand::{Rng, distributions::Alphanumeric};
@@ -15,41 +16,68 @@ pub type AnyError = Box<dyn std::error::Error + Send + Sync>;
 /// A convenient Result alias returning `AnyError`.
 pub type AnyResult<T> = std::result::Result<T, AnyError>;
 
-/// Strongly typed identifiers (M1).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct GuildId(pub String);
+/// Strongly typed identifiers.
+macro_rules! define_id {
+    ($name:ident, $type:ty) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(pub $type);
 
-impl From<String> for GuildId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
+        impl From<$type> for $name {
+            fn from(val: $type) -> Self {
+                Self(val)
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+    };
+    ($name:ident, $type:ty, copy) => {
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            serde::Serialize,
+            serde::Deserialize,
+        )]
+        #[serde(transparent)]
+        pub struct $name(pub $type);
+
+        impl From<$type> for $name {
+            fn from(val: $type) -> Self {
+                Self(val)
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+    };
 }
 
-impl std::ops::Deref for GuildId {
+define_id!(GuildId, String);
+define_id!(SessionId, String);
+define_id!(UserId, u64, copy);
+define_id!(ChannelId, u64, copy);
+
+impl Deref for GuildId {
     type Target = str;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl std::fmt::Display for GuildId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct SessionId(pub String);
-
-impl From<String> for SessionId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl std::ops::Deref for SessionId {
+impl Deref for SessionId {
     type Target = str;
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -67,48 +95,6 @@ impl SessionId {
             .map(char::from)
             .collect();
         Self(s)
-    }
-}
-
-impl std::fmt::Display for SessionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
-#[serde(transparent)]
-pub struct UserId(pub u64);
-
-impl From<u64> for UserId {
-    fn from(u: u64) -> Self {
-        Self(u)
-    }
-}
-
-impl std::fmt::Display for UserId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
-)]
-#[serde(transparent)]
-pub struct ChannelId(pub u64);
-
-impl From<u64> for ChannelId {
-    fn from(u: u64) -> Self {
-        Self(u)
-    }
-}
-
-impl std::fmt::Display for ChannelId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
 
@@ -157,30 +143,19 @@ impl AudioFormat {
 
     /// Detects the audio format from a URL, often using hints like 'itag' or 'mime'.
     pub fn from_url(url: &str) -> Self {
-        // HLS hint
         if url.contains(".m3u8") || url.contains("/playlist") {
             return Self::Aac;
         }
 
-        // YouTube itag hint
-        let itag: Option<u32> = url.split('?').nth(1).and_then(|qs| {
-            qs.split('&').find_map(|kv| {
-                let mut parts = kv.splitn(2, '=');
-                if parts.next() == Some("itag") {
-                    parts.next().and_then(|v| v.parse().ok())
-                } else {
-                    None
-                }
-            })
-        });
-
-        match itag {
-            Some(249) | Some(250) | Some(251) => return Self::Webm,
-            Some(139) | Some(140) | Some(141) => return Self::Mp4,
-            _ => {}
+        // Handle YouTube itag hint
+        if let Some(itag) = extract_youtube_itag(url) {
+            match itag {
+                249..=251 => return Self::Webm,
+                139..=141 => return Self::Mp4,
+                _ => {}
+            }
         }
 
-        // MIME type hint in URL
         if url.contains("mime=audio%2Fwebm") || url.contains("mime=audio/webm") {
             return Self::Webm;
         }
@@ -188,19 +163,23 @@ impl AudioFormat {
             return Self::Mp4;
         }
 
-        // Extension fallback from URL path
-        if let Some(ext) = std::path::Path::new(url.split('?').next().unwrap_or(url))
-            .extension()
-            .and_then(|s| s.to_str())
-        {
-            return Self::from_ext(ext);
-        }
-
-        Self::Unknown
+        url.split('?')
+            .next()
+            .and_then(|path| std::path::Path::new(path).extension())
+            .and_then(|ext| ext.to_str())
+            .map(Self::from_ext)
+            .unwrap_or(Self::Unknown)
     }
 
     /// Returns true if the format can potentially be passed through without re-encoding.
     pub fn is_opus_passthrough(&self) -> bool {
         matches!(self, Self::Webm | Self::Ogg | Self::Opus)
     }
+}
+
+fn extract_youtube_itag(url: &str) -> Option<u32> {
+    url.split('?').nth(1)?.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        if k == "itag" { v.parse().ok() } else { None }
+    })
 }

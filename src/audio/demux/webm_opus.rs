@@ -1,9 +1,3 @@
-//! WebM / Matroska → raw Opus packet demuxer.
-//!
-//! Uses symphonia's built-in WebM/Matroska reader under the hood and exposes
-//! a simple iterator that yields raw Opus byte slices, ready to be sent
-//! directly to Discord without re-encoding.
-
 use symphonia::core::{
     codecs::CODEC_TYPE_OPUS,
     errors::Error,
@@ -62,7 +56,7 @@ impl WebmOpusDemuxer {
             };
 
             if packet.track_id() != self.track_id {
-                continue; // skip non-Opus tracks (video, metadata, etc.)
+                continue;
             }
 
             return Ok(Some(packet.data.to_vec()));

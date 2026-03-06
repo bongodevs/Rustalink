@@ -6,7 +6,7 @@ use tracing::{debug, error};
 
 use crate::{
     common::types::AnyResult,
-    configs::Config,
+    config::AppConfig,
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
     sources::{
         SourcePlugin,
@@ -17,6 +17,15 @@ use crate::{
 
 const API_URL: &str = "https://www.qobuz.com/api.json/0.2/";
 
+fn url_regex() -> &'static regex::Regex {
+    static REGEX: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    REGEX.get_or_init(|| {
+        regex::Regex::new(
+            r"https?://(?:www\.|play\.|open\.)?qobuz\.com/(?:(?:[a-z]{2}-[a-z]{2}/)?(?P<type>album|playlist|track|artist)/(?:.+?/)?(?P<id>[a-zA-Z0-9]+)|(?P<type2>playlist)/(?P<id2>\d+))"
+        ).unwrap()
+    })
+}
+
 pub struct QobuzSource {
     client: Arc<reqwest::Client>,
     token_tracker: Arc<QobuzTokenTracker>,
@@ -24,15 +33,11 @@ pub struct QobuzSource {
     album_load_limit: usize,
     playlist_load_limit: usize,
     artist_load_limit: usize,
-    url_regex: regex::Regex,
-    search_prefixes: Vec<String>,
-    isrc_prefixes: Vec<String>,
-    rec_prefixes: Vec<String>,
 }
 
 impl QobuzSource {
-    pub fn new(config: &Config, client: Arc<reqwest::Client>) -> Result<Self, String> {
-        let qobuz_config = config.qobuz.clone().unwrap_or_default();
+    pub fn new(config: &AppConfig, client: Arc<reqwest::Client>) -> Result<Self, String> {
+        let qobuz_config = config.sources.qobuz.clone().unwrap_or_default();
 
         let tracker = Arc::new(QobuzTokenTracker::new(
             client.clone(),
@@ -50,12 +55,6 @@ impl QobuzSource {
             album_load_limit: qobuz_config.album_load_limit,
             playlist_load_limit: qobuz_config.playlist_load_limit,
             artist_load_limit: qobuz_config.artist_load_limit,
-            url_regex: regex::Regex::new(
-                r"https?://(?:www\.|play\.|open\.)?qobuz\.com/(?:(?:[a-z]{2}-[a-z]{2}/)?(?P<type>album|playlist|track|artist)/(?:.+?/)?(?P<id>[a-zA-Z0-9]+)|(?P<type2>playlist)/(?P<id2>\d+))"
-            ).unwrap(),
-            search_prefixes: vec!["qbsearch:".to_string()],
-            isrc_prefixes: vec!["qbisrc:".to_string()],
-            rec_prefixes: vec!["qbrec:".to_string()],
         })
     }
 
@@ -64,9 +63,9 @@ impl QobuzSource {
             .token_tracker
             .get_tokens()
             .await
-            .ok_or_else(|| "Failed to get Qobuz tokens".to_string())?;
+            .ok_or("Failed to get Qobuz tokens")?;
 
-        let mut url = reqwest::Url::parse(&(API_URL.to_string() + path))?;
+        let mut url = reqwest::Url::parse(&format!("{API_URL}{path}"))?;
         {
             let mut query = url.query_pairs_mut();
             for (k, v) in params {
@@ -87,7 +86,7 @@ impl QobuzSource {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Qobuz API error ({}): {}", status, body).into());
+            return Err(format!("Qobuz API error ({status}): {body}").into());
         }
 
         let json: Value = resp.json().await?;
@@ -105,50 +104,47 @@ impl QobuzSource {
             .unwrap_or(0)
             .to_string();
 
-        let title = json["title"]
-            .as_str()
-            .unwrap_or("Unknown Title")
-            .to_string();
+        let title = json["title"].as_str().unwrap_or("Unknown Title").to_owned();
 
         let (author, artist_url) = if !json["artist"].is_null() && json["artist"].is_object() {
             let name = json["artist"]["name"]["display"]
                 .as_str()
                 .or_else(|| json["artist"]["name"].as_str())
                 .unwrap_or("Unknown Artist")
-                .to_string();
+                .to_owned();
             let url = json["artist"]["id"]
                 .as_i64()
-                .map(|id| format!("https://open.qobuz.com/artist/{}", id));
+                .map(|id| format!("https://open.qobuz.com/artist/{id}"));
             (name, url)
         } else {
             let name = json["album"]["artist"]["name"]
                 .as_str()
                 .unwrap_or("Unknown Artist")
-                .to_string();
+                .to_owned();
             let url = json["album"]["artist"]["id"]
                 .as_i64()
-                .map(|id| format!("https://open.qobuz.com/artist/{}", id));
+                .map(|id| format!("https://open.qobuz.com/artist/{id}"));
             (name, url)
         };
 
         let length = json["duration"].as_i64().unwrap_or(0) * 1000;
         let artwork_url = json["album"]["image"]["large"]
             .as_str()
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
-        let isrc = json["isrc"].as_str().map(|s| s.to_string());
-        let uri = format!("https://open.qobuz.com/track/{}", identifier);
+        let isrc = json["isrc"].as_str().map(|s| s.to_owned());
+        let uri = format!("https://open.qobuz.com/track/{identifier}");
 
-        let album_name = json["album"]["title"].as_str().map(|s| s.to_string());
+        let album_name = json["album"]["title"].as_str().map(|s| s.to_owned());
         let album_url = json["album"]["id"]
             .as_i64()
-            .map(|id| format!("https://open.qobuz.com/album/{}", id));
+            .map(|id| format!("https://open.qobuz.com/album/{id}"));
 
         let artist_artwork_url =
             if !json["album"]["artist"].is_null() && !json["album"]["artist"]["image"].is_null() {
                 json["album"]["artist"]["image"]
                     .as_str()
-                    .map(|s| s.to_string())
+                    .map(|s| s.to_owned())
             } else {
                 None
             };
@@ -165,7 +161,7 @@ impl QobuzSource {
                 uri: Some(uri),
                 artwork_url,
                 isrc,
-                source_name: "qobuz".to_string(),
+                source_name: "qobuz".to_owned(),
             },
             album_name,
             album_url,
@@ -181,16 +177,16 @@ impl QobuzSource {
             .api_request(
                 "catalog/search",
                 vec![
-                    ("query", query.to_string()),
+                    ("query", query.to_owned()),
                     ("limit", self.search_limit.to_string()),
-                    ("type", "tracks".to_string()),
+                    ("type", "tracks".to_owned()),
                 ],
             )
             .await
         {
             Ok(json) => {
                 let items = json["tracks"]["items"].as_array();
-                if items.map(|a| a.is_empty()).unwrap_or(true) {
+                if items.as_ref().map(|a| a.is_empty()).unwrap_or(true) {
                     return LoadResult::Empty {};
                 }
                 let tracks: Vec<Track> = items
@@ -201,7 +197,7 @@ impl QobuzSource {
                 LoadResult::Search(tracks)
             }
             Err(e) => {
-                error!("Qobuz search error: {}", e);
+                error!("Qobuz search error: {e}");
                 LoadResult::Empty {}
             }
         }
@@ -212,23 +208,23 @@ impl QobuzSource {
             .api_request(
                 "catalog/search",
                 vec![
-                    ("query", isrc.to_string()),
-                    ("limit", "15".to_string()),
-                    ("type", "tracks".to_string()),
+                    ("query", isrc.to_owned()),
+                    ("limit", "15".to_owned()),
+                    ("type", "tracks".to_owned()),
                 ],
             )
             .await
         {
             Ok(json) => {
                 let items = json["tracks"]["items"].as_array();
-                if items.map(|a| a.is_empty()).unwrap_or(true) {
+                if items.as_ref().map(|a| a.is_empty()).unwrap_or(true) {
                     return LoadResult::Empty {};
                 }
                 let track = Track::new(self.parse_qobuz_track(&items.unwrap()[0]).info);
                 LoadResult::Track(track)
             }
             Err(e) => {
-                error!("Qobuz ISRC search error: {}", e);
+                error!("Qobuz ISRC search error: {e}");
                 LoadResult::Empty {}
             }
         }
@@ -236,7 +232,7 @@ impl QobuzSource {
 
     async fn handle_recommendations(&self, track_id: &str) -> LoadResult {
         let track_json = match self
-            .api_request("track/get", vec![("track_id", track_id.to_string())])
+            .api_request("track/get", vec![("track_id", track_id.to_owned())])
             .await
         {
             Ok(j) => j,
@@ -267,7 +263,7 @@ impl QobuzSource {
         };
 
         let mut request = self
-            .base_request(self.client.post(format!("{}dynamic/suggest", API_URL)))
+            .base_request(self.client.post(format!("{API_URL}dynamic/suggest")))
             .header("Accept", "application/json")
             .header("x-app-id", &tokens.app_id)
             .json(&payload);
@@ -279,7 +275,7 @@ impl QobuzSource {
         let resp = match request.send().await {
             Ok(r) => r,
             Err(e) => {
-                error!("Qobuz recommendations request error: {}", e);
+                error!("Qobuz recommendations request error: {e}");
                 return LoadResult::Empty {};
             }
         };
@@ -290,7 +286,7 @@ impl QobuzSource {
 
         let json: Value = resp.json().await.unwrap_or(json!({}));
         let items = json["tracks"]["items"].as_array();
-        if items.map(|a| a.is_empty()).unwrap_or(true) {
+        if items.as_ref().map(|a| a.is_empty()).unwrap_or(true) {
             return LoadResult::Empty {};
         }
 
@@ -302,7 +298,7 @@ impl QobuzSource {
 
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: "Qobuz Recommendations".to_string(),
+                name: "Qobuz Recommendations".to_owned(),
                 selected_track: -1,
             },
             plugin_info: json!({
@@ -318,28 +314,30 @@ impl QobuzSource {
             .api_request(
                 "album/get",
                 vec![
-                    ("album_id", id.to_string()),
+                    ("album_id", id.to_owned()),
                     ("limit", self.album_load_limit.to_string()),
-                    ("offset", "0".to_string()),
+                    ("offset", "0".to_owned()),
                 ],
             )
             .await
         {
             Ok(mut json) => {
-                let title = json["title"]
-                    .as_str()
-                    .unwrap_or("Unknown Album")
-                    .to_string();
+                let title = json["title"].as_str().unwrap_or("Unknown Album").to_owned();
                 let author = json["artist"]["name"]
                     .as_str()
                     .or_else(|| json["artist"]["name"]["display"].as_str())
                     .unwrap_or("Unknown Artist")
-                    .to_string();
-                let artwork_url = json["image"]["large"].as_str().map(|s| s.to_string());
-                let uri = format!("https://open.qobuz.com/album/{}", id);
+                    .to_owned();
+                let artwork_url = json["image"]["large"].as_str().map(|s| s.to_owned());
+                let uri = format!("https://open.qobuz.com/album/{id}");
 
                 let tracks_json = json["tracks"]["items"].take();
-                if tracks_json.as_array().map(|a| a.is_empty()).unwrap_or(true) {
+                if tracks_json
+                    .as_array()
+                    .as_ref()
+                    .map(|a| a.is_empty())
+                    .unwrap_or(true)
+                {
                     return LoadResult::Empty {};
                 }
 
@@ -379,37 +377,37 @@ impl QobuzSource {
             .api_request(
                 "playlist/get",
                 vec![
-                    ("playlist_id", id.to_string()),
-                    ("extra", "tracks".to_string()),
+                    ("playlist_id", id.to_owned()),
+                    ("extra", "tracks".to_owned()),
                     ("limit", self.playlist_load_limit.to_string()),
-                    ("offset", "0".to_string()),
+                    ("offset", "0".to_owned()),
                 ],
             )
             .await
         {
             Ok(json) => {
                 let items = json["tracks"]["items"].as_array();
-                if items.map(|a| a.is_empty()).unwrap_or(true) {
+                if items.as_ref().map(|a| a.is_empty()).unwrap_or(true) {
                     return LoadResult::Empty {};
                 }
 
                 let name = json["name"]
                     .as_str()
                     .unwrap_or("Unknown Playlist")
-                    .to_string();
+                    .to_owned();
                 let author = json["owner"]["name"]
                     .as_str()
                     .unwrap_or("Unknown")
-                    .to_string();
+                    .to_owned();
                 let artwork_url = json["images300"]
                     .as_array()
                     .and_then(|a| a.first())
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+                    .map(|s| s.to_owned());
                 let url = json["url"]
                     .as_str()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("https://open.qobuz.com/playlist/{}", id));
+                    .map(|s| s.to_owned())
+                    .unwrap_or_else(|| format!("https://open.qobuz.com/playlist/{id}"));
 
                 let tracks: Vec<Track> = items
                     .unwrap()
@@ -439,12 +437,12 @@ impl QobuzSource {
 
     async fn handle_artist(&self, id: &str) -> LoadResult {
         match self
-            .api_request("artist/page", vec![("artist_id", id.to_string())])
+            .api_request("artist/page", vec![("artist_id", id.to_owned())])
             .await
         {
             Ok(json) => {
                 let top_tracks = json["top_tracks"].as_array();
-                if top_tracks.map(|a| a.is_empty()).unwrap_or(true) {
+                if top_tracks.as_ref().map(|a| a.is_empty()).unwrap_or(true) {
                     return LoadResult::Empty {};
                 }
 
@@ -452,19 +450,16 @@ impl QobuzSource {
                     .as_str()
                     .or_else(|| json["name"].as_str())
                     .unwrap_or("Unknown Artist")
-                    .to_string();
+                    .to_owned();
 
                 let artwork_url = json["images"]["potrait"]["hash"]
                     .as_str()
                     .filter(|h| !h.is_empty())
                     .map(|h| {
-                        format!(
-                            "https://static.qobuz.com/images/artists/covers/large/{}.jpg",
-                            h
-                        )
+                        format!("https://static.qobuz.com/images/artists/covers/large/{h}.jpg")
                     });
 
-                let uri = format!("https://open.qobuz.com/artist/{}", id);
+                let uri = format!("https://open.qobuz.com/artist/{id}");
 
                 let tracks: Vec<Track> = top_tracks
                     .unwrap()
@@ -476,7 +471,7 @@ impl QobuzSource {
                 let track_count = tracks.len();
                 LoadResult::Playlist(PlaylistData {
                     info: PlaylistInfo {
-                        name: format!("{}'s Top Tracks", name),
+                        name: format!("{name}'s Top Tracks"),
                         selected_track: -1,
                     },
                     plugin_info: json!({
@@ -501,24 +496,30 @@ impl SourcePlugin for QobuzSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
+        self.search_prefixes()
             .iter()
             .any(|p| identifier.starts_with(p))
-            || self.isrc_prefixes.iter().any(|p| identifier.starts_with(p))
-            || self.rec_prefixes.iter().any(|p| identifier.starts_with(p))
-            || self.url_regex.is_match(identifier)
+            || self
+                .isrc_prefixes()
+                .iter()
+                .any(|p| identifier.starts_with(p))
+            || self
+                .rec_prefixes()
+                .iter()
+                .any(|p| identifier.starts_with(p))
+            || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["qbsearch:"]
     }
 
     fn isrc_prefixes(&self) -> Vec<&str> {
-        self.isrc_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["qbisrc:"]
     }
 
     fn rec_prefixes(&self) -> Vec<&str> {
-        self.rec_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["qbrec:"]
     }
 
     async fn load(
@@ -527,30 +528,30 @@ impl SourcePlugin for QobuzSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             return self.handle_search(&identifier[prefix.len()..]).await;
         }
         if let Some(prefix) = self
-            .isrc_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .isrc_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             return self.handle_isrc(&identifier[prefix.len()..]).await;
         }
         if let Some(prefix) = self
-            .rec_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .rec_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             return self
                 .handle_recommendations(&identifier[prefix.len()..])
                 .await;
         }
 
-        if let Some(caps) = self.url_regex.captures(identifier) {
+        if let Some(caps) = url_regex().captures(identifier) {
             let type_ = caps
                 .name("type")
                 .or_else(|| caps.name("type2"))
@@ -565,7 +566,7 @@ impl SourcePlugin for QobuzSource {
             return match type_ {
                 "track" => {
                     match self
-                        .api_request("track/get", vec![("track_id", id.to_string())])
+                        .api_request("track/get", vec![("track_id", id.to_owned())])
                         .await
                     {
                         Ok(json) => {
@@ -608,7 +609,7 @@ impl SourcePlugin for QobuzSource {
         }
 
         match self
-            .api_request("track/get", vec![("track_id", id.to_string())])
+            .api_request("track/get", vec![("track_id", id.to_owned())])
             .await
         {
             Ok(json) => Some(Box::new(self.parse_qobuz_track(&json))),

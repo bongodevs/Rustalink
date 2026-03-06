@@ -4,6 +4,7 @@ pub mod constants;
 pub mod demux;
 pub mod effects;
 pub mod engine;
+pub mod error;
 pub mod filters;
 pub mod flow;
 pub mod mix;

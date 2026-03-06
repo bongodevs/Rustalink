@@ -33,8 +33,8 @@ impl CompressorFilter {
 
 impl AudioFilter for CompressorFilter {
     fn process(&mut self, samples: &mut [i16]) {
-        let attack_coef = (-1.0 / (self.attack * 48000.0) as f32).exp();
-        let release_coef = (-1.0 / (self.release * 48000.0) as f32).exp();
+        let attack_coef = (-1.0 / (self.attack * 48000.0)).exp();
+        let release_coef = (-1.0 / (self.release * 48000.0)).exp();
         let makeup_gain = db_to_gain(self.makeup_gain);
 
         for chunk in samples.chunks_exact_mut(2) {
@@ -64,7 +64,6 @@ impl AudioFilter for CompressorFilter {
     }
 
     fn is_enabled(&self) -> bool {
-        // Simple heuristic: if the threshold is low enough, or ratio > 1, or there's makeup gain.
         self.threshold < 0.0 || self.ratio > 1.0 || self.makeup_gain != 0.0
     }
 

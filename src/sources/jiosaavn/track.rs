@@ -9,7 +9,7 @@ use flume::{Receiver, Sender};
 
 use crate::{
     audio::processor::{AudioProcessor, DecoderCommand},
-    configs::HttpProxyConfig,
+    config::HttpProxyConfig,
     sources::plugin::PlayableTrack,
 };
 
@@ -24,16 +24,27 @@ pub struct JioSaavnTrack {
 impl PlayableTrack for JioSaavnTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::buffer::PooledBuffer>,
         Sender<DecoderCommand>,
         flume::Receiver<String>,
         Option<Receiver<std::sync::Arc<Vec<u8>>>>,
     ) {
-        let mut playback_url = self
-            .decrypt_url(&self.encrypted_url)
-            .expect("Failed to decrypt JioSaavn URL");
+        let mut playback_url = match self.decrypt_url(&self.encrypted_url) {
+            Some(url) => url,
+            None => {
+                let (_tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(1);
+                let (cmd_tx, _cmd_rx) = flume::unbounded::<DecoderCommand>();
+                let (err_tx, err_rx) = flume::bounded::<String>(1);
+
+                let _ = err_tx.send(
+                    "Failed to decrypt JioSaavn URL. Check your secretKey in config.toml"
+                        .to_owned(),
+                );
+                return (rx, cmd_tx, err_rx, None);
+            }
+        };
 
         if self.is_320 {
             playback_url = playback_url.replace("_96.mp4", "_320.mp4");
@@ -55,8 +66,8 @@ impl PlayableTrack for JioSaavnTrack {
             let reader = match super::reader::JioSaavnReader::new(&url, local_addr, proxy) {
                 Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
                 Err(e) => {
-                    tracing::error!("Failed to create JioSaavnReader for JioSaavn: {}", e);
-                    let _ = err_tx.send(format!("Failed to open stream: {}", e));
+                    tracing::error!("Failed to create JioSaavnReader: {e}");
+                    let _ = err_tx.send(format!("Failed to open stream: {e}"));
                     return;
                 }
             };
@@ -66,22 +77,15 @@ impl PlayableTrack for JioSaavnTrack {
                 .and_then(|s| s.to_str())
                 .map(crate::common::types::AudioFormat::from_ext);
 
-            match AudioProcessor::new(
-                reader,
-                kind,
-                tx,
-                cmd_rx,
-                Some(err_tx.clone()),
-                config.clone(),
-            ) {
+            match AudioProcessor::new(reader, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
                 Ok(mut processor) => {
                     if let Err(e) = processor.run() {
-                        tracing::error!("JioSaavn audio processor error: {}", e);
+                        tracing::error!("JioSaavn audio processor error: {e}");
                     }
                 }
                 Err(e) => {
-                    tracing::error!("JioSaavn failed to initialize processor: {}", e);
-                    let _ = err_tx.send(format!("Failed to initialize processor: {}", e));
+                    tracing::error!("JioSaavn failed to initialize processor: {e}");
+                    let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
                 }
             }
         });
@@ -105,13 +109,10 @@ impl JioSaavnTrack {
             }
         }
 
-        if let Some(last_byte) = data.last() {
-            let padding = *last_byte as usize;
-            if padding > 0 && padding <= 8 {
-                let len = data.len();
-                if len >= padding {
-                    data.truncate(len - padding);
-                }
+        if let Some(&last_byte) = data.last() {
+            let padding = last_byte as usize;
+            if (1..=8).contains(&padding) && data.len() >= padding {
+                data.truncate(data.len() - padding);
             }
         }
 

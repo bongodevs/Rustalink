@@ -9,7 +9,7 @@ use crate::protocol::tracks::{LoadError, LoadResult, SearchResult};
 
 impl JioSaavnSource {
     pub async fn search(&self, query: &str) -> LoadResult {
-        debug!("JioSaavn searching: {}", query);
+        debug!("JioSaavn searching: {query}");
 
         let params = vec![
             ("__call", "search.getResults"),
@@ -30,14 +30,14 @@ impl JioSaavnSource {
                 let tracks: Vec<_> = results
                     .iter()
                     .take(self.search_limit)
-                    .filter_map(|item| parse_track(item))
+                    .filter_map(parse_track)
                     .collect();
                 return LoadResult::Search(tracks);
             }
             LoadResult::Empty {}
         } else {
             LoadResult::Error(LoadError {
-                message: Some("JioSaavn search failed".to_string()),
+                message: Some("JioSaavn search failed".to_owned()),
                 severity: crate::common::Severity::Common,
                 cause: String::new(),
                 cause_stack_trace: None,
@@ -46,7 +46,7 @@ impl JioSaavnSource {
     }
 
     pub async fn get_autocomplete(&self, query: &str, types: &[String]) -> Option<SearchResult> {
-        debug!("JioSaavn get_autocomplete: {}", query);
+        debug!("JioSaavn get_autocomplete: {query}");
 
         let params = vec![
             ("__call", "autocomplete.get"),
@@ -68,16 +68,15 @@ impl JioSaavnSource {
         let all_types = types.is_empty();
 
         // Parse Songs -> Tracks
-        if all_types || types.contains(&"track".to_string()) {
-            if let Some(songs) = json
+        if (all_types || types.contains(&"track".to_owned()))
+            && let Some(songs) = json
                 .get("songs")
                 .and_then(|v| v.get("data"))
                 .and_then(|v| v.as_array())
-            {
-                for item in songs {
-                    if let Some(track) = parse_search_item(item) {
-                        tracks.push(track);
-                    }
+        {
+            for item in songs {
+                if let Some(track) = parse_search_item(item) {
+                    tracks.push(track);
                 }
             }
         }
@@ -107,7 +106,7 @@ impl JioSaavnSource {
 
                         // Update URI
                         if let Some(perma_url) = detail.get("perma_url").and_then(|v| v.as_str()) {
-                            track.info.uri = Some(perma_url.to_string());
+                            track.info.uri = Some(perma_url.to_owned());
                         }
 
                         // Enrich pluginInfo
@@ -139,16 +138,15 @@ impl JioSaavnSource {
                         // Update Author
                         if let Some(artists) =
                             detail.get("primary_artists").and_then(|v| v.as_str())
+                            && !artists.is_empty()
                         {
-                            if !artists.is_empty() {
-                                let limited_artists = artists
-                                    .split(',')
-                                    .map(|s| s.trim())
-                                    .take(3)
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                track.info.author = super::helpers::clean_string(&limited_artists);
-                            }
+                            let limited_artists = artists
+                                .split(',')
+                                .map(|s| s.trim())
+                                .take(3)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            track.info.author = super::helpers::clean_string(&limited_artists);
                         }
 
                         // Re-encode track with updated info
@@ -159,93 +157,88 @@ impl JioSaavnSource {
         }
 
         // Parse Albums -> PlaylistData
-        if all_types || types.contains(&"album".to_string()) {
-            if let Some(data) = json
+        if (all_types || types.contains(&"album".to_owned()))
+            && let Some(data) = json
                 .get("albums")
                 .and_then(|v| v.get("data"))
                 .and_then(|v| v.as_array())
-            {
-                for item in data {
-                    if let Some(pd) = parse_search_playlist(item, "album") {
-                        albums.push(pd);
-                    }
+        {
+            for item in data {
+                if let Some(pd) = parse_search_playlist(item, "album") {
+                    albums.push(pd);
                 }
             }
         }
 
         // Parse Artists -> PlaylistData
-        if all_types || types.contains(&"artist".to_string()) {
-            if let Some(data) = json
+        if (all_types || types.contains(&"artist".to_owned()))
+            && let Some(data) = json
                 .get("artists")
                 .and_then(|v| v.get("data"))
                 .and_then(|v| v.as_array())
-            {
-                for item in data {
-                    if let Some(pd) = parse_search_playlist(item, "artist") {
-                        artists.push(pd);
-                    }
+        {
+            for item in data {
+                if let Some(pd) = parse_search_playlist(item, "artist") {
+                    artists.push(pd);
                 }
             }
         }
 
         // Parse Playlists -> PlaylistData
-        if all_types || types.contains(&"playlist".to_string()) {
-            if let Some(data) = json
+        if (all_types || types.contains(&"playlist".to_owned()))
+            && let Some(data) = json
                 .get("playlists")
                 .and_then(|v| v.get("data"))
                 .and_then(|v| v.as_array())
-            {
-                for item in data {
-                    if let Some(pd) = parse_search_playlist(item, "playlist") {
-                        playlists.push(pd);
-                    }
+        {
+            for item in data {
+                if let Some(pd) = parse_search_playlist(item, "playlist") {
+                    playlists.push(pd);
                 }
             }
         }
 
         // Parse TopQuery -> Respective Type
-        if all_types || types.is_empty() {
-            if let Some(top_data) = json
+        if (all_types || types.is_empty())
+            && let Some(top_data) = json
                 .get("topquery")
                 .and_then(|v| v.get("data"))
                 .and_then(|v| v.as_array())
-            {
-                for item in top_data {
-                    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    match item_type {
-                        "song" => {
-                            if let Some(track) = parse_search_item(item) {
-                                if !tracks
-                                    .iter()
-                                    .any(|t| t.info.identifier == track.info.identifier)
-                                {
-                                    tracks.insert(0, track);
-                                }
-                            }
+        {
+            for item in top_data {
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match item_type {
+                    "song" => {
+                        if let Some(track) = parse_search_item(item)
+                            && !tracks
+                                .iter()
+                                .any(|t| t.info.identifier == track.info.identifier)
+                        {
+                            tracks.insert(0, track);
                         }
-                        "album" => {
-                            if let Some(pd) = parse_search_playlist(item, "album") {
-                                if !albums.iter().any(|a| a.info.name == pd.info.name) {
-                                    albums.insert(0, pd);
-                                }
-                            }
-                        }
-                        "artist" => {
-                            if let Some(pd) = parse_search_playlist(item, "artist") {
-                                if !artists.iter().any(|a| a.info.name == pd.info.name) {
-                                    artists.insert(0, pd);
-                                }
-                            }
-                        }
-                        "playlist" => {
-                            if let Some(pd) = parse_search_playlist(item, "playlist") {
-                                if !playlists.iter().any(|a| a.info.name == pd.info.name) {
-                                    playlists.insert(0, pd);
-                                }
-                            }
-                        }
-                        _ => {}
                     }
+                    "album" => {
+                        if let Some(pd) = parse_search_playlist(item, "album")
+                            && !albums.iter().any(|a| a.info.name == pd.info.name)
+                        {
+                            albums.insert(0, pd);
+                        }
+                    }
+                    "artist" => {
+                        if let Some(pd) = parse_search_playlist(item, "artist")
+                            && !artists.iter().any(|a| a.info.name == pd.info.name)
+                        {
+                            artists.insert(0, pd);
+                        }
+                    }
+                    "playlist" => {
+                        if let Some(pd) = parse_search_playlist(item, "playlist")
+                            && !playlists.iter().any(|a| a.info.name == pd.info.name)
+                        {
+                            playlists.insert(0, pd);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

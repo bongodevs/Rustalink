@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
+use serde_json::Value;
+
 use super::{API_BASE, AppleMusicSource};
-use crate::protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo};
+use crate::protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, SearchResult};
 
 impl AppleMusicSource {
     pub(crate) async fn search(&self, query: &str) -> LoadResult {
@@ -40,35 +42,34 @@ impl AppleMusicSource {
         &self,
         query: &str,
         types: &[String],
-    ) -> Option<crate::protocol::tracks::SearchResult> {
+    ) -> Option<SearchResult> {
         let mut kinds = HashSet::new();
         let mut am_types = Vec::new();
-
         let all_types = types.is_empty();
 
         if all_types
-            || types.contains(&"track".to_string())
-            || types.contains(&"album".to_string())
-            || types.contains(&"artist".to_string())
-            || types.contains(&"playlist".to_string())
+            || types.contains(&"track".to_owned())
+            || types.contains(&"album".to_owned())
+            || types.contains(&"artist".to_owned())
+            || types.contains(&"playlist".to_owned())
         {
             kinds.insert("topResults");
         }
 
-        if types.contains(&"text".to_string()) {
+        if types.contains(&"text".to_owned()) {
             kinds.insert("terms");
         }
 
-        if all_types || types.contains(&"track".to_string()) {
+        if all_types || types.contains(&"track".to_owned()) {
             am_types.push("songs");
         }
-        if all_types || types.contains(&"album".to_string()) {
+        if all_types || types.contains(&"album".to_owned()) {
             am_types.push("albums");
         }
-        if all_types || types.contains(&"artist".to_string()) {
+        if all_types || types.contains(&"artist".to_owned()) {
             am_types.push("artists");
         }
-        if all_types || types.contains(&"playlist".to_string()) {
+        if all_types || types.contains(&"playlist".to_owned()) {
             am_types.push("playlists");
         }
 
@@ -76,13 +77,13 @@ impl AppleMusicSource {
         let types_str = am_types.join(",");
 
         let mut params = vec![
-            ("term", query),
-            ("extend", "artistUrl"),
-            ("kinds", &kinds_str),
+            ("term", query.to_owned()),
+            ("extend", "artistUrl".to_owned()),
+            ("kinds", kinds_str),
         ];
 
         if !types_str.is_empty() {
-            params.push(("types", &types_str));
+            params.push(("types", types_str));
         }
 
         let path = format!("/catalog/{}/search/suggestions", self.country_code);
@@ -106,128 +107,113 @@ impl AppleMusicSource {
         let mut albums = Vec::new();
         let mut artists = Vec::new();
         let mut playlists = Vec::new();
-        let texts = Vec::new();
 
         for suggestion in suggestions {
             let kind = suggestion
                 .get("kind")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            if kind != "terms" {
-                let content = suggestion.get("content")?;
-                let type_ = content.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                let attributes = content.get("attributes")?;
-                let url = attributes.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            if kind == "terms" {
+                continue;
+            }
 
-                match type_ {
-                    "songs" => {
-                        if let Some(track) = self.build_track(content, None) {
-                            tracks.push(track);
-                        }
-                    }
-                    "albums" => {
-                        let name = attributes
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown Album");
-                        let author = attributes
-                            .get("artistName")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown Artist");
-                        let artwork = attributes
-                            .pointer("/artwork/url")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.replace("{w}", "500").replace("{h}", "500"));
-                        let track_count = attributes
-                            .get("trackCount")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
+            let content = match suggestion.get("content") {
+                Some(c) => c,
+                None => continue,
+            };
 
-                        albums.push(PlaylistData {
-                            info: PlaylistInfo {
-                                name: name.to_string(),
-                                selected_track: -1,
-                            },
-                            plugin_info: serde_json::json!({
-                              "type": "album",
-                              "url": url,
-                              "author": author,
-                              "artworkUrl": artwork,
-                              "totalTracks": track_count
-                            }),
-                            tracks: Vec::new(),
-                        });
-                    }
-                    "artists" => {
-                        let name = attributes
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown Artist");
-                        let artwork = attributes
-                            .pointer("/artwork/url")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.replace("{w}", "500").replace("{h}", "500"));
+            let type_ = content.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-                        artists.push(PlaylistData {
-                            info: PlaylistInfo {
-                                name: format!("{}'s Top Tracks", name),
-                                selected_track: -1,
-                            },
-                            plugin_info: serde_json::json!({
-                              "type": "artist",
-                              "url": url,
-                              "author": name,
-                              "artworkUrl": artwork,
-                              "totalTracks": 0
-                            }),
-                            tracks: Vec::new(),
-                        });
+            match type_ {
+                "songs" => {
+                    if let Some(track) = self.build_track(content, None) {
+                        tracks.push(track);
                     }
-                    "playlists" => {
-                        let name = attributes
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown Playlist");
-                        let curator = attributes
-                            .get("curatorName")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Apple Music");
-                        let artwork = attributes
-                            .pointer("/artwork/url")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.replace("{w}", "500").replace("{h}", "500"));
-                        let track_count = attributes
-                            .get("trackCount")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
-
-                        playlists.push(PlaylistData {
-                            info: PlaylistInfo {
-                                name: name.to_string(),
-                                selected_track: -1,
-                            },
-                            plugin_info: serde_json::json!({
-                              "type": "playlist",
-                              "url": url,
-                              "author": curator,
-                              "artworkUrl": artwork,
-                              "totalTracks": track_count
-                            }),
-                            tracks: Vec::new(),
-                        });
-                    }
-                    _ => {}
                 }
+                "albums" => {
+                    if let Some(album) = self.build_collection(content, "album") {
+                        albums.push(album);
+                    }
+                }
+                "artists" => {
+                    if let Some(artist) = self.build_collection(content, "artist") {
+                        artists.push(artist);
+                    }
+                }
+                "playlists" => {
+                    if let Some(playlist) = self.build_collection(content, "playlist") {
+                        playlists.push(playlist);
+                    }
+                }
+                _ => {}
             }
         }
 
-        Some(crate::protocol::tracks::SearchResult {
+        Some(SearchResult {
             tracks,
             albums,
             artists,
             playlists,
-            texts,
+            texts: Vec::new(),
             plugin: serde_json::json!({}),
+        })
+    }
+
+    fn build_collection(&self, content: &Value, kind: &str) -> Option<PlaylistData> {
+        let attributes = content.get("attributes")?;
+        let url = attributes.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let name = attributes
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown");
+
+        let artwork = attributes
+            .pointer("/artwork/url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.replace("{w}", "500").replace("{h}", "500"));
+
+        let (author, track_count, display_name) = match kind {
+            "album" => (
+                attributes
+                    .get("artistName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown Artist")
+                    .to_owned(),
+                attributes
+                    .get("trackCount")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                name.to_owned(),
+            ),
+            "artist" => (name.to_owned(), 0, format!("{}'s Top Tracks", name)),
+            "playlist" => (
+                attributes
+                    .get("curatorName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Apple Music")
+                    .to_owned(),
+                attributes
+                    .get("trackCount")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                name.to_owned(),
+            ),
+            _ => return None,
+        };
+
+        Some(PlaylistData {
+            info: PlaylistInfo {
+                name: display_name,
+                selected_track: -1,
+            },
+            plugin_info: serde_json::json!({
+                "type": kind,
+                "url": url,
+                "author": author,
+                "artworkUrl": artwork,
+                "totalTracks": track_count
+            }),
+            tracks: Vec::new(),
         })
     }
 }

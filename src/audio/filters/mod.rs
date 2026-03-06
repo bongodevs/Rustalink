@@ -23,7 +23,7 @@ pub mod vibrato;
 pub mod volume;
 
 use crate::{
-    configs::FiltersConfig,
+    config::FiltersConfig,
     player::{EqBand, Filters},
 };
 
@@ -99,11 +99,8 @@ pub fn validate_filters(filters: &Filters, config: &FiltersConfig) -> Vec<&'stat
 /// Trait for audio filters that process interleaved stereo i16 PCM samples.
 /// Buffer layout: [L, R, L, R, ...] — 960 frames × 2 channels = 1920 samples per 20ms.
 pub trait AudioFilter: Send {
-    /// Process samples in-place.
     fn process(&mut self, samples: &mut [i16]);
-    /// Whether this filter is currently active (non-default params).
     fn is_enabled(&self) -> bool;
-    /// Reset internal state (on seek or filter change).
     fn reset(&mut self);
 }
 
@@ -112,24 +109,24 @@ pub trait AudioFilter: Send {
 /// dispatch overhead (H5).
 pub enum ConcreteFilter {
     Volume(volume::VolumeFilter),
-    Equalizer(equalizer::EqualizerFilter),
-    Karaoke(karaoke::KaraokeFilter),
-    Tremolo(tremolo::TremoloFilter),
-    Vibrato(vibrato::VibratoFilter),
-    Rotation(rotation::RotationFilter),
-    Distortion(distortion::DistortionFilter),
-    ChannelMix(channel_mix::ChannelMixFilter),
-    LowPass(low_pass::LowPassFilter),
-    Echo(echo::EchoFilter),
-    HighPass(high_pass::HighPassFilter),
-    Normalization(normalization::NormalizationFilter),
-    Chorus(chorus::ChorusFilter),
-    Compressor(compressor::CompressorFilter),
-    Flanger(flanger::FlangerFilter),
-    Phaser(phaser::PhaserFilter),
-    Phonograph(phonograph::PhonographFilter),
-    Reverb(reverb::ReverbFilter),
-    Spatial(spatial::SpatialFilter),
+    Equalizer(Box<equalizer::EqualizerFilter>),
+    Karaoke(Box<karaoke::KaraokeFilter>),
+    Tremolo(Box<tremolo::TremoloFilter>),
+    Vibrato(Box<vibrato::VibratoFilter>),
+    Rotation(Box<rotation::RotationFilter>),
+    Distortion(Box<distortion::DistortionFilter>),
+    ChannelMix(Box<channel_mix::ChannelMixFilter>),
+    LowPass(Box<low_pass::LowPassFilter>),
+    Echo(Box<echo::EchoFilter>),
+    HighPass(Box<high_pass::HighPassFilter>),
+    Normalization(Box<normalization::NormalizationFilter>),
+    Chorus(Box<chorus::ChorusFilter>),
+    Compressor(Box<compressor::CompressorFilter>),
+    Flanger(Box<flanger::FlangerFilter>),
+    Phaser(Box<phaser::PhaserFilter>),
+    Phonograph(Box<phonograph::PhonographFilter>),
+    Reverb(Box<reverb::ReverbFilter>),
+    Spatial(Box<spatial::SpatialFilter>),
 }
 
 impl ConcreteFilter {
@@ -211,7 +208,7 @@ impl FilterChain {
                 bands.iter().map(|b: &EqBand| (b.band, b.gain)).collect();
             let f = equalizer::EqualizerFilter::new(&band_tuples);
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Equalizer(f));
+                filters.push(ConcreteFilter::Equalizer(Box::new(f)));
             }
         }
 
@@ -224,7 +221,7 @@ impl FilterChain {
                 k.filter_width.unwrap_or(100.0),
             );
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Karaoke(f));
+                filters.push(ConcreteFilter::Karaoke(Box::new(f)));
             }
         }
 
@@ -232,7 +229,7 @@ impl FilterChain {
         if let Some(ref t) = config.tremolo {
             let f = tremolo::TremoloFilter::new(t.frequency.unwrap_or(2.0), t.depth.unwrap_or(0.5));
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Tremolo(f));
+                filters.push(ConcreteFilter::Tremolo(Box::new(f)));
             }
         }
 
@@ -240,7 +237,7 @@ impl FilterChain {
         if let Some(ref v) = config.vibrato {
             let f = vibrato::VibratoFilter::new(v.frequency.unwrap_or(2.0), v.depth.unwrap_or(0.5));
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Vibrato(f));
+                filters.push(ConcreteFilter::Vibrato(Box::new(f)));
             }
         }
 
@@ -248,24 +245,25 @@ impl FilterChain {
         if let Some(ref r) = config.rotation {
             let f = rotation::RotationFilter::new(r.rotation_hz.unwrap_or(0.0));
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Rotation(f));
+                filters.push(ConcreteFilter::Rotation(Box::new(f)));
             }
         }
 
         // Distortion
         if let Some(ref d) = config.distortion {
-            let f = distortion::DistortionFilter::new(
-                d.sin_offset.unwrap_or(0.0),
-                d.sin_scale.unwrap_or(1.0),
-                d.cos_offset.unwrap_or(0.0),
-                d.cos_scale.unwrap_or(1.0),
-                d.tan_offset.unwrap_or(0.0),
-                d.tan_scale.unwrap_or(1.0),
-                d.offset.unwrap_or(0.0),
-                d.scale.unwrap_or(1.0),
-            );
+            let config = distortion::DistortionConfig {
+                sin_offset: d.sin_offset.unwrap_or(0.0),
+                sin_scale: d.sin_scale.unwrap_or(1.0),
+                cos_offset: d.cos_offset.unwrap_or(0.0),
+                cos_scale: d.cos_scale.unwrap_or(1.0),
+                tan_offset: d.tan_offset.unwrap_or(0.0),
+                tan_scale: d.tan_scale.unwrap_or(1.0),
+                offset: d.offset.unwrap_or(0.0),
+                scale: d.scale.unwrap_or(1.0),
+            };
+            let f = distortion::DistortionFilter::new(config);
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Distortion(f));
+                filters.push(ConcreteFilter::Distortion(Box::new(f)));
             }
         }
 
@@ -278,7 +276,7 @@ impl FilterChain {
                 cm.right_to_right.unwrap_or(1.0),
             );
             if f.is_enabled() {
-                filters.push(ConcreteFilter::ChannelMix(f));
+                filters.push(ConcreteFilter::ChannelMix(Box::new(f)));
             }
         }
 
@@ -286,7 +284,7 @@ impl FilterChain {
         if let Some(ref lp) = config.low_pass {
             let f = low_pass::LowPassFilter::new(lp.smoothing.unwrap_or(20.0));
             if f.is_enabled() {
-                filters.push(ConcreteFilter::LowPass(f));
+                filters.push(ConcreteFilter::LowPass(Box::new(f)));
             }
         }
 
@@ -294,7 +292,7 @@ impl FilterChain {
         if let Some(ref e) = config.echo {
             let f = echo::EchoFilter::new(e.echo_length.unwrap_or(1.0), e.decay.unwrap_or(0.5));
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Echo(f));
+                filters.push(ConcreteFilter::Echo(Box::new(f)));
             }
         }
 
@@ -305,7 +303,7 @@ impl FilterChain {
                 hp.boost_factor.unwrap_or(1.0),
             );
             if f.is_enabled() {
-                filters.push(ConcreteFilter::HighPass(f));
+                filters.push(ConcreteFilter::HighPass(Box::new(f)));
             }
         }
 
@@ -316,7 +314,7 @@ impl FilterChain {
                 n.adaptive.unwrap_or(true),
             );
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Normalization(f));
+                filters.push(ConcreteFilter::Normalization(Box::new(f)));
             }
         }
 
@@ -330,7 +328,7 @@ impl FilterChain {
                 c.feedback.unwrap_or(0.5),
             );
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Chorus(f));
+                filters.push(ConcreteFilter::Chorus(Box::new(f)));
             }
         }
 
@@ -344,7 +342,7 @@ impl FilterChain {
                 c.makeup_gain.unwrap_or(0.0),
             );
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Compressor(f));
+                filters.push(ConcreteFilter::Compressor(Box::new(f)));
             }
         }
 
@@ -356,39 +354,41 @@ impl FilterChain {
                 fl.feedback.unwrap_or(0.5),
             );
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Flanger(f));
+                filters.push(ConcreteFilter::Flanger(Box::new(f)));
             }
         }
 
         // Phaser
         if let Some(ref p) = config.phaser {
-            let f = phaser::PhaserFilter::new(
-                p.stages.unwrap_or(4),
-                p.rate.unwrap_or(0.0),
-                p.depth.unwrap_or(1.0),
-                p.feedback.unwrap_or(0.0),
-                p.mix.unwrap_or(0.5),
-                p.min_frequency.unwrap_or(100.0),
-                p.max_frequency.unwrap_or(2500.0),
-            );
+            let config = phaser::PhaserConfig {
+                stages: p.stages.unwrap_or(4),
+                rate: p.rate.unwrap_or(0.0),
+                depth: p.depth.unwrap_or(1.0),
+                feedback: p.feedback.unwrap_or(0.0),
+                mix: p.mix.unwrap_or(0.5),
+                min_frequency: p.min_frequency.unwrap_or(100.0),
+                max_frequency: p.max_frequency.unwrap_or(2500.0),
+            };
+            let f = phaser::PhaserFilter::new(config);
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Phaser(f));
+                filters.push(ConcreteFilter::Phaser(Box::new(f)));
             }
         }
 
         // Phonograph
         if let Some(ref ph) = config.phonograph {
-            let f = phonograph::PhonographFilter::new(
-                ph.frequency.unwrap_or(0.8),
-                ph.depth.unwrap_or(0.25),
-                ph.crackle.unwrap_or(0.18),
-                ph.flutter.unwrap_or(0.18),
-                ph.room.unwrap_or(0.22),
-                ph.mic_agc.unwrap_or(0.25),
-                ph.drive.unwrap_or(0.25),
-            );
+            let config = phonograph::PhonographConfig {
+                frequency: ph.frequency.unwrap_or(0.8),
+                depth: ph.depth.unwrap_or(0.25),
+                crackle: ph.crackle.unwrap_or(0.18),
+                flutter: ph.flutter.unwrap_or(0.18),
+                room: ph.room.unwrap_or(0.22),
+                mic_agc: ph.mic_agc.unwrap_or(0.25),
+                drive: ph.drive.unwrap_or(0.25),
+            };
+            let f = phonograph::PhonographFilter::new(config);
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Phonograph(f));
+                filters.push(ConcreteFilter::Phonograph(Box::new(f)));
             }
         }
 
@@ -401,7 +401,7 @@ impl FilterChain {
                 r.width.unwrap_or(1.0),
             );
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Reverb(f));
+                filters.push(ConcreteFilter::Reverb(Box::new(f)));
             }
         }
 
@@ -409,7 +409,7 @@ impl FilterChain {
         if let Some(ref s) = config.spatial {
             let f = spatial::SpatialFilter::new(s.rate.unwrap_or(0.0), s.depth.unwrap_or(0.0));
             if f.is_enabled() {
-                filters.push(ConcreteFilter::Spatial(f));
+                filters.push(ConcreteFilter::Spatial(Box::new(f)));
             }
         }
 
@@ -438,12 +438,10 @@ impl FilterChain {
     /// Process audio samples through all active filters in-place.
     /// For timescale, output is buffered internally and fed to `fill_frame`.
     pub fn process(&mut self, samples: &mut [i16]) {
-        // Apply all in-place filters
         for filter in self.filters.iter_mut() {
             filter.process(samples);
         }
 
-        // If timescale is active, resample and buffer the output
         if let Some(ref mut ts) = self.timescale {
             let resampled = ts.process_resample(samples);
             self.timescale_buffer.extend_from_slice(&resampled);
@@ -477,7 +475,6 @@ impl FilterChain {
         self.timescale.is_some()
     }
 
-    /// Reset all filter states (e.g. on seek).
     pub fn reset(&mut self) {
         for filter in self.filters.iter_mut() {
             filter.reset();

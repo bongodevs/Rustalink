@@ -46,16 +46,19 @@ pub struct PhaserFilter {
     last_right_feedback: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PhaserConfig {
+    pub stages: i32,
+    pub rate: f32,
+    pub depth: f32,
+    pub feedback: f32,
+    pub mix: f32,
+    pub min_frequency: f32,
+    pub max_frequency: f32,
+}
+
 impl PhaserFilter {
-    pub fn new(
-        stages: i32,
-        rate: f32,
-        depth: f32,
-        feedback: f32,
-        mix: f32,
-        min_frequency: f32,
-        max_frequency: f32,
-    ) -> Self {
+    pub fn new(config: PhaserConfig) -> Self {
         let mut left_filters = Vec::with_capacity(MAX_STAGES);
         let mut right_filters = Vec::with_capacity(MAX_STAGES);
         for _ in 0..MAX_STAGES {
@@ -85,38 +88,21 @@ impl PhaserFilter {
             last_right_feedback: 0.0,
         };
 
-        filter.update(
-            stages,
-            rate,
-            depth,
-            feedback,
-            mix,
-            min_frequency,
-            max_frequency,
-        );
+        filter.update(config);
         filter
     }
 
-    pub fn update(
-        &mut self,
-        stages: i32,
-        rate: f32,
-        depth: f32,
-        feedback: f32,
-        mix: f32,
-        min_frequency: f32,
-        max_frequency: f32,
-    ) {
-        self.stages = (stages as usize).clamp(2, MAX_STAGES);
-        self.rate = rate;
-        self.depth = depth.clamp(0.0, 1.0);
-        self.feedback = feedback.clamp(0.0, 0.9);
-        self.mix = mix.clamp(0.0, 1.0);
-        self.min_frequency = min_frequency;
-        self.max_frequency = max_frequency;
+    pub fn update(&mut self, config: PhaserConfig) {
+        self.stages = (config.stages as usize).clamp(2, MAX_STAGES);
+        self.rate = config.rate;
+        self.depth = config.depth.clamp(0.0, 1.0);
+        self.feedback = config.feedback.clamp(0.0, 0.9);
+        self.mix = config.mix.clamp(0.0, 1.0);
+        self.min_frequency = config.min_frequency;
+        self.max_frequency = config.max_frequency;
 
-        self.left_lfo.update(self.rate.into(), self.depth.into());
-        self.right_lfo.update(self.rate.into(), self.depth.into());
+        self.left_lfo.update(self.rate as f64, self.depth as f64);
+        self.right_lfo.update(self.rate as f64, self.depth as f64);
     }
 }
 

@@ -17,9 +17,9 @@ impl JioSaavnReader {
     pub fn new(
         url: &str,
         local_addr: Option<std::net::IpAddr>,
-        proxy: Option<crate::configs::HttpProxyConfig>,
+        proxy: Option<crate::config::HttpProxyConfig>,
     ) -> AnyResult<Self> {
-        let client = create_client(USER_AGENT.to_string(), local_addr, proxy, None)?;
+        let client = create_client(USER_AGENT.to_owned(), local_addr, proxy, None)?;
         let inner = HttpSource::new(client, url)?;
 
         Ok(Self { inner })

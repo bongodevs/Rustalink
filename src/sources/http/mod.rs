@@ -1,5 +1,5 @@
 pub mod reader;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -19,23 +19,30 @@ use crate::{
     sources::{SourcePlugin, plugin::PlayableTrack},
 };
 
-pub struct HttpSource {
-    url_regex: Regex,
+fn url_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"^(?:https?|icy)://").unwrap())
+}
+
+pub struct HttpSource;
+
+impl Default for HttpSource {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HttpSource {
     pub fn new() -> Self {
-        Self {
-            url_regex: Regex::new(r"^(?:https?|icy)://").unwrap(),
-        }
+        Self
     }
 
     fn probe_metadata(url: String, local_addr: Option<std::net::IpAddr>) -> AnyResult<TrackInfo> {
-        let source = self::reader::HttpReader::new(&url, local_addr, None)?;
+        let source = reader::HttpReader::new(&url, local_addr, None)?;
         let mut hint = Hint::new();
 
         if let Some(content_type) = source.content_type() {
-            hint.mime_type(&content_type);
+            hint.mime_type(content_type.as_str());
         }
 
         let mss = MediaSourceStream::new(Box::new(source), Default::default());
@@ -97,13 +104,14 @@ impl HttpSource {
         if title.is_empty() {
             title = url
                 .split('/')
-                .last()
+                .next_back()
                 .and_then(|s| s.split('?').next())
                 .unwrap_or("Unknown Title")
-                .to_string();
+                .to_owned();
         }
+
         if author.is_empty() {
-            author = "Unknown Artist".to_string();
+            author = "Unknown Artist".to_owned();
         }
 
         Ok(TrackInfo {
@@ -115,7 +123,7 @@ impl HttpSource {
             position: 0,
             title,
             uri: Some(url),
-            source_name: "http".to_string(),
+            source_name: "http".to_owned(),
             artwork_url: None,
             isrc: None,
         })
@@ -129,7 +137,7 @@ impl SourcePlugin for HttpSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.url_regex.is_match(identifier)
+        url_regex().is_match(identifier)
     }
 
     async fn load(
@@ -137,9 +145,9 @@ impl SourcePlugin for HttpSource {
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        debug!("Probing HTTP source: {}", identifier);
+        debug!("Probing HTTP source: {identifier}");
 
-        let identifier = identifier.to_string();
+        let identifier = identifier.to_owned();
         let local_addr = routeplanner.as_ref().and_then(|rp| rp.get_address());
 
         let identifier_clone = identifier.clone();
@@ -152,16 +160,16 @@ impl SourcePlugin for HttpSource {
         match probe_result {
             Ok(Ok(info)) => LoadResult::Track(Track::new(info)),
             Ok(Err(e)) => {
-                warn!("Probing failed for {}: {}", identifier, e);
+                warn!("Probing failed for {identifier}: {e}");
                 // If probing fails (e.g. not an audio file), we should return Empty
                 // so the manager knows no track was found, rather than erroring.
                 // This mimics Lavaplayer's behavior where unknown formats return null.
                 LoadResult::Empty {}
             }
             Err(e) => {
-                error!("Task join error: {}", e);
+                error!("Task join error: {e}");
                 LoadResult::Error(LoadError {
-                    message: Some("Internal error during probing".to_string()),
+                    message: Some("Internal error during probing".to_owned()),
                     severity: crate::common::Severity::Suspicious,
                     cause: e.to_string(),
                     cause_stack_trace: None,
@@ -182,7 +190,7 @@ impl SourcePlugin for HttpSource {
 
         if self.can_handle(clean) {
             Some(Box::new(HttpTrack {
-                url: clean.to_string(),
+                url: clean.to_owned(),
                 local_addr: routeplanner.and_then(|rp| rp.get_address()),
                 proxy: None,
             }))
@@ -195,13 +203,13 @@ impl SourcePlugin for HttpSource {
 pub struct HttpTrack {
     pub url: String,
     pub local_addr: Option<std::net::IpAddr>,
-    pub proxy: Option<crate::configs::HttpProxyConfig>,
+    pub proxy: Option<crate::config::HttpProxyConfig>,
 }
 
 impl PlayableTrack for HttpTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         flume::Receiver<crate::audio::buffer::PooledBuffer>,
         flume::Sender<DecoderCommand>,
@@ -221,11 +229,11 @@ impl PlayableTrack for HttpTrack {
         let handle = tokio::runtime::Handle::current();
         std::thread::spawn(move || {
             let _guard = handle.enter();
-            let reader = match self::reader::HttpReader::new(&url, local_addr, proxy) {
+            let reader = match reader::HttpReader::new(&url, local_addr, proxy) {
                 Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
                 Err(e) => {
-                    error!("Failed to create HttpReader for HTTP: {}", e);
-                    let _ = err_tx.send(format!("Failed to open stream: {}", e));
+                    error!("Failed to create HttpReader for HTTP: {e}");
+                    let _ = err_tx.send(format!("Failed to open stream: {e}"));
                     return;
                 }
             };
@@ -235,22 +243,15 @@ impl PlayableTrack for HttpTrack {
                 .and_then(|s| s.to_str())
                 .map(crate::common::types::AudioFormat::from_ext);
 
-            match AudioProcessor::new(
-                reader,
-                kind,
-                tx,
-                cmd_rx,
-                Some(err_tx.clone()),
-                config.clone(),
-            ) {
+            match AudioProcessor::new(reader, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
                 Ok(mut processor) => {
                     if let Err(e) = processor.run() {
-                        error!("HTTP track audio processor error: {}", e);
+                        error!("HTTP track audio processor error: {e}");
                     }
                 }
                 Err(e) => {
-                    error!("HTTP track failed to initialize processor: {}", e);
-                    let _ = err_tx.send(format!("Failed to initialize processor: {}", e));
+                    error!("HTTP track failed to initialize processor: {e}");
+                    let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
                 }
             }
         });

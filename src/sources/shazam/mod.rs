@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -13,42 +13,53 @@ use crate::{
 
 const SEARCH_URL: &str = "https://www.shazam.com/services/amapi/v1/catalog/US/search";
 
+fn url_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"https?://(?:www\.)?shazam\.com/song/\d+(?:/[^/?#]+)?")
+            .expect("shazam URL regex is a valid literal")
+    })
+}
+
+fn og_title_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"^(.+?) - (.+?):").expect("shazam og:title regex is a valid literal")
+    })
+}
+
 pub struct ShazamSource {
     client: Arc<reqwest::Client>,
-    search_prefixes: Vec<String>,
-    url_regex: Regex,
-    og_title_regex: Regex,
     search_limit: usize,
 }
 
 impl ShazamSource {
     pub fn new(
-        config: &crate::configs::Config,
+        config: &crate::config::AppConfig,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         Ok(Self {
             client,
-            search_prefixes: vec!["shsearch:".to_string(), "szsearch:".to_string()],
-            url_regex: Regex::new(r"https?://(?:www\.)?shazam\.com/song/\d+(?:/[^/?#]+)?")
-                .expect("shazam URL regex is a valid literal"),
-            og_title_regex: Regex::new(r"^(.+?) - (.+?):")
-                .expect("shazam og:title regex is a valid literal"),
-            search_limit: config.shazam.as_ref().map(|c| c.search_limit).unwrap_or(10),
+            search_limit: config
+                .sources
+                .shazam
+                .as_ref()
+                .map(|c| c.search_limit)
+                .unwrap_or(10),
         })
     }
 
     async fn search(&self, query: &str) -> LoadResult {
         let url = format!(
-            "{}?types=songs&term={}&limit={}",
-            SEARCH_URL,
-            urlencoding::encode(query),
-            self.search_limit
+            "{SEARCH_URL}?types=songs&term={query}&limit={limit}",
+            query = urlencoding::encode(query),
+            limit = self.search_limit
         );
 
         let resp = match self.base_request(self.client.get(&url)).send().await {
             Ok(r) => r,
             Err(e) => {
-                error!("Shazam search request failed: {}", e);
+                error!("Shazam search request failed: {e}");
                 return LoadResult::Empty {};
             }
         };
@@ -60,7 +71,7 @@ impl ShazamSource {
         let data: Value = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
-                error!("Failed to parse Shazam search JSON: {}", e);
+                error!("Failed to parse Shazam search JSON: {e}");
                 return LoadResult::Empty {};
             }
         };
@@ -88,18 +99,18 @@ impl ShazamSource {
 
     fn build_track(&self, item: &Value) -> Option<Track> {
         let attributes = item.get("attributes")?;
-        let id = item.get("id")?.as_str()?.to_string();
+        let id = item.get("id")?.as_str()?.to_owned();
 
         let title = attributes
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown")
-            .to_string();
+            .to_owned();
         let author = attributes
             .get("artistName")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown")
-            .to_string();
+            .to_owned();
         let length = attributes
             .get("durationInMillis")
             .and_then(|v| v.as_u64())
@@ -107,7 +118,7 @@ impl ShazamSource {
         let isrc = attributes
             .get("isrc")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
         let artwork_url = attributes
             .get("artwork")
@@ -118,7 +129,7 @@ impl ShazamSource {
         let uri = attributes
             .get("url")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
         let mut track = Track::new(TrackInfo {
             identifier: id,
@@ -131,7 +142,7 @@ impl ShazamSource {
             uri: uri.clone(),
             artwork_url,
             isrc,
-            source_name: "shazam".to_string(),
+            source_name: "shazam".to_owned(),
         });
 
         track.plugin_info = serde_json::json!({
@@ -150,7 +161,7 @@ impl ShazamSource {
         let resp = match self.base_request(self.client.get(url)).send().await {
             Ok(r) => r,
             Err(e) => {
-                error!("Shazam resolve request failed: {}", e);
+                error!("Shazam resolve request failed: {e}");
                 return LoadResult::Empty {};
             }
         };
@@ -162,7 +173,7 @@ impl ShazamSource {
         let html = match resp.text().await {
             Ok(t) => t,
             Err(e) => {
-                error!("Failed to read Shazam HTML: {}", e);
+                error!("Failed to read Shazam HTML: {e}");
                 return LoadResult::Empty {};
             }
         };
@@ -175,26 +186,23 @@ impl ShazamSource {
         let apple_music_url =
             self.extract_href_starting_with(&html, "https://www.shazam.com/applemusic/song/");
 
-        let mut final_title = title.unwrap_or_else(|| "Unknown".to_string());
-        let mut final_artist = artist.unwrap_or_else(|| "Unknown".to_string());
+        let mut final_title = title.unwrap_or_else(|| "Unknown".to_owned());
+        let mut final_artist = artist.unwrap_or_else(|| "Unknown".to_owned());
 
-        if final_title == "Unknown" {
-            if let Some(og_title) = self.extract_meta_content(&html, "og:title") {
-                // Use the pre-compiled field regex — never allocate inside a request path.
-                if let Some(caps) = self.og_title_regex.captures(&og_title) {
-                    // Both groups are guaranteed by the regex structure, but use
-                    // safe accessors to avoid panics if the input is malformed.
-                    final_title = caps
-                        .get(1)
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_else(|| og_title.clone());
-                    final_artist = caps
-                        .get(2)
-                        .map(|m| m.as_str().to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-                } else {
-                    final_title = og_title;
-                }
+        if final_title == "Unknown"
+            && let Some(og_title) = self.extract_meta_content(&html, "og:title")
+        {
+            if let Some(caps) = og_title_regex().captures(&og_title) {
+                final_title = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_owned())
+                    .unwrap_or_else(|| og_title.clone());
+                final_artist = caps
+                    .get(2)
+                    .map(|m| m.as_str().to_owned())
+                    .unwrap_or_else(|| "Unknown".to_owned());
+            } else {
+                final_title = og_title;
             }
         }
 
@@ -202,12 +210,12 @@ impl ShazamSource {
             return LoadResult::Empty {};
         }
 
-        let clean_url = if url.ends_with('/') {
-            &url[..url.len() - 1]
-        } else {
-            url
-        };
-        let identifier = clean_url.split('/').last().unwrap_or("unknown").to_string();
+        let clean_url = url.strip_suffix('/').unwrap_or(url);
+        let identifier = clean_url
+            .split('/')
+            .next_back()
+            .unwrap_or("unknown")
+            .to_owned();
 
         let mut track = Track::new(TrackInfo {
             identifier,
@@ -217,10 +225,10 @@ impl ShazamSource {
             is_stream: false,
             position: 0,
             title: final_title,
-            uri: Some(url.to_string()),
+            uri: Some(url.to_owned()),
             artwork_url: artwork_url.or_else(|| self.extract_meta_content(&html, "og:image")),
             isrc,
-            source_name: "shazam".to_string(),
+            source_name: "shazam".to_owned(),
         });
 
         track.plugin_info = serde_json::json!({
@@ -244,7 +252,7 @@ impl ShazamSource {
             if cls.contains(class_part) {
                 let gt = html[q..].find('>').map(|i| q + i)?;
                 let lt = html[gt + 1..].find('<').map(|i| gt + 1 + i)?;
-                let text = html[gt + 1..lt].trim().to_string();
+                let text = html[gt + 1..lt].trim().to_owned();
                 if !text.is_empty() {
                     return Some(text);
                 }
@@ -255,11 +263,11 @@ impl ShazamSource {
     }
 
     fn extract_href_starting_with(&self, html: &str, prefix: &str) -> Option<String> {
-        let pattern = format!("href=\"{}\"", prefix);
+        let pattern = format!("href=\"{prefix}\"");
         if let Some(i) = html.find(&pattern) {
             let start = i + 6;
             if let Some(end) = html[start..].find('"') {
-                return Some(html[start..start + end].to_string());
+                return Some(html[start..start + end].to_owned());
             }
         }
         None
@@ -285,7 +293,7 @@ impl ShazamSource {
             if let Some(val_end) = tag[val_start..].find('"') {
                 let srcset = &tag[val_start..val_start + val_end];
                 let space = srcset.find(' ').unwrap_or(srcset.len());
-                return Some(srcset[..space].to_string());
+                return Some(srcset[..space].to_owned());
             }
         }
         None
@@ -326,7 +334,7 @@ impl ShazamSource {
 
                 let isrc_cand = &html[i..i + 12];
                 if self.is_valid_isrc(isrc_cand) {
-                    return Some(isrc_cand.to_string());
+                    return Some(isrc_cand.to_owned());
                 }
             }
         }
@@ -402,11 +410,11 @@ impl ShazamSource {
     }
 
     fn extract_meta_content(&self, html: &str, prop: &str) -> Option<String> {
-        let pattern = format!("<meta property=\"{}\" content=\"", prop);
+        let pattern = format!("<meta property=\"{prop}\" content=\"");
         if let Some(i) = html.find(&pattern) {
             let start = i + pattern.len();
             if let Some(end) = html[start..].find('"') {
-                return Some(html[start..start + end].to_string());
+                return Some(html[start..start + end].to_owned());
             }
         }
         None
@@ -424,14 +432,14 @@ impl SourcePlugin for ShazamSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
+        self.search_prefixes()
             .iter()
             .any(|p| identifier.starts_with(p))
-            || self.url_regex.is_match(identifier)
+            || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["shsearch:", "szsearch:"]
     }
 
     fn is_mirror(&self) -> bool {
@@ -444,15 +452,15 @@ impl SourcePlugin for ShazamSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             let query = &identifier[prefix.len()..];
             return self.search(query).await;
         }
 
-        if self.url_regex.is_match(identifier) {
+        if url_regex().is_match(identifier) {
             return self.resolve_url(identifier).await;
         }
 

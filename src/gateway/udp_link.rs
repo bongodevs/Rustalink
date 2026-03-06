@@ -13,25 +13,19 @@ use crate::{
     },
 };
 
-/// Encryption cipher — exactly one is active at any given time.
-///
-/// Using an enum (rather than `Option<Salsa> + Option<Aes>`) makes the
-/// impossible "both-initialized" or "neither-initialized" states
-/// unrepresentable at the type level.
 enum ActiveCipher {
-    XSalsa20Poly1305(XSalsa20Poly1305),
-    Aes256Gcm(Aes256Gcm),
+    XSalsa20Poly1305(Box<XSalsa20Poly1305>),
+    Aes256Gcm(Box<Aes256Gcm>),
 }
 
 pub struct UdpBackend {
     socket: Arc<tokio::net::UdpSocket>,
-    ssrc: u32,
     address: SocketAddr,
+    ssrc: u32,
     cipher: ActiveCipher,
     sequence: u16,
     timestamp: u32,
     nonce: u32,
-    /// Reusable packet buffer — allocated once, cleared per frame.
     packet_buf: Vec<u8>,
 }
 
@@ -41,19 +35,21 @@ impl UdpBackend {
         address: SocketAddr,
         ssrc: u32,
         secret_key: [u8; 32],
-        mode_name: &str,
+        mode: &str,
     ) -> AnyResult<Self> {
-        let cipher = match mode_name {
+        let cipher = match mode {
             "aead_aes256_gcm_rtpsize" => {
-                ActiveCipher::Aes256Gcm(Aes256Gcm::new(&secret_key.into()))
+                ActiveCipher::Aes256Gcm(Box::new(Aes256Gcm::new(&secret_key.into())))
             }
-            _ => ActiveCipher::XSalsa20Poly1305(XSalsa20Poly1305::new(&secret_key.into())),
+            _ => {
+                ActiveCipher::XSalsa20Poly1305(Box::new(XSalsa20Poly1305::new(&secret_key.into())))
+            }
         };
 
         Ok(Self {
             socket,
-            ssrc,
             address,
+            ssrc,
             cipher,
             sequence: 0,
             timestamp: 0,
@@ -69,10 +65,9 @@ impl UdpBackend {
         let timestamp = self.timestamp;
         self.timestamp = self.timestamp.wrapping_add(RTP_TIMESTAMP_STEP);
 
-        self.nonce = self.nonce.wrapping_add(1);
-        let current_nonce = self.nonce;
+        let current_nonce = self.nonce.wrapping_add(1);
+        self.nonce = current_nonce;
 
-        // Build the 12-byte RTP header.
         let mut header = [0u8; 12];
         header[0] = RTP_VERSION_BYTE;
         header[1] = RTP_OPUS_PAYLOAD_TYPE;
@@ -86,28 +81,22 @@ impl UdpBackend {
 
         match &self.cipher {
             ActiveCipher::XSalsa20Poly1305(cipher) => {
-                // Discord voice: nonce = RTP header padded to 24 bytes.
                 let mut nonce = [0u8; 24];
                 nonce[0..12].copy_from_slice(&header);
 
                 let tag = cipher
                     .encrypt_in_place_detached(&nonce.into(), &header, &mut self.packet_buf[12..])
-                    .map_err(|e| map_boxed_err(format!("XSalsa20 encryption error: {e:?}")))?;
+                    .map_err(|e| map_boxed_err(format!("XSalsa20 error: {e:?}")))?;
 
                 self.packet_buf.extend_from_slice(&tag);
             }
             ActiveCipher::Aes256Gcm(cipher) => {
-                // Discord AES-GCM: 4-byte little-endian nonce counter in first 4 bytes.
-                let mut nonce_bytes = [0u8; 12];
-                nonce_bytes[0..4].copy_from_slice(&current_nonce.to_be_bytes());
+                let mut nonce = [0u8; 12];
+                nonce[0..4].copy_from_slice(&current_nonce.to_be_bytes());
 
                 let tag = cipher
-                    .encrypt_in_place_detached(
-                        &nonce_bytes.into(),
-                        &header,
-                        &mut self.packet_buf[12..],
-                    )
-                    .map_err(|e| map_boxed_err(format!("AES-GCM encryption error: {e:?}")))?;
+                    .encrypt_in_place_detached(&nonce.into(), &header, &mut self.packet_buf[12..])
+                    .map_err(|e| map_boxed_err(format!("AES-GCM error: {e:?}")))?;
 
                 self.packet_buf.extend_from_slice(&tag);
                 self.packet_buf

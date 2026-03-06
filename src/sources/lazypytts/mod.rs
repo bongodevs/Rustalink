@@ -7,7 +7,7 @@ use tracing::{debug, error};
 
 use crate::{
     audio::processor::{AudioProcessor, DecoderCommand},
-    configs::sources::LazyPyTtsConfig,
+    config::sources::LazyPyTtsConfig,
     protocol::tracks::{LoadError, LoadResult, Track, TrackInfo},
     sources::{
         http::reader::HttpReader,
@@ -182,7 +182,7 @@ struct LazyPyResponse {
 impl PlayableTrack for LazyPyTtsTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         flume::Receiver<crate::audio::buffer::PooledBuffer>,
         flume::Sender<DecoderCommand>,

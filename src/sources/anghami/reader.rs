@@ -1,13 +1,16 @@
 use crate::protocol::tracks::TrackInfo;
 
+/// Decodes a batch of songs from a Protobuf-encoded buffer.
 pub fn decode_song_batch(buf: &[u8]) -> Vec<(String, TrackInfo)> {
     let mut songs = Vec::new();
     let mut reader = ProtoReader::new(buf);
+
     while reader.has_more() {
         let tag = match reader.read_uint32() {
             Some(t) => t,
             None => break,
         };
+
         let field_no = tag >> 3;
         let wire_type = tag & 7;
 
@@ -16,11 +19,13 @@ pub fn decode_song_batch(buf: &[u8]) -> Vec<(String, TrackInfo)> {
                 let end = reader.pos + len as usize;
                 let mut key = String::new();
                 let mut song = None;
+
                 while reader.pos < end {
                     let map_tag = match reader.read_uint32() {
                         Some(t) => t,
                         None => break,
                     };
+
                     match map_tag >> 3 {
                         1 => key = reader.read_string().unwrap_or_default(),
                         2 => {
@@ -31,10 +36,11 @@ pub fn decode_song_batch(buf: &[u8]) -> Vec<(String, TrackInfo)> {
                         _ => reader.skip_type(map_tag & 7),
                     }
                 }
-                if !key.is_empty() {
-                    if let Some(s) = song {
-                        songs.push((key, s));
-                    }
+
+                if !key.is_empty()
+                    && let Some(s) = song
+                {
+                    songs.push((key, s));
                 }
             }
         } else {
@@ -44,6 +50,7 @@ pub fn decode_song_batch(buf: &[u8]) -> Vec<(String, TrackInfo)> {
     songs
 }
 
+/// Decodes an individual song from a Protobuf-encoded buffer.
 fn decode_song(buf: &[u8]) -> Option<TrackInfo> {
     let mut reader = ProtoReader::new(buf);
     let mut id = String::new();
@@ -57,8 +64,8 @@ fn decode_song(buf: &[u8]) -> Option<TrackInfo> {
             Some(t) => t,
             None => break,
         };
-        let field_no = tag >> 3;
-        match field_no {
+
+        match tag >> 3 {
             1 => id = reader.read_string().unwrap_or_default(),
             2 => title = reader.read_string().unwrap_or_default(),
             5 => artist = reader.read_string().unwrap_or_default(),
@@ -72,20 +79,14 @@ fn decode_song(buf: &[u8]) -> Option<TrackInfo> {
         return None;
     }
 
-    let artwork_url = if !cover_art.is_empty() {
-        Some(format!(
-            "https://artwork.anghcdn.co/?id={}&size=640",
-            cover_art
-        ))
-    } else {
-        None
-    };
+    let artwork_url = (!cover_art.is_empty())
+        .then(|| format!("https://artwork.anghcdn.co/?id={}&size=640", cover_art));
 
     Some(TrackInfo {
         identifier: id.clone(),
         is_seekable: true,
         author: if artist.is_empty() {
-            "Unknown Artist".to_string()
+            "Unknown Artist".to_owned()
         } else {
             artist
         },
@@ -96,10 +97,11 @@ fn decode_song(buf: &[u8]) -> Option<TrackInfo> {
         uri: Some(format!("https://play.anghami.com/song/{}", id)),
         artwork_url,
         isrc: None,
-        source_name: "anghami".to_string(),
+        source_name: "anghami".to_owned(),
     })
 }
 
+/// A lightweight Protobuf-compatible reader.
 struct ProtoReader<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -117,11 +119,12 @@ impl<'a> ProtoReader<'a> {
     fn read_uint32(&mut self) -> Option<u32> {
         let mut value = 0u32;
         let mut shift = 0;
+
         while self.pos < self.buf.len() {
             let b = self.buf[self.pos];
             self.pos += 1;
-            value |= ((b & 127) as u32) << shift;
-            if b < 128 {
+            value |= ((b & 0x7F) as u32) << shift;
+            if b < 0x80 {
                 return Some(value);
             }
             shift += 7;
@@ -137,7 +140,8 @@ impl<'a> ProtoReader<'a> {
         if self.pos + len > self.buf.len() {
             return None;
         }
-        let s = String::from_utf8_lossy(&self.buf[self.pos..self.pos + len]).to_string();
+
+        let s = String::from_utf8_lossy(&self.buf[self.pos..self.pos + len]).into_owned();
         self.pos += len;
         Some(s)
     }
@@ -146,6 +150,7 @@ impl<'a> ProtoReader<'a> {
         if self.pos + 4 > self.buf.len() {
             return None;
         }
+
         let mut b = [0u8; 4];
         b.copy_from_slice(&self.buf[self.pos..self.pos + 4]);
         self.pos += 4;
@@ -153,7 +158,7 @@ impl<'a> ProtoReader<'a> {
     }
 
     fn read_slice(&mut self, len: usize) -> &[u8] {
-        let end = std::cmp::min(self.pos + len, self.buf.len());
+        let end = (self.pos + len).min(self.buf.len());
         let slice = &self.buf[self.pos..end];
         self.pos = end;
         slice
@@ -162,19 +167,15 @@ impl<'a> ProtoReader<'a> {
     fn skip_type(&mut self, wire_type: u32) {
         match wire_type {
             0 => {
-                self.read_uint32();
+                let _ = self.read_uint32();
             }
-            1 => {
-                self.pos += 8;
-            }
+            1 => self.pos += 8,
             2 => {
                 if let Some(len) = self.read_uint32() {
                     self.pos += len as usize;
                 }
             }
-            5 => {
-                self.pos += 4;
-            }
+            5 => self.pos += 4,
             _ => {}
         }
     }

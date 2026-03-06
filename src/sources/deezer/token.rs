@@ -47,10 +47,10 @@ impl DeezerTokenTracker {
     pub async fn get_token_at(&self, index: usize) -> Option<DeezerTokens> {
         {
             let guard = self.tokens.lock().await;
-            if let Some(tokens) = &guard[index] {
-                if Instant::now() < tokens.expire_at {
-                    return Some(tokens.clone());
-                }
+            if let Some(tokens) = &guard[index]
+                && Instant::now() < tokens.expire_at
+            {
+                return Some(tokens.clone());
             }
         }
         self.refresh_session(index).await
@@ -63,17 +63,14 @@ impl DeezerTokenTracker {
 
     async fn refresh_session(&self, index: usize) -> Option<DeezerTokens> {
         let arl = &self.arls[index];
-        let initial_cookie = format!("arl={}", arl);
+        let initial_cookie = format!("arl={arl}");
         let url = "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData&input=3&api_version=1.0&api_token=";
-        let req = self.client.get(url).header("Cookie", &initial_cookie);
+        let req = self.client.get(url).header("Cookie", initial_cookie);
 
         let resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                error!(
-                    "DeezerTokenTracker: Failed to refresh session (index {}): {}",
-                    index, e
-                );
+                error!("DeezerTokenTracker: Failed to refresh session (index {index}): {e}");
                 return None;
             }
         };
@@ -83,8 +80,8 @@ impl DeezerTokenTracker {
 
         for cookie in resp.cookies() {
             match cookie.name() {
-                "sid" => session_id = cookie.value().to_string(),
-                "dzr_uniq_id" => dzr_uniq_id = cookie.value().to_string(),
+                "sid" => session_id = cookie.value().to_owned(),
+                "dzr_uniq_id" => dzr_uniq_id = cookie.value().to_owned(),
                 _ => {}
             }
         }
@@ -92,10 +89,7 @@ impl DeezerTokenTracker {
         let body: Value = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
-                error!(
-                    "DeezerTokenTracker: Failed to parse session response: {}",
-                    e
-                );
+                error!("DeezerTokenTracker: Failed to parse session response: {e}");
                 return None;
             }
         };
@@ -104,14 +98,15 @@ impl DeezerTokenTracker {
             .get("results")
             .and_then(|r| r.get("checkForm"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())?;
+            .map(|s| s.to_owned())?;
+
         let license_token = body
             .get("results")
             .and_then(|r| r.get("USER"))
             .and_then(|u| u.get("OPTIONS"))
             .and_then(|o| o.get("license_token"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(|s| s.to_owned())
             .unwrap_or_default();
 
         let tokens = DeezerTokens {
@@ -128,7 +123,7 @@ impl DeezerTokenTracker {
             guard[index] = Some(tokens.clone());
         }
 
-        debug!("DeezerTokenTracker: Refreshed tokens for index {}", index);
+        debug!("DeezerTokenTracker: Refreshed tokens for index {index}");
         Some(tokens)
     }
 }

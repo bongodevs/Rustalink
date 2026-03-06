@@ -51,16 +51,18 @@ impl WebEmbeddedClient {
         _oauth: &Arc<YouTubeOAuth>,
     ) -> AnyResult<Value> {
         crate::sources::youtube::clients::common::make_player_request(
-            &self.http,
-            &self.config(),
-            video_id,
-            None,
-            visitor_data,
-            signature_timestamp,
-            None,
-            Some("https://www.youtube.com"),
-            None,
-            None,
+            crate::sources::youtube::clients::common::PlayerRequestOptions {
+                http: &self.http,
+                config: &self.config(),
+                video_id,
+                params: None,
+                visitor_data,
+                signature_timestamp,
+                auth_header: None,
+                referer: Some("https://www.youtube.com"),
+                origin: None,
+                po_token: None,
+            },
         )
         .await
     }

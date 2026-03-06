@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::common::utils::now_ms;
+
 /// Exception severity levels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,29 +31,27 @@ pub struct RustalinkError {
 }
 
 impl RustalinkError {
-    #[allow(dead_code)]
+    /// Creates a 400 Bad Request error.
     pub fn bad_request(message: impl Into<String>, path: impl Into<String>) -> Self {
-        Self {
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-            status: 400,
-            error: "Bad Request".into(),
-            message: message.into(),
-            path: path.into(),
-            trace: None,
-        }
+        Self::new(400, "Bad Request", message, path)
     }
 
+    /// Creates a 404 Not Found error.
     pub fn not_found(message: impl Into<String>, path: impl Into<String>) -> Self {
+        Self::new(404, "Not Found", message, path)
+    }
+
+    /// Creates a generic error response.
+    pub fn new(
+        status: u16,
+        error: impl Into<String>,
+        message: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
         Self {
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-            status: 404,
-            error: "Not Found".into(),
+            timestamp: now_ms(),
+            status,
+            error: error.into(),
             message: message.into(),
             path: path.into(),
             trace: None,

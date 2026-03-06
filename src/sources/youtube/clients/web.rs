@@ -15,7 +15,6 @@ use crate::{
         clients::common::ClientConfig,
         extractor::{extract_from_player, extract_track, find_section_list},
         oauth::YouTubeOAuth,
-        sabr::{SabrConfig, fetch_sabr_config},
     },
 };
 
@@ -74,70 +73,20 @@ impl WebClient {
         po_token: Option<&str>,
     ) -> AnyResult<Value> {
         crate::sources::youtube::clients::common::make_player_request(
-            &self.http,
-            &self.config(),
-            video_id,
-            None,
-            visitor_data,
-            signature_timestamp,
-            None,
-            None,
-            None,
-            po_token,
+            crate::sources::youtube::clients::common::PlayerRequestOptions {
+                http: &self.http,
+                config: &self.config(),
+                video_id,
+                params: None,
+                visitor_data,
+                signature_timestamp,
+                auth_header: None,
+                referer: None,
+                origin: None,
+                po_token,
+            },
         )
         .await
-    }
-
-    // Fetch a `SabrConfig` for the given video from the player API.
-    // Returns `None` if the player response has no SABR URL (e.g. restricted video).
-    pub async fn get_sabr_config(
-        &self,
-        video_id: &str,
-        visitor_data: Option<&str>,
-        signature_timestamp: Option<u32>,
-        cipher: &YouTubeCipherManager,
-        start_time_ms: u64,
-    ) -> Option<SabrConfig> {
-        let mut cfg = fetch_sabr_config(
-            &self.http,
-            video_id,
-            visitor_data,
-            None, // po_token — fetched from yt-cipher if url is set
-            signature_timestamp,
-            CLIENT_ID.parse().unwrap_or(1),
-            CLIENT_NAME,
-            CLIENT_VERSION,
-            USER_AGENT,
-            self.yt_cipher_url.as_deref(),
-            self.yt_cipher_token.as_deref(),
-        )
-        .await?;
-
-        // : resolve the n-param on serverAbrStreamingUrl via cipher service
-        // (Web.js lines 312-328: cipherManager.resolveUrl(serverAbrUrl, ...))
-        match cipher
-            .resolve_url(&cfg.server_abr_url, "", None, None)
-            .await
-        {
-            Ok(resolved) => {
-                tracing::debug!(
-                    "SABR player[{}]: resolved serverAbrStreamingUrl n-param",
-                    video_id
-                );
-                cfg.server_abr_url = resolved;
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "SABR player[{}]: failed to resolve n-param on SABR URL: {} — using raw URL",
-                    video_id,
-                    e
-                );
-                // Continue with unresolved URL (will 403 if n-param encrypted)
-            }
-        }
-
-        cfg.start_time_ms = start_time_ms;
-        Some(cfg)
     }
 }
 
@@ -200,18 +149,18 @@ impl YouTubeClient for WebClient {
         let response: Value = res.json().await?;
         let mut tracks = Vec::new();
 
-        if let Some(section_list) = find_section_list(&response) {
-            if let Some(contents) = section_list.get("contents").and_then(|c| c.as_array()) {
-                for section in contents {
-                    if let Some(items) = section
-                        .get("itemSectionRenderer")
-                        .and_then(|i| i.get("contents"))
-                        .and_then(|c| c.as_array())
-                    {
-                        for item in items {
-                            if let Some(track) = extract_track(item, "youtube") {
-                                tracks.push(track);
-                            }
+        if let Some(section_list) = find_section_list(&response)
+            && let Some(contents) = section_list.get("contents").and_then(|c| c.as_array())
+        {
+            for section in contents {
+                if let Some(items) = section
+                    .get("itemSectionRenderer")
+                    .and_then(|i| i.get("contents"))
+                    .and_then(|c| c.as_array())
+                {
+                    for item in items {
+                        if let Some(track) = extract_track(item, "youtube") {
+                            tracks.push(track);
                         }
                     }
                 }
@@ -403,23 +352,5 @@ impl YouTubeClient for WebClient {
             track_id
         );
         Ok(None)
-    }
-
-    async fn get_sabr_config(
-        &self,
-        track_id: &str,
-        visitor_data: Option<&str>,
-        signature_timestamp: Option<u32>,
-        cipher_manager: std::sync::Arc<YouTubeCipherManager>,
-        start_time_ms: u64,
-    ) -> Option<crate::sources::youtube::sabr::SabrConfig> {
-        self.get_sabr_config(
-            track_id,
-            visitor_data,
-            signature_timestamp,
-            &cipher_manager,
-            start_time_ms,
-        )
-        .await
     }
 }

@@ -1,11 +1,10 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
-use regex::Regex;
 use serde_json::Value;
-use tokio::sync::RwLock;
 
-use super::LyricsProvider;
+use super::{
+    LyricsProvider,
+    utils::{self, TokenManager},
+};
 use crate::protocol::{
     models::{LyricsData, LyricsLine},
     tracks::TrackInfo,
@@ -13,89 +12,44 @@ use crate::protocol::{
 
 const APP_ID: &str = "web-desktop-app-v1.0";
 const TOKEN_TTL: u64 = 55_000;
-const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
 const DEFAULT_COOKIE: &str =
     "AWSELB=unknown; x-mxm-user-id=undefined; x-mxm-token-guid=undefined; mxm-encrypted-token=";
 
+#[derive(Default)]
 pub struct MusixmatchProvider {
     client: reqwest::Client,
-    token: Arc<RwLock<Option<(String, u64)>>>,
+    token_manager: TokenManager,
     guid: String,
 }
 
 impl MusixmatchProvider {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent(DEFAULT_UA)
-                .build()
-                .unwrap_or_default(),
-            token: Arc::new(RwLock::new(None)),
-            guid: uuid::Uuid::new_v4().to_string(),
+            token_manager: TokenManager::new(TOKEN_TTL),
+            ..Self::default()
         }
     }
 
     async fn get_token(&self) -> Option<String> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        self.token_manager
+            .get_token(|| async {
+                let resp = self
+                    .client
+                    .get("https://apic-desktop.musixmatch.com/ws/1.1/token.get")
+                    .query(&[("app_id", APP_ID)])
+                    .header("Cookie", DEFAULT_COOKIE)
+                    .send()
+                    .await
+                    .ok()?;
 
-        {
-            let lock = self.token.read().await;
-            if let Some((token, expiry)) = &*lock {
-                if now < *expiry {
-                    return Some(token.clone());
-                }
-            }
-        }
-
-        let mut lock = self.token.write().await;
-        // Double check
-        if let Some((token, expiry)) = &*lock {
-            if now < *expiry {
-                return Some(token.clone());
-            }
-        }
-
-        let resp = self
-            .client
-            .get("https://apic-desktop.musixmatch.com/ws/1.1/token.get")
-            .query(&[("app_id", APP_ID)])
-            .header("Cookie", DEFAULT_COOKIE)
-            .send()
+                let body: Value = resp.json().await.ok()?;
+                body.get("message")?
+                    .get("body")?
+                    .get("user_token")?
+                    .as_str()
+                    .map(|s| s.to_string())
+            })
             .await
-            .ok()?;
-
-        let body: Value = resp.json().await.ok()?;
-        let token = body
-            .get("message")?
-            .get("body")?
-            .get("user_token")?
-            .as_str()?
-            .to_string();
-
-        *lock = Some((token.clone(), now + TOKEN_TTL));
-        Some(token)
-    }
-
-    fn clean_title(title: &str) -> String {
-        let patterns = [
-            r#"(?i)\s*\([^)]*(?:official|lyrics?|video|audio|mv|visualizer|color\s*coded|hd|4k|prod\.)[^)]*\)"#,
-            r#"(?i)\s*\[[^\]]*(?:official|lyrics?|video|audio|mv|visualizer|color\s*coded|hd|4k|prod\.)[^\]]*\]"#,
-            r#"(?i)\s*[([]\s*(?:ft\.?|feat\.?|featuring)\s+[^)\]]+[)\]]"#,
-            r#"(?i)\s*-\s*Topic$"#,
-            r#"(?i)VEVO$"#,
-            r#"(?i)\s*[(\[]\s*Remastered\s*[\)\]]"#,
-        ];
-
-        let mut result = title.to_string();
-        for pattern in patterns {
-            if let Ok(re) = Regex::new(pattern) {
-                result = re.replace_all(&result, "").to_string();
-            }
-        }
-        result.trim().to_string()
     }
 
     fn parse_subtitles(&self, sub_json_str: &str) -> Option<Vec<LyricsLine>> {
@@ -136,7 +90,7 @@ impl LyricsProvider for MusixmatchProvider {
 
     async fn load_lyrics(&self, track: &TrackInfo) -> Option<LyricsData> {
         let token = self.get_token().await?;
-        let title = Self::clean_title(&track.title);
+        let title = utils::clean_text(&track.title);
         let artist = &track.author;
 
         let query_params = [
@@ -268,25 +222,21 @@ impl LyricsProvider for MusixmatchProvider {
             .get("lyrics_body")?
             .as_str()?;
 
-        let subtitles_body = calls
-            .get("track.subtitles.get")?
-            .get("message")?
-            .get("body")?
-            .get("subtitle_list")?
-            .as_array()?
-            .get(0)?
-            .get("subtitle")?
-            .get("subtitle_body")?
-            .as_str();
+        let subtitles_body = message
+            .pointer("/body/macro_calls/track.subtitles.get/message/body/subtitle_list")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|f| f.pointer("/subtitle/subtitle_body"))
+            .and_then(|b| b.as_str());
 
         let mut lines = Vec::new();
         let mut synced = false;
 
-        if let Some(sub_json_str) = subtitles_body {
-            if let Some(parsed_lines) = self.parse_subtitles(sub_json_str) {
-                lines = parsed_lines;
-                synced = true;
-            }
+        if let Some(sub_json_str) = subtitles_body
+            && let Some(parsed_lines) = self.parse_subtitles(sub_json_str)
+        {
+            lines = parsed_lines;
+            synced = true;
         }
 
         if !synced {

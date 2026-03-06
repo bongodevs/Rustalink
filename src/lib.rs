@@ -1,12 +1,13 @@
 pub mod audio;
 pub mod common;
-pub mod configs;
+pub mod config;
 pub mod gateway;
 pub mod lyrics;
 pub mod monitoring;
 pub mod player;
 pub mod protocol;
+pub mod rest;
 pub mod routeplanner;
 pub mod server;
 pub mod sources;
-pub mod transport;
+pub mod ws;

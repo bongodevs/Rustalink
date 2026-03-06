@@ -1,6 +1,5 @@
 use std::f64::consts::PI;
 
-/// Biquad filter coefficients (normalized by a0).
 #[derive(Clone)]
 pub struct BiquadCoeffs {
     pub b0: f64,
@@ -10,7 +9,6 @@ pub struct BiquadCoeffs {
     pub a2: f64,
 }
 
-/// Per-channel biquad filter state (Direct Form I).
 #[derive(Clone, Default)]
 pub struct BiquadState {
     pub x1: f64,
@@ -20,7 +18,6 @@ pub struct BiquadState {
 }
 
 impl BiquadCoeffs {
-    /// Bandpass filter for equalizer bands.
     pub fn bandpass(freq: f64, q: f64, sample_rate: f64) -> Self {
         let omega0 = 2.0 * PI * freq / sample_rate;
         let sin_omega0 = omega0.sin();
@@ -75,7 +72,6 @@ impl BiquadCoeffs {
 }
 
 impl BiquadState {
-    /// Process one sample through the biquad filter.
     pub fn process(&mut self, input: f64, coeffs: &BiquadCoeffs) -> f64 {
         let output = coeffs.b0 * input + coeffs.b1 * self.x1 + coeffs.b2 * self.x2
             - coeffs.a1 * self.y1

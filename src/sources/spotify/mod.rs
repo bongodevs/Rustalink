@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -15,13 +15,32 @@ pub mod recommendations;
 pub mod search;
 pub mod token;
 
+fn url_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r"https?://(?:open\.)?spotify\.com/(?:intl-[a-z]{2}/)?(track|album|playlist|artist)/([a-zA-Z0-9]+)",
+        ).expect("spotify URL regex is a valid literal")
+    })
+}
+
+fn mix_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"mix:(album|artist|track|isrc):([a-zA-Z0-9\-_]+)")
+            .expect("spotify mix regex is a valid literal")
+    })
+}
+
+fn isrc_binary_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"[A-Z0-9]{12}").expect("spotify ISRC binary regex is a valid literal")
+    })
+}
+
 pub struct SpotifySource {
     client: Arc<reqwest::Client>,
-    search_prefixes: Vec<String>,
-    rec_prefixes: Vec<String>,
-    url_regex: Regex,
-    mix_regex: Regex,
-    isrc_binary_regex: Arc<Regex>,
     token_tracker: Arc<SpotifyTokenTracker>,
 
     playlist_load_limit: usize,
@@ -36,7 +55,7 @@ pub struct SpotifySource {
 
 impl SpotifySource {
     pub fn new(
-        config: Option<crate::configs::SpotifyConfig>,
+        config: Option<crate::config::SpotifyConfig>,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         let (
@@ -65,23 +84,16 @@ impl SpotifySource {
         token_tracker.clone().init();
 
         Ok(Self {
-      client,
-      search_prefixes: vec!["spsearch:".to_string()],
-      rec_prefixes: vec!["sprec:".to_string()],
-      url_regex: Regex::new(
-        r"https?://(?:open\.)?spotify\.com/(?:intl-[a-z]{2}/)?(track|album|playlist|artist)/([a-zA-Z0-9]+)",
-      ).unwrap(),
-      mix_regex: Regex::new(r"mix:(album|artist|track|isrc):([a-zA-Z0-9\-_]+)").unwrap(),
-      isrc_binary_regex: Arc::new(Regex::new(r"[A-Z0-9]{12}").unwrap()),
-      token_tracker,
-      playlist_load_limit,
-      album_load_limit,
-      search_limit,
-      recommendations_limit,
-      playlist_page_load_concurrency,
-      album_page_load_concurrency,
-      track_resolve_concurrency,
-    })
+            client,
+            token_tracker,
+            playlist_load_limit,
+            album_load_limit,
+            search_limit,
+            recommendations_limit,
+            playlist_page_load_concurrency,
+            album_page_load_concurrency,
+            track_resolve_concurrency,
+        })
     }
 
     pub async fn get_autocomplete(
@@ -95,7 +107,7 @@ impl SpotifySource {
             query,
             types,
             self.search_limit,
-            &self.isrc_binary_regex,
+            isrc_binary_regex(),
         )
         .await
     }
@@ -112,19 +124,26 @@ impl SourcePlugin for SpotifySource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
+        self.search_prefixes()
             .iter()
             .any(|p| identifier.starts_with(p))
-            || self.rec_prefixes.iter().any(|p| identifier.starts_with(p))
-            || self.url_regex.is_match(identifier)
+            || self
+                .rec_prefixes()
+                .iter()
+                .any(|p| identifier.starts_with(p))
+            || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["spsearch:"]
     }
 
     fn is_mirror(&self) -> bool {
         true
+    }
+
+    fn rec_prefixes(&self) -> Vec<&str> {
+        vec!["sprec:"]
     }
 
     async fn load(
@@ -133,12 +152,12 @@ impl SourcePlugin for SpotifySource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             let query = &identifier[prefix.len()..];
-            return match self.get_autocomplete(query, &["track".to_string()]).await {
+            return match self.get_autocomplete(query, &["track".to_owned()]).await {
                 Some(res) => {
                     if res.tracks.is_empty() {
                         LoadResult::Empty {}
@@ -151,19 +170,19 @@ impl SourcePlugin for SpotifySource {
         }
 
         if let Some(prefix) = self
-            .rec_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .rec_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             let query = &identifier[prefix.len()..];
             return match recommendations::SpotifyRecommendations::fetch_recommendations(
                 &self.client,
                 &self.token_tracker,
                 query,
-                &self.mix_regex,
+                mix_regex(),
                 self.recommendations_limit,
                 self.search_limit,
-                &self.isrc_binary_regex,
+                isrc_binary_regex(),
             )
             .await
             {
@@ -176,14 +195,14 @@ impl SourcePlugin for SpotifySource {
                         self.playlist_load_limit,
                         self.playlist_page_load_concurrency,
                         self.track_resolve_concurrency,
-                        &self.isrc_binary_regex,
+                        isrc_binary_regex(),
                     )
                     .await
                 }
             };
         }
 
-        if let Some(caps) = self.url_regex.captures(identifier) {
+        if let Some(caps) = url_regex().captures(identifier) {
             let type_str = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let id = caps.get(2).map(|m| m.as_str()).unwrap_or("");
 
@@ -193,7 +212,7 @@ impl SourcePlugin for SpotifySource {
                         &self.client,
                         &self.token_tracker,
                         id,
-                        &self.isrc_binary_regex,
+                        isrc_binary_regex(),
                     )
                     .await
                     {
@@ -208,7 +227,7 @@ impl SourcePlugin for SpotifySource {
                         self.album_load_limit,
                         self.album_page_load_concurrency,
                         self.track_resolve_concurrency,
-                        &self.isrc_binary_regex,
+                        isrc_binary_regex(),
                     )
                     .await;
                 }
@@ -220,7 +239,7 @@ impl SourcePlugin for SpotifySource {
                         self.playlist_load_limit,
                         self.playlist_page_load_concurrency,
                         self.track_resolve_concurrency,
-                        &self.isrc_binary_regex,
+                        isrc_binary_regex(),
                     )
                     .await;
                 }
@@ -229,7 +248,7 @@ impl SourcePlugin for SpotifySource {
                         &self.client,
                         &self.token_tracker,
                         id,
-                        &self.isrc_binary_regex,
+                        isrc_binary_regex(),
                     )
                     .await;
                 }
@@ -247,7 +266,7 @@ impl SourcePlugin for SpotifySource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<crate::protocol::tracks::SearchResult> {
         let mut q = query;
-        for prefix in &self.search_prefixes {
+        for prefix in self.search_prefixes() {
             if q.starts_with(prefix) {
                 q = &q[prefix.len()..];
                 break;

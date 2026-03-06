@@ -34,7 +34,6 @@ impl HighPassFilter {
         let fc = self.cutoff_frequency as f64;
         let q = 0.7071067811865475; // 1 / sqrt(2)
 
-        // standard biquad highpass
         let w0 = 2.0 * std::f64::consts::PI * (fc / fs);
         let cos_w0 = w0.cos();
         let sin_w0 = w0.sin();
@@ -71,7 +70,6 @@ impl AudioFilter for HighPassFilter {
 
         let boost_factor_f32 = self.boost_factor;
 
-        // Process interleaved stereo
         for chunk in samples.chunks_exact_mut(2) {
             let left_in = chunk[0] as f32;
             let right_in = chunk[1] as f32;

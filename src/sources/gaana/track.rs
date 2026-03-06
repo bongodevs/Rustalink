@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::{
     audio::processor::{AudioProcessor, DecoderCommand},
-    configs::HttpProxyConfig,
+    config::HttpProxyConfig,
     sources::{gaana::crypto::decrypt_stream_path, plugin::PlayableTrack},
 };
 
@@ -20,7 +20,7 @@ pub struct GaanaTrack {
 impl PlayableTrack for GaanaTrack {
     fn start_decoding(
         &self,
-        config: crate::configs::player::PlayerConfig,
+        config: crate::config::player::PlayerConfig,
     ) -> (
         Receiver<crate::audio::buffer::PooledBuffer>,
         Sender<DecoderCommand>,
@@ -43,28 +43,27 @@ impl PlayableTrack for GaanaTrack {
         std::thread::spawn(move || {
             let _guard = handle.enter();
             let track_id_for_log = track_id.clone();
+
             let hls_url = handle.block_on(async move {
                 fetch_stream_url_internal(&client, &track_id, &quality).await
             });
 
             if let Some(url) = hls_url {
-                let reader = if url.contains(".m3u8") || url.contains("/api/manifest/hls_") {
+                let is_plugin_hls = url.contains(".m3u8") || url.contains("/api/manifest/hls_");
+
+                let reader = if is_plugin_hls {
                     crate::sources::youtube::hls::HlsReader::new(
-                        &url,
-                        local_addr,
-                        None,
-                        None,
-                        proxy.clone(),
+                        &url, local_addr, None, None, proxy,
                     )
                     .ok()
                     .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
                 } else {
-                    super::reader::GaanaReader::new(&url, local_addr, proxy.clone())
+                    super::reader::GaanaReader::new(&url, local_addr, proxy)
                         .ok()
                         .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
                 };
 
-                let kind = if url.contains(".m3u8") || url.contains("/api/manifest/hls_") {
+                let kind = if is_plugin_hls {
                     Some(crate::common::types::AudioFormat::Aac)
                 } else {
                     std::path::Path::new(&url)
@@ -80,26 +79,23 @@ impl PlayableTrack for GaanaTrack {
                         tx,
                         cmd_rx,
                         Some(err_tx.clone()),
-                        config.clone(),
+                        config,
                     ) {
                         Ok(mut processor) => {
                             if let Err(e) = processor.run() {
-                                tracing::error!("GaanaTrack audio processor error: {}", e);
+                                tracing::error!("GaanaTrack audio processor error: {e}");
                             }
                         }
                         Err(e) => {
-                            tracing::error!("GaanaTrack failed to initialize processor: {}", e);
-                            let _ = err_tx.send(format!("Failed to initialize processor: {}", e));
+                            tracing::error!("GaanaTrack failed to initialize processor: {e}");
+                            let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
                         }
                     }
                 } else {
-                    tracing::error!("GaanaTrack failed to create reader for {}", url);
+                    tracing::error!("GaanaTrack: Failed to create reader for {url}");
                 }
             } else {
-                warn!(
-                    "GaanaTrack: Failed to fetch stream URL for {}",
-                    track_id_for_log
-                );
+                warn!("GaanaTrack: Failed to fetch stream URL for {track_id_for_log}");
             }
         });
 
@@ -134,9 +130,8 @@ async fn fetch_stream_url_internal(
         return None;
     }
 
-    let data: serde_json::Value = resp.json::<serde_json::Value>().await.ok()?;
-    let data_obj = data.get("data")?;
-    let encrypted_path = data_obj.get("stream_path")?.as_str()?;
+    let data: serde_json::Value = resp.json().await.ok()?;
+    let encrypted_path = data.get("data")?.get("stream_path")?.as_str()?;
 
     decrypt_stream_path(encrypted_path)
 }

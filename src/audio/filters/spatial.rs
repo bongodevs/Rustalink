@@ -28,7 +28,7 @@ impl SpatialFilter {
     pub fn update(&mut self, rate: f32, depth: f32) {
         self.rate = rate;
         self.depth = depth.clamp(0.0, 1.0);
-        self.lfo.update(self.rate.into(), 1.0);
+        self.lfo.update(self.rate as f64, 1.0);
     }
 }
 
@@ -52,8 +52,8 @@ impl AudioFilter for SpatialFilter {
             let delay_time_l = (5.0 + lfo_value * 2.0) * (fs / 1000.0);
             let delay_time_r = (5.0 - lfo_value * 2.0) * (fs / 1000.0);
 
-            let delayed_left = self.left_delay.read(delay_time_l.into());
-            let delayed_right = self.right_delay.read(delay_time_r.into());
+            let delayed_left = self.left_delay.read(delay_time_l);
+            let delayed_right = self.right_delay.read(delay_time_r);
 
             self.left_delay
                 .write((left_in + delayed_left * feedback).clamp(i16::MIN as f32, i16::MAX as f32));

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -19,43 +19,42 @@ const ENDPOINT_DETAILS: &str = "/api/v4/catalog/getDetails";
 const ENDPOINT_PLAYLIST_TRACKS: &str = "/api/v7/playlists/getTracks";
 const ENDPOINT_ARTIST_ALL_TRACKS: &str = "/api/v4/catalog/getAllArtistTracksWithCollaborations";
 
+fn url_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"https?://(?:www\.)?pandora\.com/(?:playlist/(?P<id>PL:[\d:]+)|artist/(?:[\w\-]+/)*(?P<id2>(?:TR|AL|AR)[A-Za-z0-9]+))").unwrap()
+    })
+}
+
 pub struct PandoraSource {
     client: Arc<reqwest::Client>,
     token_tracker: Arc<PandoraTokenTracker>,
-    url_regex: Regex,
-    search_prefixes: Vec<String>,
-    rec_prefixes: Vec<String>,
     search_limit: usize,
 }
 
 impl PandoraSource {
     pub fn new(
-        config: Option<crate::configs::PandoraConfig>,
+        config: Option<crate::config::PandoraConfig>,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
-        let (s_limit, csrf_override) = if let Some(c) = config {
-            (c.search_limit, c.csrf_token)
-        } else {
-            (10, None)
-        };
+        let (s_limit, csrf_override) = config
+            .map(|c| (c.search_limit, c.csrf_token))
+            .unwrap_or((10, None));
 
         let token_tracker = Arc::new(PandoraTokenTracker::new(client.clone(), csrf_override));
         token_tracker.clone().init();
 
         Ok(Self {
-      client,
-      token_tracker,
-      url_regex: Regex::new(r"https?://(?:www\.)?pandora\.com/(?:playlist/(?P<id>PL:[\d:]+)|artist/(?:[\w\-]+/)*(?P<id2>(?:TR|AL|AR)[A-Za-z0-9]+))").unwrap(),
-      search_prefixes: vec!["pdsearch:".to_string()],
-      rec_prefixes: vec!["pdrec:".to_string()],
-      search_limit: s_limit,
-    })
+            client,
+            token_tracker,
+            search_limit: s_limit,
+        })
     }
 
     async fn api_request(&self, path: &str, body: Value) -> Option<Value> {
         for is_retry in [false, true] {
             let tokens = self.token_tracker.get_tokens().await?;
-            let url = format!("{}{}", BASE_URL, path);
+            let url = format!("{BASE_URL}{path}");
 
             let resp = match self
                 .base_request(self.client.post(&url))
@@ -71,16 +70,13 @@ impl PandoraSource {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("Pandora API request error for {}: {}", path, e);
+                    warn!("Pandora API request error for {path}: {e}");
                     return None;
                 }
             };
 
             let status = resp.status();
-            let body_res: Value = match resp.json::<Value>().await {
-                Ok(j) => j,
-                Err(_) => return None,
-            };
+            let body_res: Value = resp.json::<Value>().await.ok()?;
 
             let error_code = body_res
                 .get("errorCode")
@@ -99,16 +95,14 @@ impl PandoraSource {
                     && (error_code == 1001 || error_string.contains("could not be validated"))
                 {
                     debug!(
-                        "Auth token error (code: {}, message: {}), refreshing...",
-                        error_code, error_string
+                        "Auth token error (code: {error_code}, message: {error_string}), refreshing..."
                     );
                     self.token_tracker.force_refresh().await;
                     continue;
                 }
 
                 warn!(
-                    "Pandora API error for {}: status {}, code {}, message {}",
-                    path, status, error_code, error_string
+                    "Pandora API error for {path}: status {status}, code {error_code}, message {error_string}"
                 );
                 return None;
             }
@@ -119,17 +113,15 @@ impl PandoraSource {
     }
 
     fn get_artwork_url(&self, node: &Value) -> Option<String> {
-        if let Some(icon) = node.get("icon").filter(|v| !v.is_null()) {
-            if let Some(art_id) = icon
+        if let Some(icon) = node.get("icon").filter(|v| !v.is_null())
+            && let Some(art_id) = icon
                 .get("artId")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
-            {
-                return Some(format!(
-                    "https://content-images.p-cdn.com/{}_1080W_1080H.jpg",
-                    art_id
-                ));
-            }
+        {
+            return Some(format!(
+                "https://content-images.p-cdn.com/{art_id}_1080W_1080H.jpg"
+            ));
         }
 
         if let Some(thor_layers) = node
@@ -137,16 +129,14 @@ impl PandoraSource {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
         {
-            if thor_layers.starts_with("_;grid") {
-                let encoded = urlencoding::encode(thor_layers);
+            if let Some(grid) = thor_layers.strip_prefix("_;grid") {
+                let encoded = urlencoding::encode(grid);
                 return Some(format!(
-                    "https://dyn-images.p-cdn.com/?l={}&w=1080&h=1080",
-                    encoded
+                    "https://dyn-images.p-cdn.com/?l=_;grid{encoded}&w=1080&h=1080"
                 ));
             }
             return Some(format!(
-                "https://content-images.p-cdn.com/{}_1080W_1080H.jpg",
-                thor_layers
+                "https://content-images.p-cdn.com/{thor_layers}_1080W_1080H.jpg"
             ));
         }
 
@@ -158,18 +148,17 @@ impl PandoraSource {
         let author = track
             .get("artistName")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+            .unwrap_or("Unknown Artist");
         let duration = track.get("duration").and_then(|v| v.as_i64()).unwrap_or(0) * 1000;
         if duration == 0 {
             return None;
         }
 
         let id = track.get("pandoraId").and_then(|v| v.as_str())?;
-        let url_path = track.get("shareableUrlPath").and_then(|v| v.as_str());
         let isrc = track
             .get("isrc")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
         let album_id = track.get("albumId").and_then(|v| v.as_str()).unwrap_or("");
         let album = annotations.get(album_id).filter(|v| !v.is_null());
@@ -185,19 +174,22 @@ impl PandoraSource {
             .and_then(|v| v.as_str());
         let artist_artwork_url = artist.and_then(|v| self.get_artwork_url(v));
 
-        let original_url = url_path.map(|p| format!("{}{}", BASE_URL, p));
+        let original_url = track
+            .get("shareableUrlPath")
+            .and_then(|v| v.as_str())
+            .map(|p| format!("{BASE_URL}{p}"));
         let artwork_url = self.get_artwork_url(track);
 
         let info = TrackInfo {
-            title: title.to_string(),
-            author: author.to_string(),
+            title: title.to_owned(),
+            author: author.to_owned(),
             length: duration as u64,
-            identifier: id.to_string(),
+            identifier: id.to_owned(),
             is_stream: false,
             uri: original_url,
             artwork_url,
             isrc,
-            source_name: "pandora".to_string(),
+            source_name: "pandora".to_owned(),
             is_seekable: true,
             position: 0,
         };
@@ -205,8 +197,8 @@ impl PandoraSource {
         let mut t = Track::new(info);
         t.plugin_info = json!({
             "albumName": album_name,
-            "albumUrl": album_url.map(|p| format!("{}{}", BASE_URL, p)),
-            "artistUrl": artist_url.map(|p| format!("{}{}", BASE_URL, p)),
+            "albumUrl": album_url.map(|p| format!("{BASE_URL}{p}")),
+            "artistUrl": artist_url.map(|p| format!("{BASE_URL}{p}")),
             "artistArtworkUrl": artist_artwork_url,
             "previewUrl": null,
             "isPreview": false
@@ -221,15 +213,15 @@ impl PandoraSource {
     fn find_by_url_suffix(&self, tail: &str, annotations: &Value) -> Value {
         if let Some(obj) = annotations.as_object() {
             for value in obj.values() {
-                if let Some(path) = value.get("shareableUrlPath").and_then(|v| v.as_str()) {
-                    if path.ends_with(&format!("/{}", tail)) {
-                        return value.clone();
-                    }
+                if let Some(path) = value.get("shareableUrlPath").and_then(|v| v.as_str())
+                    && path.ends_with(&format!("/{}", tail))
+                {
+                    return value.clone();
                 }
-                if let Some(slug) = value.get("slugPlusPandoraId").and_then(|v| v.as_str()) {
-                    if slug.ends_with(tail) || slug.contains(tail) {
-                        return value.clone();
-                    }
+                if let Some(slug) = value.get("slugPlusPandoraId").and_then(|v| v.as_str())
+                    && (slug.ends_with(tail) || slug.contains(tail))
+                {
+                    return value.clone();
                 }
             }
         }
@@ -250,11 +242,9 @@ impl PandoraSource {
             return LoadResult::Empty {};
         }
 
-        if let Some(t) = self.map_track(&track, annotations) {
-            LoadResult::Track(t)
-        } else {
-            LoadResult::Empty {}
-        }
+        self.map_track(&track, annotations)
+            .map(LoadResult::Track)
+            .unwrap_or(LoadResult::Empty {})
     }
 
     async fn get_album(&self, id: &str) -> LoadResult {
@@ -279,10 +269,10 @@ impl PandoraSource {
         if let Some(track_ids) = album_node.get("tracks").and_then(|v| v.as_array()) {
             for tid in track_ids.iter().filter_map(|v| v.as_str()) {
                 let t_node = annotations.get(tid).unwrap_or(&Value::Null);
-                if !t_node.is_null() {
-                    if let Some(t) = self.map_track(t_node, annotations) {
-                        tracks.push(t);
-                    }
+                if !t_node.is_null()
+                    && let Some(t) = self.map_track(t_node, annotations)
+                {
+                    tracks.push(t);
                 }
             }
         }
@@ -290,12 +280,12 @@ impl PandoraSource {
         let url = album_node
             .get("shareableUrlPath")
             .and_then(|v| v.as_str())
-            .map(|p| format!("{}{}", BASE_URL, p));
+            .map(|p| format!("{BASE_URL}{p}"));
         let artwork = self.get_artwork_url(&album_node);
 
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: name.to_string(),
+                name: name.to_owned(),
                 selected_track: -1,
             },
             plugin_info: json!({
@@ -336,10 +326,10 @@ impl PandoraSource {
         if let Some(ids) = top_tracks {
             for tid in ids.iter().filter_map(|v| v.as_str()) {
                 let t_node = annotations.get(tid).unwrap_or(&Value::Null);
-                if !t_node.is_null() {
-                    if let Some(t) = self.map_track(t_node, annotations) {
-                        tracks.push(t);
-                    }
+                if !t_node.is_null()
+                    && let Some(t) = self.map_track(t_node, annotations)
+                {
+                    tracks.push(t);
                 }
             }
         }
@@ -347,12 +337,12 @@ impl PandoraSource {
         let url = artist_node
             .get("shareableUrlPath")
             .and_then(|v| v.as_str())
-            .map(|p| format!("{}{}", BASE_URL, p));
+            .map(|p| format!("{BASE_URL}{p}"));
         let artwork = self.get_artwork_url(&artist_node);
 
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: format!("{}'s Top Tracks", name),
+                name: format!("{name}'s Top Tracks"),
                 selected_track: -1,
             },
             plugin_info: json!({
@@ -397,24 +387,22 @@ impl PandoraSource {
         let mut missing = Vec::new();
         if let Some(ts) = tracks_node {
             for t in ts {
-                if let Some(pid) = t.get("pandoraId").and_then(|v| v.as_str()) {
-                    if !merged.contains_key(pid) {
-                        missing.push(pid.to_string());
-                    }
+                if let Some(pid) = t.get("pandoraId").and_then(|v| v.as_str())
+                    && !merged.contains_key(pid)
+                {
+                    missing.push(pid.to_owned());
                 }
             }
         }
 
-        if !missing.is_empty() {
-            if let Some(extra) = self
+        if !missing.is_empty()
+            && let Some(extra) = self
                 .api_request(ENDPOINT_ANNOTATE, self.build_annotate_request(&missing))
                 .await
-            {
-                if let Some(obj) = extra.as_object() {
-                    for (k, v) in obj {
-                        merged.insert(k.clone(), v.clone());
-                    }
-                }
+            && let Some(obj) = extra.as_object()
+        {
+            for (k, v) in obj {
+                merged.insert(k.clone(), v.clone());
             }
         }
 
@@ -422,12 +410,11 @@ impl PandoraSource {
         let merged_val = Value::Object(merged);
         if let Some(ts) = tracks_node {
             for t in ts {
-                if let Some(pid) = t.get("pandoraId").and_then(|v| v.as_str()) {
-                    if let Some(ann) = merged_val.get(pid) {
-                        if let Some(tr) = self.map_track(ann, &merged_val) {
-                            tracks.push(tr);
-                        }
-                    }
+                if let Some(pid) = t.get("pandoraId").and_then(|v| v.as_str())
+                    && let Some(ann) = merged_val.get(pid)
+                    && let Some(tr) = self.map_track(ann, &merged_val)
+                {
+                    tracks.push(tr);
                 }
             }
         }
@@ -439,19 +426,19 @@ impl PandoraSource {
         let url = json
             .get("shareableUrlPath")
             .and_then(|v| v.as_str())
-            .map(|p| format!("{}{}", BASE_URL, p));
+            .map(|p| format!("{BASE_URL}{p}"));
         let artwork = self.get_artwork_url(&json);
 
         let mut author_name = None;
-        if let Some(l_id) = json.get("listenerPandoraId").and_then(|v| v.as_str()) {
-            if let Some(author) = annotations.get(l_id) {
-                author_name = author.get("fullname").and_then(|v| v.as_str());
-            }
+        if let Some(l_id) = json.get("listenerPandoraId").and_then(|v| v.as_str())
+            && let Some(author) = annotations.get(l_id)
+        {
+            author_name = author.get("fullname").and_then(|v| v.as_str());
         }
 
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: name.to_string(),
+                name: name.to_owned(),
                 selected_track: -1,
             },
             plugin_info: json!({
@@ -478,15 +465,19 @@ impl PandoraSource {
             .get("trackDetails")
             .and_then(|v| v.get("similarTracks"))
             .and_then(|v| v.as_array());
-        if similar.is_none() || similar.unwrap().is_empty() {
+
+        let id_list: Vec<String> = similar
+            .map(|s| {
+                s.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if id_list.is_empty() {
             return LoadResult::Empty {};
         }
 
-        let id_list: Vec<String> = similar
-            .unwrap()
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect();
         let annotations = match self
             .api_request(ENDPOINT_ANNOTATE, self.build_annotate_request(&id_list))
             .await
@@ -497,16 +488,16 @@ impl PandoraSource {
 
         let mut tracks = Vec::new();
         for tid in id_list {
-            if let Some(item) = annotations.get(&tid).filter(|v| !v.is_null()) {
-                if let Some(t) = self.map_track(item, &annotations) {
-                    tracks.push(t);
-                }
+            if let Some(item) = annotations.get(&tid).filter(|v| !v.is_null())
+                && let Some(t) = self.map_track(item, &annotations)
+            {
+                tracks.push(t);
             }
         }
 
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: "Pandora recommendations".to_string(),
+                name: "Pandora recommendations".to_owned(),
                 selected_track: -1,
             },
             plugin_info: json!({
@@ -526,7 +517,7 @@ impl PandoraSource {
 
         let annotations = json.get("annotations").unwrap_or(&Value::Null);
         let tracks_node = json.get("tracks").and_then(|v| v.as_array());
-        if tracks_node.is_none() || tracks_node.unwrap().is_empty() {
+        if tracks_node.as_ref().map(|n| n.is_empty()).unwrap_or(true) {
             return LoadResult::Empty {};
         }
 
@@ -540,7 +531,7 @@ impl PandoraSource {
         let all_ids: Vec<String> = tracks_node
             .unwrap()
             .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter_map(|v| v.as_str().map(|s| s.to_owned()))
             .collect();
         let mut missing = Vec::new();
         for tid in &all_ids {
@@ -549,52 +540,49 @@ impl PandoraSource {
             }
         }
 
-        if !missing.is_empty() {
-            if let Some(extra) = self
+        if !missing.is_empty()
+            && let Some(extra) = self
                 .api_request(ENDPOINT_ANNOTATE, self.build_annotate_request(&missing))
                 .await
-            {
-                if let Some(obj) = extra.as_object() {
-                    for (k, v) in obj {
-                        merged.insert(k.clone(), v.clone());
-                    }
-                }
+            && let Some(obj) = extra.as_object()
+        {
+            for (k, v) in obj {
+                merged.insert(k.clone(), v.clone());
             }
         }
 
         let merged_val = Value::Object(merged);
         let mut tracks = Vec::new();
         for tid in all_ids {
-            if let Some(ann) = merged_val.get(&tid) {
-                if let Some(tr) = self.map_track(ann, &merged_val) {
-                    tracks.push(tr);
-                }
+            if let Some(ann) = merged_val.get(&tid)
+                && let Some(tr) = self.map_track(ann, &merged_val)
+            {
+                tracks.push(tr);
             }
         }
 
         let mut artist_node = self.find_by_url_suffix(id, annotations);
-        if artist_node.is_null() {
-            if let Some(details) = self
+        if artist_node.is_null()
+            && let Some(details) = self
                 .api_request(ENDPOINT_DETAILS, json!({ "pandoraId": id }))
                 .await
-            {
-                let details_ann = details.get("annotations").unwrap_or(&Value::Null);
-                let match_node = self.find_by_url_suffix(id, details_ann);
-                if !match_node.is_null() {
-                    artist_node = match_node;
-                }
+        {
+            let details_ann = details.get("annotations").unwrap_or(&Value::Null);
+            let match_node = self.find_by_url_suffix(id, details_ann);
+            if !match_node.is_null() {
+                artist_node = match_node;
             }
         }
 
         let name = artist_node
             .get("name")
             .and_then(|v| v.as_str())
-            .map(|n| format!("{} - All Songs", n))
-            .unwrap_or_else(|| "All Songs".to_string());
+            .map(|n| format!("{n} - All Songs"))
+            .unwrap_or_else(|| "All Songs".to_owned());
         let url = artist_node
             .get("shareableUrlPath")
             .and_then(|v| v.as_str())
-            .map(|p| format!("{}{}", BASE_URL, p));
+            .map(|p| format!("{BASE_URL}{p}"));
         let artwork = self.get_artwork_url(&artist_node);
 
         LoadResult::Playlist(PlaylistData {
@@ -631,24 +619,20 @@ impl PandoraSource {
 
         let annotations = json.get("annotations").unwrap_or(&Value::Null);
         let results = json.get("results").and_then(|v| v.as_array());
-        if results.is_none() || results.unwrap().is_empty() {
+        if results.as_ref().map(|r| r.is_empty()).unwrap_or(true) {
             return LoadResult::Empty {};
         }
 
         let mut tracks = Vec::new();
-        let mut added = 0;
         for v in results.unwrap() {
-            if let Some(id) = v.as_str() {
-                if let Some(item) = annotations.get(id) {
-                    if item.get("type").and_then(|v| v.as_str()) == Some("TR") {
-                        if let Some(tr) = self.map_track(item, annotations) {
-                            tracks.push(tr);
-                            added += 1;
-                            if added >= self.search_limit {
-                                break;
-                            }
-                        }
-                    }
+            if let Some(id) = v.as_str()
+                && let Some(item) = annotations.get(id)
+                && item.get("type").and_then(|v| v.as_str()) == Some("TR")
+                && let Some(tr) = self.map_track(item, annotations)
+            {
+                tracks.push(tr);
+                if tracks.len() >= self.search_limit {
+                    break;
                 }
             }
         }
@@ -716,22 +700,22 @@ impl PandoraSource {
                         .and_then(|v| v.as_str())
                         .unwrap_or("Unknown Album");
                     let path = item.get("shareableUrlPath").and_then(|v| v.as_str());
-                    let artwork = self.get_artwork_url(&item);
+                    let artwork = self.get_artwork_url(item);
                     let artist_name = item.get("artistName").and_then(|v| v.as_str());
                     albums.push(PlaylistData {
-            info: PlaylistInfo {
-              name: name.to_string(),
-              selected_track: -1,
-            },
-            plugin_info: json!({
-              "url": path.map(|p| format!("{}{}", BASE_URL, p)),
-              "type": "album",
-              "artworkUrl": artwork,
-              "totalTracks": item.get("trackCount").and_then(|v| v.as_u64()).unwrap_or(0),
-              "author": artist_name
-            }),
-            tracks: Vec::new(),
-          });
+                        info: PlaylistInfo {
+                            name: name.to_owned(),
+                            selected_track: -1,
+                        },
+                        plugin_info: json!({
+                          "url": path.map(|p| format!("{BASE_URL}{p}")),
+                          "type": "album",
+                          "artworkUrl": artwork,
+                          "totalTracks": item.get("trackCount").and_then(|v| v.as_u64()).unwrap_or(0),
+                          "author": artist_name
+                        }),
+                        tracks: Vec::new(),
+                    });
                 }
                 "AR" => {
                     let name = item
@@ -739,14 +723,14 @@ impl PandoraSource {
                         .and_then(|v| v.as_str())
                         .unwrap_or("Artist");
                     let path = item.get("shareableUrlPath").and_then(|v| v.as_str());
-                    let artwork = self.get_artwork_url(&item);
+                    let artwork = self.get_artwork_url(item);
                     artists.push(PlaylistData {
                         info: PlaylistInfo {
-                            name: format!("{}'s Top Tracks", name),
+                            name: format!("{name}'s Top Tracks"),
                             selected_track: -1,
                         },
                         plugin_info: json!({
-                          "url": path.map(|p| format!("{}{}", BASE_URL, p)),
+                          "url": path.map(|p| format!("{BASE_URL}{p}")),
                           "type": "artist",
                           "artworkUrl": artwork,
                           "totalTracks": 0,
@@ -761,27 +745,27 @@ impl PandoraSource {
                         .and_then(|v| v.as_str())
                         .unwrap_or("Playlist");
                     let path = item.get("shareableUrlPath").and_then(|v| v.as_str());
-                    let artwork = self.get_artwork_url(&item);
+                    let artwork = self.get_artwork_url(item);
                     let mut author_name = None;
-                    if let Some(l_id) = item.get("listenerPandoraId").and_then(|v| v.as_str()) {
-                        if let Some(author) = annotations.get(l_id) {
-                            author_name = author.get("fullname").and_then(|v| v.as_str());
-                        }
+                    if let Some(l_id) = item.get("listenerPandoraId").and_then(|v| v.as_str())
+                        && let Some(author) = annotations.get(l_id)
+                    {
+                        author_name = author.get("fullname").and_then(|v| v.as_str());
                     }
                     playlists.push(PlaylistData {
-            info: PlaylistInfo {
-              name: name.to_string(),
-              selected_track: -1,
-            },
-            plugin_info: json!({
-              "url": path.map(|p| format!("{}{}", BASE_URL, p)),
-              "type": "playlist",
-              "artworkUrl": artwork,
-              "totalTracks": item.get("totalTracks").and_then(|v| v.as_u64()).unwrap_or(0),
-              "author": author_name
-            }),
-            tracks: Vec::new(),
-          });
+                        info: PlaylistInfo {
+                            name: name.to_owned(),
+                            selected_track: -1,
+                        },
+                        plugin_info: json!({
+                          "url": path.map(|p| format!("{BASE_URL}{p}")),
+                          "type": "playlist",
+                          "artworkUrl": artwork,
+                          "totalTracks": item.get("totalTracks").and_then(|v| v.as_u64()).unwrap_or(0),
+                          "author": author_name
+                        }),
+                        tracks: Vec::new(),
+                    });
                 }
                 _ => {}
             }
@@ -809,15 +793,13 @@ impl SourcePlugin for PandoraSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
-            .iter()
-            .any(|p| identifier.starts_with(p))
-            || self.rec_prefixes.iter().any(|p| identifier.starts_with(p))
-            || self.url_regex.is_match(identifier)
+        identifier.starts_with("pdsearch:")
+            || identifier.starts_with("pdrec:")
+            || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["pdsearch:"]
     }
 
     fn is_mirror(&self) -> bool {
@@ -825,7 +807,7 @@ impl SourcePlugin for PandoraSource {
     }
 
     fn rec_prefixes(&self) -> Vec<&str> {
-        self.rec_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["pdrec:"]
     }
 
     async fn load(
@@ -833,24 +815,14 @@ impl SourcePlugin for PandoraSource {
         identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
-        {
-            let query = &identifier[prefix.len()..];
+        if let Some(query) = identifier.strip_prefix("pdsearch:") {
             if query.is_empty() {
                 return LoadResult::Empty {};
             }
             return self.get_search(query).await;
         }
 
-        if let Some(prefix) = self
-            .rec_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
-        {
-            let id = &identifier[prefix.len()..];
+        if let Some(id) = identifier.strip_prefix("pdrec:") {
             if id.is_empty() {
                 return LoadResult::Empty {};
             }
@@ -858,25 +830,36 @@ impl SourcePlugin for PandoraSource {
         }
 
         let input = identifier.trim();
-        if let Some(caps) = self.url_regex.captures(input) {
-            if let Some(id_match) = caps.name("id").or_else(|| caps.name("id2")) {
-                let id = id_match.as_str();
-                if id.is_empty() {
-                    return LoadResult::Empty {};
-                }
+        if let Some(caps) = url_regex().captures(input)
+            && let Some(id_match) = caps.name("id").or_else(|| caps.name("id2"))
+        {
+            let id = id_match.as_str();
+            if id.is_empty() {
+                return LoadResult::Empty {};
+            }
 
-                if id.starts_with("TR") {
-                    return self.fetch_track(id).await;
-                } else if id.starts_with("AL") {
-                    return self.get_album(id).await;
-                } else if id.starts_with("AR") {
-                    if input.contains("/artist/all-songs/") {
-                        return self.get_artist_all_songs(id).await;
-                    }
-                    return self.get_artist(id).await;
-                } else if id.starts_with("PL:") {
-                    return self.get_playlist(id).await;
+            if let Some(tr_id) = id.strip_prefix("TR")
+                && !tr_id.is_empty()
+            {
+                return self.fetch_track(id).await;
+            }
+            if let Some(al_id) = id.strip_prefix("AL")
+                && !al_id.is_empty()
+            {
+                return self.get_album(id).await;
+            }
+            if let Some(ar_id) = id.strip_prefix("AR")
+                && !ar_id.is_empty()
+            {
+                if input.contains("/artist/all-songs/") {
+                    return self.get_artist_all_songs(id).await;
                 }
+                return self.get_artist(id).await;
+            }
+            if let Some(pl_id) = id.strip_prefix("PL:")
+                && !pl_id.is_empty()
+            {
+                return self.get_playlist(id).await;
             }
         }
 

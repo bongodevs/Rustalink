@@ -1,4 +1,4 @@
-/// Circular buffer delay line used by the vibrato filter.
+/// Circular buffer delay line.
 pub struct DelayLine {
     buffer: Vec<f32>,
     size: usize,

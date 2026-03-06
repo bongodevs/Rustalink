@@ -210,10 +210,10 @@ impl YouTubeOAuth {
         {
             let expiry = self.token_expiry.read().await;
             let token = self.access_token.read().await;
-            if let Some(t) = token.as_ref() {
-                if now < *expiry {
-                    return Some(t.clone());
-                }
+            if let Some(t) = token.as_ref()
+                && now < *expiry
+            {
+                return Some(t.clone());
             }
         }
 
@@ -229,7 +229,7 @@ impl YouTubeOAuth {
                 let mut expiry_store = self.token_expiry.write().await;
                 *token_store = Some(new_token.clone());
                 *expiry_store = now + expires_in - 30; // 30s buffer
-                return Some(new_token);
+                Some(new_token)
             }
             Err(e) => {
                 tracing::error!(
@@ -295,10 +295,7 @@ impl YouTubeOAuth {
         self.refresh_tokens.read().await.clone()
     }
 
-    pub async fn refresh_with_token(
-        &self,
-        refresh_token: &str,
-    ) -> AnyResult<serde_json::Value> {
+    pub async fn refresh_with_token(&self, refresh_token: &str) -> AnyResult<serde_json::Value> {
         let res = self
             .client
             .post("https://www.youtube.com/o/oauth2/token")
@@ -317,11 +314,7 @@ impl YouTubeOAuth {
         if status.is_success() {
             Ok(body)
         } else {
-            Err(format!(
-                "OAuth refresh failed: status={}, body={}",
-                status, body
-            )
-            .into())
+            Err(format!("OAuth refresh failed: status={}, body={}", status, body).into())
         }
     }
 }

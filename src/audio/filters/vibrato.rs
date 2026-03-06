@@ -3,7 +3,7 @@ use super::{AudioFilter, delay_line::DelayLine, lfo::Lfo};
 const SAMPLE_RATE: f64 = 48000.0;
 const MAX_DELAY_MS: f64 = 20.0;
 
-/// Vibrato filter — LFO-driven delay modulation.
+/// Vibrato filter.
 pub struct VibratoFilter {
     lfo: Lfo,
     left_delay: DelayLine,
@@ -42,13 +42,11 @@ impl AudioFilter for VibratoFilter {
             let lfo_value = self.lfo.get_value();
             let delay = center_delay + lfo_value * max_delay_width;
 
-            // Left channel
             let left_sample = samples[offset] as f32;
             self.left_delay.write(left_sample);
             let delayed_left = self.left_delay.read(delay as f32);
             samples[offset] = (delayed_left as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
 
-            // Right channel
             let right_sample = samples[offset + 1] as f32;
             self.right_delay.write(right_sample);
             let delayed_right = self.right_delay.read(delay as f32);

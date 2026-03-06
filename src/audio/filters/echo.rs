@@ -22,7 +22,7 @@ impl EchoFilter {
         let samples = frames * 2;
 
         let mut buffer = VecDeque::with_capacity(samples);
-        buffer.extend(std::iter::repeat(0).take(samples));
+        buffer.extend(std::iter::repeat_n(0, samples));
 
         Self {
             echo_length: length,
@@ -40,16 +40,12 @@ impl AudioFilter for EchoFilter {
         }
 
         for sample in samples.iter_mut() {
-            // Read from delay line
             let delayed = self.buffer.pop_front().unwrap_or(0);
 
-            // Mix original with delayed
             let mixed = (*sample as f32) + (delayed as f32 * self.decay);
-            // Clamp and update sample
             let out = mixed.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
             *sample = out;
 
-            // Push output back into delay line for feedback echo
             self.buffer.push_back(out);
         }
     }
@@ -61,6 +57,6 @@ impl AudioFilter for EchoFilter {
     fn reset(&mut self) {
         self.buffer.clear();
         self.buffer
-            .extend(std::iter::repeat(0).take(self.delay_samples));
+            .extend(std::iter::repeat_n(0, self.delay_samples));
     }
 }

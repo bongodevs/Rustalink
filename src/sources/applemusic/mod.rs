@@ -29,7 +29,7 @@ pub struct AppleMusicSource {
 
 impl AppleMusicSource {
     pub fn new(
-        config: Option<crate::configs::AppleMusicConfig>,
+        config: Option<crate::config::AppleMusicConfig>,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         let (country, p_limit, a_limit, p_conc, a_conc) = if let Some(c) = config {
@@ -41,25 +41,23 @@ impl AppleMusicSource {
                 c.album_page_load_concurrency,
             )
         } else {
-            ("us".to_string(), 0, 0, 5, 5)
+            ("us".to_owned(), 0, 0, 5, 5)
         };
 
-        let token_tracker = Arc::new(
-            crate::sources::applemusic::token::AppleMusicTokenTracker::new(client.clone()),
-        );
+        let token_tracker = Arc::new(AppleMusicTokenTracker::new(client.clone()));
         token_tracker.clone().init();
 
         Ok(Self {
-      token_tracker,
-      client,
-      country_code: country,
-      playlist_load_limit: p_limit,
-      album_load_limit: a_limit,
-      playlist_page_load_concurrency: p_conc,
-      album_page_load_concurrency: a_conc,
-      search_prefixes: vec!["amsearch:".to_string()],
-      url_regex: Regex::new(r"https?://(?:www\.)?music\.apple\.com/(?:[a-zA-Z]{2}/)?(album|playlist|artist|song)/[^/]+/([a-zA-Z0-9\-.]+)(?:\?i=(\d+))?").unwrap(),
-    })
+            token_tracker,
+            client,
+            country_code: country,
+            playlist_load_limit: p_limit,
+            album_load_limit: a_limit,
+            playlist_page_load_concurrency: p_conc,
+            album_page_load_concurrency: a_conc,
+            search_prefixes: vec!["amsearch:".to_owned()],
+            url_regex: Regex::new(r"https?://(?:www\.)?music\.apple\.com/(?:[a-zA-Z]{2}/)?(album|playlist|artist|song)/[^/]+/([a-zA-Z0-9\-.]+)(?:\?i=(\d+))?").unwrap(),
+        })
     }
 }
 
@@ -103,8 +101,10 @@ impl SourcePlugin for AppleMusicSource {
             let id = caps.get(2).map(|m| m.as_str()).unwrap_or("");
             let song_id = caps.get(3).map(|m| m.as_str());
 
-            if type_str == "album" && song_id.is_some() {
-                return self.resolve_track(song_id.unwrap()).await;
+            if type_str == "album"
+                && let Some(s_id) = song_id
+            {
+                return self.resolve_track(s_id).await;
             }
 
             match type_str {

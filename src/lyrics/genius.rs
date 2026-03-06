@@ -1,50 +1,20 @@
 use async_trait::async_trait;
 use regex::Regex;
 
-use super::LyricsProvider;
+use super::{LyricsProvider, utils};
 use crate::protocol::{
     models::{LyricsData, LyricsLine},
     tracks::TrackInfo,
 };
 
+#[derive(Default)]
 pub struct GeniusProvider {
     client: reqwest::Client,
 }
 
 impl GeniusProvider {
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-        }
-    }
-
-    fn clean(&self, text: &str) -> String {
-        let patterns = [
-            r#"(?i)\s*\([^)]*(?:official|lyrics?|video|audio|mv|visualizer|color\s*coded|hd|4k|prod\.)[^)]*\)"#,
-            r#"(?i)\s*\[[^\]]*(?:official|lyrics?|video|audio|mv|visualizer|color\s*coded|hd|4k|prod\.)[^\]]*\]"#,
-            r#"(?i)\s*[([]\s*(?:ft\.?|feat\.?|featuring)\s+[^)\]]+[)\]]"#,
-            r#"(?i)\s*-\s*Topic$"#,
-            r#"(?i)VEVO$"#,
-            r#"(?i)\s*[(\[]\s*Remastered\s*[\)\]]"#,
-        ];
-
-        let mut result = text.to_string();
-        for pattern in patterns {
-            if let Ok(re) = Regex::new(pattern) {
-                result = re.replace_all(&result, "").to_string();
-            }
-        }
-        result.trim().to_string()
-    }
-
-    fn unescape_html(&self, text: &str) -> String {
-        text.replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace("&apos;", "'")
-            .replace("&nbsp;", " ")
+        Self::default()
     }
 }
 
@@ -55,8 +25,8 @@ impl LyricsProvider for GeniusProvider {
     }
 
     async fn load_lyrics(&self, track: &TrackInfo) -> Option<LyricsData> {
-        let title = self.clean(&track.title);
-        let author = self.clean(&track.author);
+        let title = utils::clean_text(&track.title);
+        let author = utils::clean_text(&track.author);
 
         let query = if title.to_lowercase().starts_with(&author.to_lowercase()) {
             title.clone()
@@ -76,7 +46,7 @@ impl LyricsProvider for GeniusProvider {
             .iter()
             .find(|s| s["type"] == "song")?["hits"]
             .as_array()?
-            .get(0)?["result"]
+            .first()?["result"]
             .clone();
 
         let song_path = song["path"].as_str()?;
@@ -103,7 +73,7 @@ impl LyricsProvider for GeniusProvider {
             .replace("<br>", "\n")
             .replace("<br/>", "\n")
             .replace("<br />", "\n");
-        let cleaned_lyrics = self.unescape_html(&tag_re.replace_all(&lyrics_text, ""));
+        let cleaned_lyrics = utils::unescape_html(&tag_re.replace_all(&lyrics_text, ""));
 
         let lines: Vec<LyricsLine> = cleaned_lyrics
             .lines()

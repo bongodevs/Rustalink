@@ -10,21 +10,23 @@ impl DeezerSource {
             None => return LoadResult::Empty {},
         };
 
-        let method;
-        let payload;
-
-        if let Some(artist_id) = query.strip_prefix(&self.rec_artist_prefix) {
-            method = "song.getSmartRadio";
-            payload = serde_json::json!({ "art_id": artist_id });
-        } else {
-            let track_id = query.strip_prefix(&self.rec_track_prefix).unwrap_or(query);
-            method = "song.getSearchTrackMix";
-            payload = serde_json::json!({ "sng_id": track_id, "start_with_input_track": "true" });
-        }
+        let (method, payload) =
+            if let Some(artist_id) = query.strip_prefix(super::REC_ARTIST_PREFIX) {
+                (
+                    "song.getSmartRadio",
+                    serde_json::json!({ "art_id": artist_id }),
+                )
+            } else {
+                let track_id = query.strip_prefix(super::REC_TRACK_PREFIX).unwrap_or(query);
+                (
+                    "song.getSearchTrackMix",
+                    serde_json::json!({ "sng_id": track_id, "start_with_input_track": "true" }),
+                )
+            };
 
         let url = format!(
-            "{}?method={}&input=3&api_version=1.0&api_token={}",
-            PRIVATE_API_BASE, method, tokens.api_token
+            "{PRIVATE_API_BASE}?method={method}&input=3&api_version=1.0&api_token={}",
+            tokens.api_token
         );
         let res = match self
             .client
@@ -64,7 +66,7 @@ impl DeezerSource {
         }
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: "Deezer Recommendations".to_string(),
+                name: "Deezer Recommendations".to_owned(),
                 selected_track: -1,
             },
             plugin_info: serde_json::json!({

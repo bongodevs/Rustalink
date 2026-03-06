@@ -15,18 +15,19 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{Router, routing::get};
 use dashmap::DashMap;
-use rustalink::{common::types::AnyResult, server::AppState, transport};
+use rustalink::{common::types::AnyResult, rest, server::AppState, ws};
 use tracing::info;
-
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[tokio::main]
 async fn main() -> AnyResult<()> {
-    let config = rustalink::configs::Config::load().await?;
+    let config = rustalink::config::AppConfig::load();
 
-    rustalink::common::logger::init(&config);
+    rustalink::common::logger::init(
+        config
+            .logging
+            .as_ref()
+            .unwrap_or(&rustalink::config::LoggingConfig::default()),
+    );
 
     rustalink::common::banner::print_banner(&rustalink::common::banner::BannerInfo::default());
 
@@ -55,18 +56,17 @@ async fn main() -> AnyResult<()> {
         lyrics_manager,
         config: config.clone(),
         youtube: youtube_ctx,
+        total_players: std::sync::atomic::AtomicI32::new(0),
+        playing_players: std::sync::atomic::AtomicI32::new(0),
     });
 
     let app = Router::new()
-        .route(
-            "/v4/websocket",
-            get(transport::websocket_server::websocket_handler),
-        )
+        .route("/v4/websocket", get(ws::websocket_handler))
         .with_state(shared_state.clone())
-        .merge(transport::http_server::router(shared_state.clone()))
+        .merge(rest::router(shared_state.clone()))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
-    let ip: std::net::IpAddr = config.server.host.parse()?;
+    let ip: std::net::IpAddr = config.server.address.parse()?;
     let address = SocketAddr::from((ip, config.server.port));
     info!("Rustalink Server listening on {}", address);
 

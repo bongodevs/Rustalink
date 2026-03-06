@@ -30,7 +30,7 @@ use crate::common::HttpClientPool;
 /// Source Manager
 pub struct SourceManager {
     pub sources: Vec<BoxedSource>,
-    mirrors: Option<crate::configs::MirrorsConfig>,
+    mirrors: Option<crate::config::server::MirrorsConfig>,
     pub youtube_cipher_manager: Option<Arc<YouTubeCipherManager>>,
     pub youtube_stream_ctx: Option<Arc<YoutubeStreamContext>>,
     pub http_pool: Arc<HttpClientPool>,
@@ -38,21 +38,48 @@ pub struct SourceManager {
 
 impl SourceManager {
     /// Create a new SourceManager with all available sources
-    pub fn new(config: &crate::configs::Config) -> Self {
+    pub fn new(config: &crate::config::AppConfig) -> Self {
         let mut sources: Vec<BoxedSource> = Vec::new();
-        let mut youtube_cipher_manager = None;
-        let mut youtube_stream_ctx = None;
         let http_pool = Arc::new(HttpClientPool::new());
 
-        // Register all sources using a macro for better scalability (M3)
-        macro_rules! register_source {
+        // Register core sources
+        Self::register_core_sources(&mut sources, config, &http_pool);
+
+        // Register extra sources (TTS, local)
+        Self::register_extra_sources(&mut sources, config, &http_pool);
+
+        // YouTube special case: needs to expose stream context and cipher manager
+        let yt_enabled = config.sources.youtube.as_ref().is_some_and(|c| c.enabled);
+        let (youtube_cipher_manager, youtube_stream_ctx) = if yt_enabled {
+            let yt_client = http_pool.get(None);
+            let yt = YouTubeSource::new(config.sources.youtube.clone(), yt_client);
+            (Some(yt.cipher_manager()), Some(yt.stream_context()))
+        } else {
+            (None, None)
+        };
+
+        Self {
+            sources,
+            mirrors: config.player.mirrors.clone(),
+            youtube_cipher_manager,
+            youtube_stream_ctx,
+            http_pool,
+        }
+    }
+
+    fn register_core_sources(
+        sources: &mut Vec<BoxedSource>,
+        config: &crate::config::AppConfig,
+        http_pool: &Arc<HttpClientPool>,
+    ) {
+        macro_rules! register {
             ($enabled:expr, $name:literal, $proxy:expr, $ctor:expr) => {
                 if $enabled {
                     if let Some(p) = &$proxy {
                         tracing::info!(
                             "Loading {} with proxy: {}",
                             $name,
-                            p.url.as_ref().unwrap_or(&"enabled".to_string())
+                            p.url.as_ref().unwrap_or(&"enabled".to_owned())
                         );
                     }
                     match $ctor {
@@ -68,260 +95,341 @@ impl SourceManager {
             };
         }
 
-        if config.sources.youtube {
+        // YouTube (handled outside for special context)
+        if config.sources.youtube.as_ref().is_some_and(|c| c.enabled) {
             tracing::info!("Loaded source: YouTube");
-            // YouTube doesn't currently define a proxy config in its config,
-            // so we pass None to the pool to get a shared direct-connect client.
             let yt_client = http_pool.get(None);
-            let yt = YouTubeSource::new(config.youtube.clone(), yt_client);
-            youtube_cipher_manager = Some(yt.cipher_manager());
-            youtube_stream_ctx = Some(yt.stream_context());
-            sources.push(Box::new(yt));
+            sources.push(Box::new(YouTubeSource::new(
+                config.sources.youtube.clone(),
+                yt_client,
+            )));
         }
 
-        let soundcloud_proxy = config.soundcloud.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.soundcloud,
+        let soundcloud_proxy = config
+            .sources
+            .soundcloud
+            .as_ref()
+            .and_then(|c| c.proxy.clone());
+        register!(
+            config
+                .sources
+                .soundcloud
+                .as_ref()
+                .is_some_and(|c| c.enabled),
             "SoundCloud",
             soundcloud_proxy,
             SoundCloudSource::new(
-                config.soundcloud.clone().unwrap_or_default(),
+                config.sources.soundcloud.clone().unwrap(),
                 http_pool.get(soundcloud_proxy.clone())
             )
         );
 
-        // Spotify currently doesn't define a proxy in its config, but we'll use a direct client
-        register_source!(
-            config.sources.spotify,
+        register!(
+            config.sources.spotify.as_ref().is_some_and(|c| c.enabled),
             "Spotify",
-            None::<crate::configs::HttpProxyConfig>,
-            SpotifySource::new(config.spotify.clone(), http_pool.get(None))
+            None::<crate::config::HttpProxyConfig>,
+            SpotifySource::new(config.sources.spotify.clone(), http_pool.get(None))
         );
 
-        let jiosaavn_proxy = config.jiosaavn.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.jiosaavn,
+        let jiosaavn_proxy = config
+            .sources
+            .jiosaavn
+            .as_ref()
+            .and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.jiosaavn.as_ref().is_some_and(|c| c.enabled),
             "JioSaavn",
             jiosaavn_proxy,
             JioSaavnSource::new(
-                config.jiosaavn.clone(),
+                config.sources.jiosaavn.clone(),
                 http_pool.get(jiosaavn_proxy.clone())
             )
         );
 
-        let (deezer_token_provided, deezer_key_provided) = if let Some(c) = config.deezer.as_ref() {
-            let arls_provided = c
-                .arls
-                .as_ref()
-                .map(|a| !a.is_empty() && a.iter().any(|s| !s.is_empty()))
-                .unwrap_or(false);
-            let key_provided = c
-                .master_decryption_key
-                .as_ref()
-                .map(|k| !k.is_empty())
-                .unwrap_or(false);
-            (arls_provided, key_provided)
-        } else {
-            (false, false)
-        };
-        if config.sources.deezer && (!deezer_token_provided || !deezer_key_provided) {
-            let mut missing = Vec::new();
-            if !deezer_token_provided {
-                missing.push("arls");
-            }
-            if !deezer_key_provided {
-                missing.push("master_decryption_key");
-            }
-            tracing::warn!(
-                "Deezer source is enabled but {} {} missing; it will be disabled.",
-                missing.join(" and "),
-                if missing.len() > 1 { "are" } else { "is" }
-            );
-        }
-        let deezer_proxy = config.deezer.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.deezer && deezer_token_provided && deezer_key_provided,
-            "Deezer",
-            deezer_proxy,
-            DeezerSource::new(
-                config.deezer.clone().unwrap_or_default(),
-                http_pool.get(deezer_proxy.clone())
-            )
-        );
+        Self::register_deezer(sources, config, http_pool);
 
-        let apple_proxy = config.applemusic.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.applemusic,
+        let apple_proxy = config
+            .sources
+            .applemusic
+            .as_ref()
+            .and_then(|c| c.proxy.clone());
+        register!(
+            config
+                .sources
+                .applemusic
+                .as_ref()
+                .is_some_and(|c| c.enabled),
             "Apple Music",
             apple_proxy,
             AppleMusicSource::new(
-                config.applemusic.clone(),
+                config.sources.applemusic.clone(),
                 http_pool.get(apple_proxy.clone())
             )
         );
 
-        let gaana_proxy = config.gaana.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.gaana,
+        let gaana_proxy = config.sources.gaana.as_ref().and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.gaana.as_ref().is_some_and(|c| c.enabled),
             "Gaana",
             gaana_proxy,
-            GaanaSource::new(config.gaana.clone(), http_pool.get(gaana_proxy.clone()))
+            GaanaSource::new(
+                config.sources.gaana.clone(),
+                http_pool.get(gaana_proxy.clone())
+            )
         );
 
-        let tidal_proxy = config.tidal.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.tidal,
+        let tidal_proxy = config.sources.tidal.as_ref().and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.tidal.as_ref().is_some_and(|c| c.enabled),
             "Tidal",
             tidal_proxy,
-            TidalSource::new(config.tidal.clone(), http_pool.get(tidal_proxy.clone()))
+            TidalSource::new(
+                config.sources.tidal.clone(),
+                http_pool.get(tidal_proxy.clone())
+            )
         );
 
-        let audiomack_proxy = config.audiomack.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.audiomack,
+        let audiomack_proxy = config
+            .sources
+            .audiomack
+            .as_ref()
+            .and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.audiomack.as_ref().is_some_and(|c| c.enabled),
             "Audiomack",
             audiomack_proxy,
             AudiomackSource::new(
-                config.audiomack.clone(),
+                config.sources.audiomack.clone(),
                 http_pool.get(audiomack_proxy.clone())
             )
         );
 
-        let pandora_proxy = config.pandora.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.pandora,
+        let pandora_proxy = config
+            .sources
+            .pandora
+            .as_ref()
+            .and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.pandora.as_ref().is_some_and(|c| c.enabled),
             "Pandora",
             pandora_proxy,
-            PandoraSource::new(config.pandora.clone(), http_pool.get(pandora_proxy.clone()))
+            PandoraSource::new(
+                config.sources.pandora.clone(),
+                http_pool.get(pandora_proxy.clone())
+            )
         );
 
-        let qobuz_token_provided = config
-            .qobuz
-            .as_ref()
-            .and_then(|c| c.user_token.as_ref())
-            .map(|t| !t.is_empty())
-            .unwrap_or(false);
-        if config.sources.qobuz && !qobuz_token_provided {
-            tracing::warn!("Qobuz user_token is missing; all playback will fall back to mirrors.");
+        let qobuz_proxy = config.sources.qobuz.as_ref().and_then(|c| c.proxy.clone());
+        if config.sources.qobuz.as_ref().is_some_and(|c| c.enabled) {
+            let qobuz_token_provided = config
+                .sources
+                .qobuz
+                .as_ref()
+                .and_then(|c| c.user_token.as_ref())
+                .is_some_and(|t| !t.is_empty());
+
+            if !qobuz_token_provided {
+                tracing::warn!(
+                    "Qobuz user_token is missing; all playback will fall back to mirrors."
+                );
+            }
+
+            register!(
+                true,
+                "Qobuz",
+                qobuz_proxy,
+                QobuzSource::new(config, http_pool.get(qobuz_proxy.clone()))
+            );
         }
-        let qobuz_proxy = config.qobuz.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.qobuz,
-            "Qobuz",
-            qobuz_proxy,
-            QobuzSource::new(config, http_pool.get(qobuz_proxy.clone()))
-        );
 
-        let anghami_proxy = config.anghami.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.anghami,
+        let anghami_proxy = config
+            .sources
+            .anghami
+            .as_ref()
+            .and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.anghami.as_ref().is_some_and(|c| c.enabled),
             "Anghami",
             anghami_proxy,
             AnghamiSource::new(config, http_pool.get(anghami_proxy.clone()))
         );
 
-        let shazam_proxy = config.shazam.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.shazam,
+        let shazam_proxy = config.sources.shazam.as_ref().and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.shazam.as_ref().is_some_and(|c| c.enabled),
             "Shazam",
             shazam_proxy,
             ShazamSource::new(config, http_pool.get(shazam_proxy.clone()))
         );
 
-        let mixcloud_proxy = config.mixcloud.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.mixcloud,
+        let mixcloud_proxy = config
+            .sources
+            .mixcloud
+            .as_ref()
+            .and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.mixcloud.as_ref().is_some_and(|c| c.enabled),
             "Mixcloud",
             mixcloud_proxy,
             MixcloudSource::new(
-                config.mixcloud.clone(),
+                config.sources.mixcloud.clone(),
                 http_pool.get(mixcloud_proxy.clone())
             )
         );
 
-        let bandcamp_proxy = config.bandcamp.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.bandcamp,
+        let bandcamp_proxy = config
+            .sources
+            .bandcamp
+            .as_ref()
+            .and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.bandcamp.as_ref().is_some_and(|c| c.enabled),
             "Bandcamp",
             bandcamp_proxy,
             BandcampSource::new(
-                config.bandcamp.clone(),
+                config.sources.bandcamp.clone(),
                 http_pool.get(bandcamp_proxy.clone())
             )
         );
 
-        let audius_proxy = config.audius.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.audius,
+        let audius_proxy = config.sources.audius.as_ref().and_then(|c| c.proxy.clone());
+        register!(
+            config.sources.audius.as_ref().is_some_and(|c| c.enabled),
             "Audius",
             audius_proxy,
-            AudiusSource::new(config.audius.clone(), http_pool.get(audius_proxy.clone()))
-        );
-
-        let yandex_token_provided = config
-            .yandexmusic
-            .as_ref()
-            .and_then(|c| c.access_token.as_ref())
-            .is_some();
-        if config.sources.yandexmusic && !yandex_token_provided {
-            tracing::warn!(
-                "Yandex Music source is enabled but the access_token is missing; it will be disabled."
-            );
-        }
-        let yandex_proxy = config.yandexmusic.as_ref().and_then(|c| c.proxy.clone());
-        register_source!(
-            config.sources.yandexmusic && yandex_token_provided,
-            "Yandex Music",
-            yandex_proxy,
-            YandexMusicSource::new(
-                config.yandexmusic.clone(),
-                http_pool.get(yandex_proxy.clone())
+            AudiusSource::new(
+                config.sources.audius.clone(),
+                http_pool.get(audius_proxy.clone())
             )
         );
 
-        if config.sources.http {
+        Self::register_yandex(sources, config, http_pool);
+
+        if config.sources.http.as_ref().is_some_and(|c| c.enabled) {
             tracing::info!("Loaded source: http");
             sources.push(Box::new(HttpSource::new()));
         }
+    }
 
-        register_source!(
-            config.sources.google_tts,
-            "Google TTS",
-            None::<crate::configs::HttpProxyConfig>,
-            Ok::<_, String>(GoogleTtsSource::new(
-                config.google_tts.clone().unwrap_or_default()
-            ))
-        );
+    fn register_deezer(
+        sources: &mut Vec<BoxedSource>,
+        config: &crate::config::AppConfig,
+        http_pool: &Arc<HttpClientPool>,
+    ) {
+        let (deezer_token_provided, deezer_key_provided) =
+            if let Some(c) = config.sources.deezer.as_ref() {
+                let arls_provided = c
+                    .arls
+                    .as_ref()
+                    .is_some_and(|a| !a.is_empty() && a.iter().any(|s| !s.is_empty()));
+                let key_provided = c
+                    .master_decryption_key
+                    .as_ref()
+                    .is_some_and(|k| !k.is_empty());
+                (arls_provided, key_provided)
+            } else {
+                (false, false)
+            };
 
-        register_source!(
-            config.sources.flowery,
-            "Flowery",
-            None::<crate::configs::HttpProxyConfig>,
-            Ok::<_, String>(FlowerySource::new(
-                config.flowery.clone().unwrap_or_default()
-            ))
-        );
+        if config.sources.deezer.as_ref().is_some_and(|c| c.enabled) {
+            if !deezer_token_provided || !deezer_key_provided {
+                let mut missing = Vec::new();
+                if !deezer_token_provided {
+                    missing.push("arls");
+                }
+                if !deezer_key_provided {
+                    missing.push("master_decryption_key");
+                }
+                tracing::warn!(
+                    "Deezer source is enabled but {} {} missing; it will be disabled.",
+                    missing.join(" and "),
+                    if missing.len() > 1 { "are" } else { "is" }
+                );
+            } else {
+                let proxy = config.sources.deezer.as_ref().and_then(|c| c.proxy.clone());
+                let source = DeezerSource::new(
+                    config.sources.deezer.clone().unwrap(),
+                    http_pool.get(proxy.clone()),
+                );
 
-        register_source!(
-            config.sources.lazypytts,
-            "LazyPyTTS",
-            None::<crate::configs::HttpProxyConfig>,
-            Ok::<_, String>(LazyPyTtsSource::new(
-                config.lazypytts.clone().unwrap_or_default()
-            ))
-        );
+                match source {
+                    Ok(src) => {
+                        tracing::info!("Loaded source: Deezer");
+                        sources.push(Box::new(src));
+                    }
+                    Err(e) => {
+                        tracing::error!("Deezer source failed to initialize: {}", e);
+                    }
+                }
+            }
+        }
+    }
 
-        if config.sources.local {
-            tracing::info!("Loaded source: local");
-            sources.push(Box::new(LocalSource::new()));
+    fn register_yandex(
+        sources: &mut Vec<BoxedSource>,
+        config: &crate::config::AppConfig,
+        http_pool: &Arc<HttpClientPool>,
+    ) {
+        if let Some(c) = config.sources.yandexmusic.as_ref()
+            && c.enabled
+        {
+            let token_provided = c.access_token.is_some();
+
+            if !token_provided {
+                tracing::warn!(
+                    "Yandex Music source is enabled but the access_token is missing; it will be disabled."
+                );
+            } else {
+                let proxy = c.proxy.clone();
+                let source = YandexMusicSource::new(
+                    config.sources.yandexmusic.clone(),
+                    http_pool.get(proxy.clone()),
+                );
+
+                match source {
+                    Ok(src) => {
+                        tracing::info!("Loaded source: Yandex Music");
+                        sources.push(Box::new(src));
+                    }
+                    Err(e) => {
+                        tracing::error!("Yandex Music source failed to initialize: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    fn register_extra_sources(
+        sources: &mut Vec<BoxedSource>,
+        config: &crate::config::AppConfig,
+        _http_pool: &Arc<HttpClientPool>,
+    ) {
+        // TTS Sources
+        if let Some(c) = config.sources.google_tts.as_ref()
+            && c.enabled
+        {
+            tracing::info!("Loaded source: Google TTS");
+            sources.push(Box::new(GoogleTtsSource::new(c.clone())));
         }
 
-        Self {
-            sources,
-            mirrors: config.mirrors.clone(),
-            youtube_cipher_manager,
-            youtube_stream_ctx,
-            http_pool,
+        if let Some(c) = config.sources.flowery.as_ref()
+            && c.enabled
+        {
+            tracing::info!("Loaded source: Flowery");
+            sources.push(Box::new(FlowerySource::new(c.clone())));
+        }
+
+        if let Some(c) = config.sources.lazypytts.as_ref()
+            && c.enabled
+        {
+            tracing::info!("Loaded source: LazyPyTTS");
+            sources.push(Box::new(LazyPyTtsSource::new(c.clone())));
+        }
+
+        // Local Source
+        if config.sources.local.as_ref().is_some_and(|c| c.enabled) {
+            tracing::info!("Loaded source: local");
+            sources.push(Box::new(LocalSource::new()));
         }
     }
 
@@ -374,6 +482,7 @@ impl SourceManager {
     ) -> Option<BoxedTrack> {
         let identifier = track_info.uri.as_deref().unwrap_or(&track_info.identifier);
 
+        // 1. Try primary source resolution
         for source in &self.sources {
             if source.can_handle(identifier) {
                 tracing::trace!(
@@ -389,90 +498,81 @@ impl SourceManager {
             }
         }
 
+        // 2. Fallback to mirrors if configured
         if let Some(mirrors) = &self.mirrors {
-            let isrc = track_info.isrc.as_deref().unwrap_or("");
-            let query = format!("{} - {}", track_info.title, track_info.author);
-
-            let original_source_name: Option<&str> = self
-                .sources
-                .iter()
-                .find(|s| s.can_handle(identifier))
-                .map(|s| s.name());
-
-            let provider_queries: Vec<String> = mirrors
-                .providers
-                .iter()
-                .filter_map(|p| {
-                    if isrc.is_empty() && p.contains("%ISRC%") {
-                        tracing::debug!("Skipping mirror provider '{}': track has no ISRC", p);
-                        return None;
-                    }
-
-                    let resolved = p.replace("%ISRC%", isrc).replace("%QUERY%", &query);
-
-                    if let Some(handling_source) = self.sources.iter().find(|s| s.can_handle(&resolved)) {
-                        if handling_source.is_mirror() {
-                            tracing::warn!(
-                                "Skipping mirror provider '{}': '{}' is a Mirror-type source and cannot direct-play",
-                                resolved,
-                                handling_source.name()
-                            );
-                            return None;
-                        }
-                        if Some(handling_source.name()) == original_source_name {
-                            tracing::debug!(
-                                "Skipping mirror provider '{}': would loop back to the same source '{}'",
-                                resolved,
-                                handling_source.name()
-                            );
-                            return None;
-                        }
-                    }
-
-                    Some(resolved)
-                })
-                .collect();
-
-            if !provider_queries.is_empty() {
-                for sq in provider_queries {
-                    let rp = routeplanner.clone();
-                    let res = match self.load(&sq, rp.clone()).await {
-                        crate::protocol::tracks::LoadResult::Track(t) => {
-                            let id = t.info.uri.as_deref().unwrap_or(&t.info.identifier);
-                            self.resolve_nested_track(id, rp).await
-                        }
-                        crate::protocol::tracks::LoadResult::Search(tracks) => {
-                            if let Some(first) = tracks.first() {
-                                tracing::debug!(
-                                    "Mirror provider '{}' returned search result, using first track: {}",
-                                    sq,
-                                    first.info.identifier
-                                );
-                                let id =
-                                    first.info.uri.as_deref().unwrap_or(&first.info.identifier);
-                                self.resolve_nested_track(id, rp).await
-                            } else {
-                                tracing::debug!(
-                                    "Mirror provider '{}' returned empty search result",
-                                    sq
-                                );
-                                None
-                            }
-                        }
-                        _ => {
-                            tracing::debug!("Mirror provider '{}' returned no result", sq);
-                            None
-                        }
-                    };
-
-                    if let Some(track) = res {
-                        return Some(track);
-                    }
-                }
-            }
+            return self
+                .resolve_with_mirrors(track_info, identifier, mirrors, routeplanner)
+                .await;
         }
 
         tracing::debug!("Failed to resolve playable track for: {}", identifier);
+        None
+    }
+
+    async fn resolve_with_mirrors(
+        &self,
+        track_info: &crate::protocol::tracks::TrackInfo,
+        identifier: &str,
+        mirrors: &crate::config::server::MirrorsConfig,
+        routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
+    ) -> Option<BoxedTrack> {
+        let isrc = track_info.isrc.as_deref().unwrap_or("");
+        let query = format!("{} - {}", track_info.title, track_info.author);
+
+        let original_source_name = self
+            .sources
+            .iter()
+            .find(|s| s.can_handle(identifier))
+            .map(|s| s.name());
+
+        for provider in &mirrors.providers {
+            if isrc.is_empty() && provider.contains("%ISRC%") {
+                tracing::debug!("Skipping mirror provider '{}': track has no ISRC", provider);
+                continue;
+            }
+
+            let resolved = provider.replace("%ISRC%", isrc).replace("%QUERY%", &query);
+
+            if let Some(handling_source) = self.sources.iter().find(|s| s.can_handle(&resolved)) {
+                if handling_source.is_mirror() {
+                    tracing::warn!(
+                        "Skipping mirror provider '{}': '{}' is a Mirror-type source",
+                        resolved,
+                        handling_source.name()
+                    );
+                    continue;
+                }
+                if Some(handling_source.name()) == original_source_name {
+                    tracing::debug!(
+                        "Skipping mirror provider '{}': would loop back to '{}'",
+                        resolved,
+                        handling_source.name()
+                    );
+                    continue;
+                }
+            }
+
+            let res = match self.load(&resolved, routeplanner.clone()).await {
+                crate::protocol::tracks::LoadResult::Track(t) => {
+                    let id = t.info.uri.as_deref().unwrap_or(&t.info.identifier);
+                    self.resolve_nested_track(id, routeplanner.clone()).await
+                }
+                crate::protocol::tracks::LoadResult::Search(tracks) => {
+                    if let Some(first) = tracks.first() {
+                        let id = first.info.uri.as_deref().unwrap_or(&first.info.identifier);
+                        self.resolve_nested_track(id, routeplanner.clone()).await
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(track) = res {
+                return Some(track);
+            }
+        }
+
         None
     }
 
@@ -482,10 +582,10 @@ impl SourceManager {
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<BoxedTrack> {
         for source in &self.sources {
-            if source.can_handle(identifier) {
-                if let Some(track) = source.get_track(identifier, routeplanner.clone()).await {
-                    return Some(track);
-                }
+            if source.can_handle(identifier)
+                && let Some(track) = source.get_track(identifier, routeplanner.clone()).await
+            {
+                return Some(track);
             }
         }
         None
@@ -495,7 +595,7 @@ impl SourceManager {
     pub fn source_names(&self) -> Vec<String> {
         self.sources.iter().map(|s| s.name().to_string()).collect()
     }
-    pub fn get_proxy_config(&self, source_name: &str) -> Option<crate::configs::HttpProxyConfig> {
+    pub fn get_proxy_config(&self, source_name: &str) -> Option<crate::config::HttpProxyConfig> {
         self.sources
             .iter()
             .find(|s| s.name() == source_name)

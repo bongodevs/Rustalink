@@ -8,8 +8,9 @@ use tokio::sync::Mutex;
 use crate::{
     audio::{filters::FilterChain, playback::TrackHandle},
     common::types::Shared,
-    configs::player::PlayerConfig,
+    config::player::PlayerConfig,
     player::state::{Filters, Player, PlayerState, VoiceConnectionState, VoiceState},
+    server::AppState,
 };
 
 pub struct PlayerContext {
@@ -37,10 +38,15 @@ pub struct PlayerContext {
     pub lyrics_data: Arc<Mutex<Option<crate::protocol::models::LyricsData>>>,
     pub last_lyric_index: Arc<AtomicI64>,
     pub tape_stop: Arc<AtomicBool>,
+    pub state: Arc<AppState>,
 }
 
 impl PlayerContext {
-    pub fn new(guild_id: crate::common::types::GuildId, config: &PlayerConfig) -> Self {
+    pub fn new(
+        guild_id: crate::common::types::GuildId,
+        config: &PlayerConfig,
+        state: Arc<AppState>,
+    ) -> Self {
         Self {
             guild_id,
             volume: 100,
@@ -64,30 +70,48 @@ impl PlayerContext {
             config: config.clone(),
             lyrics_subscribed: Arc::new(AtomicBool::new(false)),
             lyrics_data: Arc::new(Mutex::new(None)),
-            last_lyric_index: Arc::new(std::sync::atomic::AtomicI64::new(-1)),
+            last_lyric_index: Arc::new(AtomicI64::new(-1)),
             tape_stop: Arc::new(AtomicBool::new(config.tape.tape_stop)),
+            state,
         }
     }
 
-    pub async fn subscribe_lyrics(&self) {
-        self.lyrics_subscribed.store(true, Ordering::SeqCst);
-        self.last_lyric_index.store(-1, Ordering::SeqCst);
+    #[inline]
+    pub fn is_playing(&self) -> bool {
+        self.track.is_some() && !self.paused
     }
 
-    pub async fn unsubscribe_lyrics(&self) {
-        self.lyrics_subscribed.store(false, Ordering::SeqCst);
+    pub fn subscribe_lyrics(&self) {
+        self.lyrics_subscribed.store(true, Ordering::Release);
+        self.last_lyric_index.store(-1, Ordering::Release);
+    }
+
+    pub fn unsubscribe_lyrics(&self) {
+        self.lyrics_subscribed.store(false, Ordering::Release);
     }
 
     pub fn set_volume(&mut self, vol: i32) {
-        let vol = vol.clamp(0, 1000);
-        self.volume = vol;
+        self.volume = vol.clamp(0, 1000);
         if let Some(handle) = &self.track_handle {
-            handle.set_volume(vol as f32 / 100.0);
+            handle.set_volume(self.volume as f32 / 100.0);
         }
     }
 
     pub fn set_paused(&mut self, paused: bool) {
+        if self.paused == paused {
+            return;
+        }
+
+        let was_playing = self.is_playing();
         self.paused = paused;
+        let is_playing = self.is_playing();
+
+        if !was_playing && is_playing {
+            self.state.playback_started();
+        } else if was_playing && !is_playing {
+            self.state.playback_stopped();
+        }
+
         if let Some(handle) = &self.track_handle {
             if paused {
                 handle.pause();
@@ -104,12 +128,45 @@ impl PlayerContext {
         }
     }
 
-    pub fn to_player_response(&self) -> Player {
-        let track = self.track_info.clone();
+    pub fn stop_track(&mut self) {
+        let was_playing = self.is_playing();
 
+        self.track = None;
+        self.track_info = None;
+        self.position = 0;
+        self.end_time = None;
+
+        if was_playing {
+            self.state.playback_stopped();
+        }
+
+        if let Some(handle) = self.track_handle.take() {
+            handle.stop();
+        }
+
+        if let Some(task) = self.track_task.take() {
+            task.abort();
+        }
+
+        self.stop_signal.store(true, Ordering::Release);
+    }
+
+    pub async fn destroy(&mut self) {
+        self.stop_track();
+
+        if let Some(task) = self.gateway_task.take() {
+            task.abort();
+        }
+
+        let engine = self.engine.lock().await;
+        let mut mixer = engine.mixer.lock().await;
+        mixer.stop_all();
+    }
+
+    pub fn to_player_response(&self) -> Player {
         Player {
             guild_id: self.guild_id.clone(),
-            track,
+            track: self.track_info.clone(),
             volume: self.volume,
             paused: self.paused,
             state: PlayerState {
@@ -120,7 +177,7 @@ impl PlayerContext {
                     .map(|h| h.get_position())
                     .unwrap_or(self.position),
                 connected: !self.voice.token.is_empty(),
-                ping: self.ping.load(Ordering::Relaxed),
+                ping: self.ping.load(Ordering::Acquire),
             },
             voice: VoiceState {
                 token: self.voice.token.clone(),

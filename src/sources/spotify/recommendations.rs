@@ -21,20 +21,20 @@ impl SpotifyRecommendations {
         mix_regex: &regex::Regex,
         recommendations_limit: usize,
         search_limit: usize,
-        isrc_binary_regex: &Arc<regex::Regex>,
+        isrc_binary_regex: &regex::Regex,
     ) -> Result<LoadResult, String> {
-        let mut seed = query.to_string();
+        let mut seed = query.to_owned();
 
         if let Some(caps) = mix_regex.captures(query) {
-            let mut seed_type = caps.get(1).unwrap().as_str().to_string();
-            seed = caps.get(2).unwrap().as_str().to_string();
+            let mut seed_type = caps.get(1).unwrap().as_str().to_owned();
+            seed = caps.get(2).unwrap().as_str().to_owned();
 
             if seed_type == "isrc" {
                 if let Some(res) = SpotifySearch::search_full(
                     client,
                     token_tracker,
-                    &format!("isrc:{}", seed),
-                    &["track".to_string()],
+                    &format!("isrc:{seed}"),
+                    &["track".to_owned()],
                     search_limit,
                     isrc_binary_regex,
                 )
@@ -57,8 +57,7 @@ impl SpotifyRecommendations {
             };
 
             let url = format!(
-                "https://spclient.wg.spotify.com/inspiredby-mix/v2/seed_to_playlist/spotify:{}:{}?response-format=json",
-                seed_type, seed
+                "https://spclient.wg.spotify.com/inspiredby-mix/v2/seed_to_playlist/spotify:{seed_type}:{seed}?response-format=json"
             );
 
             let resp = client
@@ -70,26 +69,18 @@ impl SpotifyRecommendations {
                 .await
                 .ok();
 
-            if let Some(resp) = resp {
-                if resp.status().is_success() {
-                    if let Ok(json) = resp.json::<Value>().await {
-                        if let Some(playlist_uri) =
-                            json.pointer("/mediaItems/0/uri").and_then(|v| v.as_str())
-                        {
-                            if let Some(id) = playlist_uri.split(':').last() {
-                                return Err(id.to_string());
-                            }
-                        }
-                    }
-                }
+            if let Some(resp) = resp
+                && resp.status().is_success()
+                && let Ok(json) = resp.json::<Value>().await
+                && let Some(playlist_uri) =
+                    json.pointer("/mediaItems/0/uri").and_then(|v| v.as_str())
+                && let Some(id) = playlist_uri.split(':').next_back()
+            {
+                return Err(id.to_owned());
             }
         }
 
-        let track_id = if seed.starts_with("track:") {
-            &seed["track:".len()..]
-        } else {
-            &seed
-        };
+        let track_id = seed.strip_prefix("track:").unwrap_or(&seed);
         Ok(Self::fetch_pathfinder_recommendations(
             client,
             token_tracker,
@@ -106,7 +97,7 @@ impl SpotifyRecommendations {
         recommendations_limit: usize,
     ) -> LoadResult {
         let variables = json!({
-            "uri": format!("spotify:track:{}", id),
+            "uri": format!("spotify:track:{id}"),
             "limit": recommendations_limit
         });
         let hash = "c77098ee9d6ee8ad3eb844938722db60570d040b49f41f5ec6e7be9160a7c86b";
@@ -142,10 +133,8 @@ impl SpotifyRecommendations {
             .collect();
 
         let results = join_all(futs).await;
-        for res in results {
-            if let Some(track_info) = res {
-                tracks.push(Track::new(track_info));
-            }
+        for track_info in results.into_iter().flatten() {
+            tracks.push(Track::new(track_info));
         }
 
         if tracks.is_empty() {
@@ -156,7 +145,7 @@ impl SpotifyRecommendations {
 
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: "Spotify Recommendations".to_string(),
+                name: "Spotify Recommendations".to_owned(),
                 selected_track: 0,
             },
             plugin_info: json!({

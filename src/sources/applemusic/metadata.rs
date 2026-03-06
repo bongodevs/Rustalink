@@ -16,54 +16,85 @@ impl AppleMusicSource {
             None => return LoadResult::Empty {},
         };
 
-        if let Some(item) = data.pointer("/data/0") {
-            if let Some(track) = self.build_track(item, None) {
-                return LoadResult::Track(track);
-            }
+        if let Some(item) = data.pointer("/data/0")
+            && let Some(track) = self.build_track(item, None)
+        {
+            return LoadResult::Track(track);
         }
         LoadResult::Empty {}
     }
 
     pub(crate) async fn resolve_album(&self, id: &str) -> LoadResult {
-        let path = format!("/catalog/{}/albums/{}", self.country_code, id);
+        self.resolve_collection(id, "album").await
+    }
+
+    pub(crate) async fn resolve_playlist(&self, id: &str) -> LoadResult {
+        self.resolve_collection(id, "playlist").await
+    }
+
+    async fn resolve_collection(&self, id: &str, kind: &str) -> LoadResult {
+        let plural = match kind {
+            "album" => "albums",
+            "playlist" => "playlists",
+            _ => return LoadResult::Empty {},
+        };
+
+        let path = format!("/catalog/{}/{}/{}", self.country_code, plural, id);
         let data = match self.api_request(&path).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
         };
 
-        let album = match data.pointer("/data/0") {
+        let collection = match data.pointer("/data/0") {
+            Some(c) => c,
+            None => return LoadResult::Empty {},
+        };
+
+        let attributes = match collection.get("attributes") {
             Some(a) => a,
             None => return LoadResult::Empty {},
         };
 
-        let name = album
-            .pointer("/attributes/name")
+        let name = attributes
+            .get("name")
             .and_then(|v| v.as_str())
-            .unwrap_or("Unknown Album")
-            .to_string();
+            .unwrap_or("Unknown")
+            .to_owned();
 
-        let artwork = album
-            .pointer("/attributes/artwork/url")
+        let artwork = attributes
+            .pointer("/artwork/url")
             .and_then(|v| v.as_str())
             .map(|s| s.replace("{w}", "1000").replace("{h}", "1000"));
 
-        let tracks_data = album
-            .pointer("/relationships/tracks/data")
-            .and_then(|v| v.as_array());
+        let tracks_rel = match collection
+            .get("relationships")
+            .and_then(|r| r.get("tracks"))
+        {
+            Some(t) => t,
+            None => return LoadResult::Empty {},
+        };
 
-        let next_url = album
-            .pointer("/relationships/tracks/next")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+        let mut all_items = tracks_rel
+            .get("data")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
 
-        let mut all_items = tracks_data.cloned().unwrap_or_default();
-        if next_url.is_some() && (self.album_load_limit == 0 || self.album_load_limit > 1) {
+        let next_url = tracks_rel.get("next").and_then(|v| v.as_str());
+
+        let (load_limit, concurrency) = if kind == "album" {
+            (self.album_load_limit, self.album_page_load_concurrency)
+        } else {
+            (
+                self.playlist_load_limit,
+                self.playlist_page_load_concurrency,
+            )
+        };
+
+        if next_url.is_some() && (load_limit == 0 || load_limit > 1) {
+            let next_url_owned = next_url.map(|s| s.to_owned());
             let extra = self
-                .fetch_paginated_tracks(
-                    next_url,
-                    self.album_load_limit,
-                    self.album_page_load_concurrency,
-                )
+                .fetch_paginated_tracks(next_url_owned, load_limit, concurrency)
                 .await;
             all_items.extend(extra);
         }
@@ -79,75 +110,11 @@ impl AppleMusicSource {
             return LoadResult::Empty {};
         }
 
-        LoadResult::Playlist(PlaylistData {
-            info: PlaylistInfo {
-                name,
-                selected_track: -1,
-            },
-            plugin_info: serde_json::json!({
-              "type": "album",
-              "url": album.pointer("/attributes/url").and_then(|v| v.as_str()),
-              "artworkUrl": artwork,
-              "author": album.pointer("/attributes/artistName").and_then(|v| v.as_str()),
-              "totalTracks": album.pointer("/attributes/trackCount").and_then(|v| v.as_u64()).unwrap_or(tracks.len() as u64)
-            }),
-            tracks,
-        })
-    }
-
-    pub(crate) async fn resolve_playlist(&self, id: &str) -> LoadResult {
-        let path = format!("/catalog/{}/playlists/{}", self.country_code, id);
-        let data = match self.api_request(&path).await {
-            Some(d) => d,
-            None => return LoadResult::Empty {},
+        let author = if kind == "album" {
+            attributes.get("artistName").and_then(|v| v.as_str())
+        } else {
+            attributes.get("curatorName").and_then(|v| v.as_str())
         };
-
-        let playlist = match data.pointer("/data/0") {
-            Some(p) => p,
-            None => return LoadResult::Empty {},
-        };
-
-        let name = playlist
-            .pointer("/attributes/name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Unknown Playlist")
-            .to_string();
-        let artwork = playlist
-            .pointer("/attributes/artwork/url")
-            .and_then(|v| v.as_str())
-            .map(|s| s.replace("{w}", "1000").replace("{h}", "1000"));
-
-        let tracks_data = playlist
-            .pointer("/relationships/tracks/data")
-            .and_then(|v| v.as_array());
-
-        let next_url = playlist
-            .pointer("/relationships/tracks/next")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let mut all_items = tracks_data.cloned().unwrap_or_default();
-        if next_url.is_some() && (self.playlist_load_limit == 0 || self.playlist_load_limit > 1) {
-            let extra = self
-                .fetch_paginated_tracks(
-                    next_url,
-                    self.playlist_load_limit,
-                    self.playlist_page_load_concurrency,
-                )
-                .await;
-            all_items.extend(extra);
-        }
-
-        let mut tracks = Vec::new();
-        for item in all_items {
-            if let Some(track) = self.build_track(&item, artwork.clone()) {
-                tracks.push(track);
-            }
-        }
-
-        if tracks.is_empty() {
-            return LoadResult::Empty {};
-        }
 
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
@@ -155,11 +122,11 @@ impl AppleMusicSource {
                 selected_track: -1,
             },
             plugin_info: serde_json::json!({
-              "type": "playlist",
-              "url": playlist.pointer("/attributes/url").and_then(|v| v.as_str()),
-              "artworkUrl": artwork,
-              "author": playlist.pointer("/attributes/curatorName").and_then(|v| v.as_str()),
-              "totalTracks": playlist.pointer("/attributes/trackCount").and_then(|v| v.as_u64()).unwrap_or(tracks.len() as u64)
+                "type": kind,
+                "url": attributes.get("url").and_then(|v| v.as_str()),
+                "artworkUrl": artwork,
+                "author": author,
+                "totalTracks": attributes.get("trackCount").and_then(|v| v.as_u64()).unwrap_or(tracks.len() as u64)
             }),
             tracks,
         })
@@ -187,14 +154,14 @@ impl AppleMusicSource {
                 .pointer("/data/0/attributes/name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Artist")
-                .to_string();
+                .to_owned();
             let art = ad
                 .pointer("/data/0/attributes/artwork/url")
                 .and_then(|v| v.as_str())
                 .map(|s| s.replace("{w}", "1000").replace("{h}", "1000"));
             (name, art)
         } else {
-            ("Artist".to_string(), None)
+            ("Artist".to_owned(), None)
         };
 
         let mut tracks = Vec::new();
@@ -216,11 +183,11 @@ impl AppleMusicSource {
                 selected_track: -1,
             },
             plugin_info: serde_json::json!({
-              "type": "artist",
-              "url": format!("https://music.apple.com/artist/{}", id),
-              "artworkUrl": artwork,
-              "author": artist_name,
-              "totalTracks": tracks.len()
+                "type": "artist",
+                "url": format!("https://music.apple.com/artist/{}", id),
+                "artworkUrl": artwork,
+                "author": artist_name,
+                "totalTracks": tracks.len()
             }),
             tracks,
         })
@@ -243,7 +210,7 @@ impl AppleMusicSource {
                 .split("offset=")
                 .next()
                 .unwrap_or(&initial_next)
-                .to_string();
+                .to_owned();
             let offset: usize = initial_next
                 .split("offset=")
                 .nth(1)
@@ -251,7 +218,6 @@ impl AppleMusicSource {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(100);
 
-            // We don't know the total but we can fetch in chunks
             let mut all_items = Vec::new();
             let mut current_offset = offset;
             let mut limit_reached = false;
@@ -269,16 +235,18 @@ impl AppleMusicSource {
 
                     let url = format!("{}offset={}", base_url, current_offset);
                     let sem = semaphore.clone();
-                    let source = self;
 
                     futs.push(async move {
-                        let _permit: tokio::sync::SemaphorePermit<'_> =
-                            sem.acquire().await.unwrap();
-                        source.api_request(&url).await
+                        let _permit = sem.acquire().await.ok();
+                        self.api_request(&url).await
                     });
 
                     current_offset += 100;
                     pages_fetched += 1;
+                }
+
+                if futs.is_empty() {
+                    break;
                 }
 
                 let results = join_all(futs).await;
@@ -329,7 +297,7 @@ impl AppleMusicSource {
             next = data
                 .get("next")
                 .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+                .map(|s| s.to_owned());
             pages_fetched += 1;
         }
 

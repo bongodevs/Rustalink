@@ -3,38 +3,33 @@ use crate::protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track};
 
 impl DeezerSource {
     pub(crate) async fn get_track_by_isrc(&self, isrc: &str) -> Option<Track> {
-        let url = format!("track/isrc:{}", isrc);
-        tracing::debug!(
-            "DeezerSource: Fetching metadata for ISRC: {} (URL: {})",
-            isrc,
-            url
-        );
+        let url = format!("track/isrc:{isrc}");
+        tracing::debug!("DeezerSource: Fetching metadata for ISRC: {isrc} (URL: {url})");
         let json = self.get_json_public(&url).await?;
         if json.get("id").is_some() {
             let res = self.parse_track(&json);
             if let Some(ref t) = res {
                 tracing::debug!(
-                    "DeezerSource: Found track for ISRC {}: {}",
-                    isrc,
+                    "DeezerSource: Found track for ISRC {isrc}: {}",
                     t.info.identifier
                 );
             } else {
-                tracing::debug!("DeezerSource: Failed to parse track for ISRC {}", isrc);
+                tracing::debug!("DeezerSource: Failed to parse track for ISRC {isrc}");
             }
             res
         } else {
-            tracing::debug!("DeezerSource: No track found for ISRC {}", isrc);
+            tracing::debug!("DeezerSource: No track found for ISRC {isrc}");
             None
         }
     }
 
     pub(crate) async fn get_album(&self, id: &str) -> LoadResult {
-        let json = match self.get_json_public(&format!("album/{}", id)).await {
+        let json = match self.get_json_public(&format!("album/{id}")).await {
             Some(j) => j,
             None => return LoadResult::Empty {},
         };
         let tracks_json = match self
-            .get_json_public(&format!("album/{}/tracks?limit=10000", id))
+            .get_json_public(&format!("album/{id}/tracks?limit=10000"))
             .await
         {
             Some(j) => j,
@@ -44,7 +39,7 @@ impl DeezerSource {
         let artwork_url = json
             .get("cover_xl")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
         if let Some(data) = tracks_json.get("data").and_then(|d| d.as_array()) {
             for item in data {
                 if let Some(mut track) = self.parse_track(item) {
@@ -64,12 +59,12 @@ impl DeezerSource {
                     .get("title")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown Album")
-                    .to_string(),
+                    .to_owned(),
                 selected_track: -1,
             },
             plugin_info: serde_json::json!({
               "type": "album",
-              "url": format!("https://www.deezer.com/album/{}", id),
+              "url": format!("https://www.deezer.com/album/{id}"),
               "artworkUrl": json.get("cover_xl").and_then(|v| v.as_str()),
               "author": json.get("artist").and_then(|v| v.get("name")).and_then(|v| v.as_str()),
               "totalTracks": json.get("nb_tracks").and_then(|v| v.as_u64()).unwrap_or(tracks.len() as u64)
@@ -79,12 +74,12 @@ impl DeezerSource {
     }
 
     pub(crate) async fn get_playlist(&self, id: &str) -> LoadResult {
-        let json = match self.get_json_public(&format!("playlist/{}", id)).await {
+        let json = match self.get_json_public(&format!("playlist/{id}")).await {
             Some(j) => j,
             None => return LoadResult::Empty {},
         };
         let tracks_json = match self
-            .get_json_public(&format!("playlist/{}/tracks?limit=10000", id))
+            .get_json_public(&format!("playlist/{id}/tracks?limit=10000"))
             .await
         {
             Some(j) => j,
@@ -107,12 +102,12 @@ impl DeezerSource {
                     .get("title")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unknown Playlist")
-                    .to_string(),
+                    .to_owned(),
                 selected_track: -1,
             },
             plugin_info: serde_json::json!({
               "type": "playlist",
-              "url": format!("https://www.deezer.com/playlist/{}", id),
+              "url": format!("https://www.deezer.com/playlist/{id}"),
               "artworkUrl": json.get("picture_xl").and_then(|v| v.as_str()),
               "author": json.get("creator").and_then(|v| v.get("name")).and_then(|v| v.as_str()),
               "totalTracks": json.get("nb_tracks").and_then(|v| v.as_u64()).unwrap_or(tracks.len() as u64)
@@ -122,12 +117,12 @@ impl DeezerSource {
     }
 
     pub(crate) async fn get_artist(&self, id: &str) -> LoadResult {
-        let json = match self.get_json_public(&format!("artist/{}", id)).await {
+        let json = match self.get_json_public(&format!("artist/{id}")).await {
             Some(j) => j,
             None => return LoadResult::Empty {},
         };
         let tracks_json = match self
-            .get_json_public(&format!("artist/{}/top?limit=50", id))
+            .get_json_public(&format!("artist/{id}/top?limit=50"))
             .await
         {
             Some(j) => j,
@@ -136,12 +131,12 @@ impl DeezerSource {
         let artwork_url = json
             .get("picture_xl")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
         let author = json
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Artist")
-            .to_string();
+            .to_owned();
         let mut tracks = Vec::new();
         if let Some(data) = tracks_json.get("data").and_then(|d| d.as_array()) {
             for item in data {
@@ -158,12 +153,12 @@ impl DeezerSource {
         }
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: format!("{}'s Top Tracks", author),
+                name: format!("{author}'s Top Tracks"),
                 selected_track: -1,
             },
             plugin_info: serde_json::json!({
               "type": "artist",
-              "url": format!("https://www.deezer.com/artist/{}", id),
+              "url": format!("https://www.deezer.com/artist/{id}"),
               "artworkUrl": json.get("picture_xl").and_then(|v| v.as_str()),
               "author": author,
               "totalTracks": tracks.len()

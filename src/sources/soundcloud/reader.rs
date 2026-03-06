@@ -11,7 +11,7 @@ use tracing::debug;
 use crate::{
     audio::source::{HttpSource, create_client},
     common::types::AnyResult,
-    configs::HttpProxyConfig,
+    config::HttpProxyConfig,
     sources::youtube::hls::{
         fetcher::fetch_segment_into, resolver::resolve_playlist, ts_demux::extract_adts_from_ts,
         types::Resource,
@@ -33,7 +33,7 @@ impl SoundCloudReader {
         local_addr: Option<std::net::IpAddr>,
         proxy: Option<HttpProxyConfig>,
     ) -> AnyResult<Self> {
-        let client = create_client(USER_AGENT.to_string(), local_addr, proxy, None)?;
+        let client = create_client(USER_AGENT.to_owned(), local_addr, proxy, None)?;
         let inner = HttpSource::new(client, url)?;
         Ok(Self { inner })
     }
@@ -107,7 +107,7 @@ impl SoundCloudHlsReader {
         proxy: Option<HttpProxyConfig>,
     ) -> AnyResult<Self> {
         let handle = tokio::runtime::Handle::current();
-        let client = create_client(USER_AGENT.to_string(), local_addr, proxy, None)?;
+        let client = create_client(USER_AGENT.to_owned(), local_addr, proxy, None)?;
         let (segment_urls, _map_url) = handle.block_on(resolve_playlist(&client, manifest_url))?;
         if segment_urls.is_empty() {
             return Err("SoundCloud HLS: playlist contained no segments".into());
@@ -269,11 +269,12 @@ impl Read for SoundCloudHlsReader {
             let remaining = self.buf.len() - self.pos;
             if remaining <= LOW_WATER_BYTES {
                 let (lock, cvar) = &*self.shared;
-                if let Some(mut state) = lock.try_lock() {
-                    if !state.need_data && !state.eos {
-                        state.need_data = true;
-                        cvar.notify_one();
-                    }
+                if let Some(mut state) = lock.try_lock()
+                    && !state.need_data
+                    && !state.eos
+                {
+                    state.need_data = true;
+                    cvar.notify_one();
                 }
             }
             let n = out.len().min(remaining);

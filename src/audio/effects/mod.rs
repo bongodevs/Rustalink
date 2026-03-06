@@ -12,6 +12,7 @@ use crate::audio::buffer::PooledBuffer;
 
 /// Interface for transition effects.
 pub trait TransitionEffect: Send {
+    #[allow(clippy::too_many_arguments)]
     fn process(
         &mut self,
         mix_buf: &mut [i32],

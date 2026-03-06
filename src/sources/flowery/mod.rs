@@ -5,7 +5,7 @@ use regex::Regex;
 use tracing::debug;
 
 use crate::{
-    configs::sources::FloweryConfig,
+    config::sources::FloweryConfig,
     protocol::tracks::{LoadResult, Track, TrackInfo},
     sources::{
         http::HttpTrack,
@@ -114,16 +114,16 @@ impl FlowerySource {
                     let value = &pair[eq_idx + 1..];
                     params.insert(
                         urlencoding::decode(key)
-                            .unwrap_or_else(|_| std::borrow::Cow::Borrowed(key))
+                            .unwrap_or(std::borrow::Cow::Borrowed(key))
                             .into_owned(),
                         urlencoding::decode(value)
-                            .unwrap_or_else(|_| std::borrow::Cow::Borrowed(value))
+                            .unwrap_or(std::borrow::Cow::Borrowed(value))
                             .into_owned(),
                     );
                 } else if !pair.is_empty() {
                     params.insert(
                         urlencoding::decode(pair)
-                            .unwrap_or_else(|_| std::borrow::Cow::Borrowed(pair))
+                            .unwrap_or(std::borrow::Cow::Borrowed(pair))
                             .into_owned(),
                         "".to_string(),
                     );
@@ -132,7 +132,7 @@ impl FlowerySource {
             decoded_text
         } else {
             urlencoding::decode(path_and_query)
-                .unwrap_or_else(|_| std::borrow::Cow::Borrowed(path_and_query))
+                .unwrap_or(std::borrow::Cow::Borrowed(path_and_query))
                 .into_owned()
         };
 

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
 
-use super::LyricsProvider;
+use super::{LyricsProvider, utils};
 use crate::protocol::{
     models::{LyricsData, LyricsLine},
     tracks::TrackInfo,
@@ -12,30 +12,17 @@ pub struct LetrasMusProvider {
     client: reqwest::Client,
 }
 
+impl Default for LetrasMusProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LetrasMusProvider {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
         }
-    }
-
-    fn clean(&self, text: &str) -> String {
-        let patterns = [
-            r#"(?i)\s*\([^)]*(?:official|lyrics?|video|audio|mv|visualizer|color\s*coded|hd|4k|prod\.)[^)]*\)"#,
-            r#"(?i)\s*\[[^\]]*(?:official|lyrics?|video|audio|mv|visualizer|color\s*coded|hd|4k|prod\.)[^\]]*\]"#,
-            r#"(?i)\s*[([]\s*(?:ft\.?|feat\.?|featuring)\s+[^)\]]+[)\]]"#,
-            r#"(?i)\s*-\s*Topic$"#,
-            r#"(?i)VEVO$"#,
-            r#"(?i)\s*[(\[]\s*Remastered\s*[\)\]]"#,
-        ];
-
-        let mut result = text.to_string();
-        for pattern in patterns {
-            if let Ok(re) = Regex::new(pattern) {
-                result = re.replace_all(&result, "").to_string();
-            }
-        }
-        result.trim().to_string()
     }
 }
 
@@ -46,8 +33,8 @@ impl LyricsProvider for LetrasMusProvider {
     }
 
     async fn load_lyrics(&self, track: &TrackInfo) -> Option<LyricsData> {
-        let title = self.clean(&track.title);
-        let author = self.clean(&track.author);
+        let title = utils::clean_text(&track.title);
+        let author = utils::clean_text(&track.author);
         let query = format!("{} {}", title, author);
 
         // Search via Solr API
@@ -93,45 +80,44 @@ impl LyricsProvider for LetrasMusProvider {
                 "https://www.letras.mus.br/api/v2/subtitle/{}/{}/",
                 l_id, y_id
             );
-            if let Ok(api_resp) = self.client.get(api_url).send().await {
-                if let Ok(api_data) = api_resp.json::<Value>().await {
-                    if let Some(sub_str) = api_data["Original"]["Subtitle"].as_str() {
-                        if let Ok(parsed_sub) = serde_json::from_str::<Value>(sub_str) {
-                            if let Some(sub_arr) = parsed_sub.as_array() {
-                                let lines: Vec<LyricsLine> = sub_arr
-                                    .iter()
-                                    .filter_map(|e| {
-                                        let arr = e.as_array()?;
-                                        let text = arr.get(0)?.as_str()?;
-                                        let start = arr.get(1)?.as_f64()?;
-                                        let end = arr.get(2)?.as_f64()?;
-                                        Some(LyricsLine {
-                                            text: text.to_string(),
-                                            timestamp: (start * 1000.0) as u64,
-                                            duration: ((end - start) * 1000.0) as u64,
-                                        })
-                                    })
-                                    .collect();
+            if let Ok(api_resp) = self.client.get(api_url).send().await
+                && let Ok(api_data) = api_resp.json::<Value>().await
+            {
+                let sub_val = api_data["Original"]["Subtitle"]
+                    .as_str()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok());
+                if let Some(sub_arr) = sub_val.as_ref().and_then(|v| v.as_array()) {
+                    let lines: Vec<LyricsLine> = sub_arr
+                        .iter()
+                        .filter_map(|e| {
+                            let arr = e.as_array()?;
+                            let text = arr.first()?.as_str()?;
+                            let start = arr.get(1)?.as_f64()?;
+                            let end = arr.get(2)?.as_f64()?;
+                            Some(LyricsLine {
+                                text: text.to_string(),
+                                timestamp: (start * 1000.0) as u64,
+                                duration: ((end - start) * 1000.0) as u64,
+                            })
+                        })
+                        .collect();
 
-                                if !lines.is_empty() {
-                                    return Some(LyricsData {
-                                        name: omq
-                                            .as_ref()
-                                            .and_then(|o| o["Name"].as_str())
-                                            .unwrap_or(&track.title)
-                                            .to_string(),
-                                        author: track.author.clone(),
-                                        provider: "letrasmus".to_string(),
-                                        text: lines
-                                            .iter()
-                                            .map(|l| l.text.as_str())
-                                            .collect::<Vec<_>>()
-                                            .join("\n"),
-                                        lines: Some(lines),
-                                    });
-                                }
-                            }
-                        }
+                    if !lines.is_empty() {
+                        return Some(LyricsData {
+                            name: omq
+                                .as_ref()
+                                .and_then(|o| o["Name"].as_str())
+                                .unwrap_or(&track.title)
+                                .to_string(),
+                            author: track.author.clone(),
+                            provider: "letrasmus".to_string(),
+                            text: lines
+                                .iter()
+                                .map(|l| l.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                            lines: Some(lines),
+                        });
                     }
                 }
             }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -13,6 +13,13 @@ use crate::{
 
 const API_BASE: &str = "https://api.tidal.com/v1";
 
+fn url_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"https?://(?:(?:listen|www)\.)?tidal\.com/(?:browse/)?(album|track|playlist|mix|artist)/([a-zA-Z0-9\-]+)(?:/.*)?(?:\?.*)?").unwrap()
+    })
+}
+
 pub struct TidalSource {
     client: Arc<reqwest::Client>,
     token_tracker: Arc<TidalTokenTracker>,
@@ -24,15 +31,11 @@ pub struct TidalSource {
     album_load_limit: usize,
     #[allow(dead_code)]
     artist_load_limit: usize,
-
-    search_prefixes: Vec<String>,
-    rec_prefixes: Vec<String>,
-    url_regex: Regex,
 }
 
 impl TidalSource {
     pub fn new(
-        config: Option<crate::configs::TidalConfig>,
+        config: Option<crate::config::TidalConfig>,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         let (country, p_limit, a_limit, art_limit, token) = if let Some(c) = config {
@@ -51,32 +54,29 @@ impl TidalSource {
         token_tracker.clone().init();
 
         Ok(Self {
-      token_tracker,
-      client,
-      country_code: country,
-      playlist_load_limit: p_limit,
-      album_load_limit: a_limit,
-      artist_load_limit: art_limit,
-      search_prefixes: vec!["tdsearch:".to_string()],
-      rec_prefixes: vec!["tdrec:".to_string()],
-      url_regex: Regex::new(r"https?://(?:(?:listen|www)\.)?tidal\.com/(?:browse/)?(album|track|playlist|mix|artist)/([a-zA-Z0-9\-]+)(?:/.*)?(?:\?.*)?").unwrap(),
-    })
+            token_tracker,
+            client,
+            country_code: country,
+            playlist_load_limit: p_limit,
+            album_load_limit: a_limit,
+            artist_load_limit: art_limit,
+        })
     }
 
     async fn api_request(&self, path: &str) -> Option<Value> {
         let token = self.token_tracker.get_token().await?;
 
         let url = if path.starts_with("http") {
-            path.to_string()
+            path.to_owned()
         } else {
-            format!("{}{}", API_BASE, path)
+            format!("{API_BASE}{path}")
         };
 
         // Append country code
         let url = if url.contains('?') {
-            format!("{}&countryCode={}", url, self.country_code)
+            format!("{url}&countryCode={}", self.country_code)
         } else {
-            format!("{}?countryCode={}", url, self.country_code)
+            format!("{url}?countryCode={}", self.country_code)
         };
 
         let req = self
@@ -125,7 +125,7 @@ impl TidalSource {
                     .collect::<Vec<_>>()
                     .join(", ")
             })
-            .unwrap_or_else(|| "Unknown Artist".to_string());
+            .unwrap_or_else(|| "Unknown Artist".to_owned());
 
         let length = item.get("duration").and_then(|v| v.as_u64()).unwrap_or(0) * 1000;
 
@@ -133,7 +133,7 @@ impl TidalSource {
             .get("isrc")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
         let artwork_url = item
             .get("album")
@@ -162,14 +162,14 @@ impl TidalSource {
             uri: url,
             artwork_url,
             isrc,
-            source_name: "tidal".to_string(),
+            source_name: "tidal".to_owned(),
             is_seekable: true,
             position: 0,
         })
     }
 
     async fn get_track_data(&self, id: &str) -> LoadResult {
-        let path = format!("/tracks/{}", id);
+        let path = format!("/tracks/{id}");
         let data = match self.api_request(&path).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
@@ -183,7 +183,7 @@ impl TidalSource {
 
     async fn get_album_or_playlist(&self, id: &str, type_str: &str) -> LoadResult {
         // First get album/playlist info for metadata
-        let info_path = format!("/{}s/{}", type_str, id);
+        let info_path = format!("/{type_str}s/{id}");
         let info_data = match self.api_request(&info_path).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
@@ -193,10 +193,10 @@ impl TidalSource {
             .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown")
-            .to_string();
+            .to_owned();
 
         // Fetch tracks
-        let tracks_path = format!("/{}s/{}/tracks?limit=100", type_str, id); // Simplified limit for now
+        let tracks_path = format!("/{type_str}s/{id}/tracks?limit=100"); // Simplified limit for now
         let tracks_data = match self.api_request(&tracks_path).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
@@ -229,13 +229,13 @@ impl TidalSource {
                 name: title,
                 selected_track: -1,
             },
-            plugin_info: serde_json::json!({ "type": type_str, "url": format!("https://tidal.com/browse/{}/{}", type_str, id), "artworkUrl": info_data.get("cover").or_else(|| info_data.get("image")).and_then(|v| v.as_str()).map(|s| format!("https://resources.tidal.com/images/{}/1280x1280.jpg", s.replace("-", "/"))), "author": info_data.get("artist").and_then(|a| a.get("name")).or_else(|| info_data.get("creator").and_then(|c| c.get("name"))).and_then(|v| v.as_str()), "totalTracks": info_data.get("numberOfTracks").or_else(|| info_data.get("numberOfSongs")).and_then(|v| v.as_u64()).unwrap_or(tracks.len() as u64) }),
+            plugin_info: serde_json::json!({ "type": type_str, "url": format!("https://tidal.com/browse/{type_str}/{id}"), "artworkUrl": info_data.get("cover").or_else(|| info_data.get("image")).and_then(|v| v.as_str()).map(|s| format!("https://resources.tidal.com/images/{}/1280x1280.jpg", s.replace("-", "/"))), "author": info_data.get("artist").and_then(|a| a.get("name")).or_else(|| info_data.get("creator").and_then(|c| c.get("name"))).and_then(|v| v.as_str()), "totalTracks": info_data.get("numberOfTracks").or_else(|| info_data.get("numberOfSongs")).and_then(|v| v.as_u64()).unwrap_or(tracks.len() as u64) }),
             tracks,
         })
     }
 
     async fn get_mix(&self, id: &str, name_override: Option<String>) -> LoadResult {
-        let path = format!("/mixes/{}/items?limit=100", id);
+        let path = format!("/mixes/{id}/items?limit=100");
         let data = match self.api_request(&path).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
@@ -262,20 +262,20 @@ impl TidalSource {
             return LoadResult::Empty {};
         }
 
-        let name = name_override.unwrap_or_else(|| format!("Mix: {}", id));
+        let name = name_override.unwrap_or_else(|| format!("Mix: {id}"));
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name,
                 selected_track: -1,
             },
-            plugin_info: serde_json::json!({ "type": "playlist", "url": format!("https://tidal.com/browse/mix/{}", id), "totalTracks": tracks.len() }),
+            plugin_info: serde_json::json!({ "type": "playlist", "url": format!("https://tidal.com/browse/mix/{id}"), "totalTracks": tracks.len() }),
             tracks,
         })
     }
 
     async fn search(&self, query: &str) -> LoadResult {
         let encoded_query = urlencoding::encode(query);
-        let path = format!("/search?query={}&limit=10&types=TRACKS", encoded_query);
+        let path = format!("/search?query={encoded_query}&limit=10&types=TRACKS");
 
         let data = match self.api_request(&path).await {
             Some(d) => d,
@@ -301,7 +301,7 @@ impl TidalSource {
     }
 
     async fn get_recommendations(&self, id: &str) -> LoadResult {
-        let path = format!("/tracks/{}", id);
+        let path = format!("/tracks/{id}");
         let data = match self.api_request(&path).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
@@ -317,7 +317,7 @@ impl TidalSource {
     }
     async fn get_artist_top_tracks(&self, id: &str) -> LoadResult {
         // First get artist info for name
-        let info_path = format!("/artists/{}", id);
+        let info_path = format!("/artists/{id}");
         let info_data = match self.api_request(&info_path).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
@@ -327,9 +327,9 @@ impl TidalSource {
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown Artist")
-            .to_string();
+            .to_owned();
 
-        let path = format!("/artists/{}/toptracks?limit=10", id);
+        let path = format!("/artists/{id}/toptracks?limit=10");
         let data = match self.api_request(&path).await {
             Some(d) => d,
             None => return LoadResult::Empty {},
@@ -357,10 +357,10 @@ impl TidalSource {
 
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
-                name: format!("{}'s Top Tracks", artist_name),
+                name: format!("{artist_name}'s Top Tracks"),
                 selected_track: -1,
             },
-            plugin_info: serde_json::json!({ "type": "artist", "url": format!("https://tidal.com/browse/artist/{}", id), "artworkUrl": info_data.get("picture").and_then(|v| v.as_str()).map(|s| format!("https://resources.tidal.com/images/{}/1280x1280.jpg", s.replace("-", "/"))), "author": artist_name, "totalTracks": tracks.len() }),
+            plugin_info: serde_json::json!({ "type": "artist", "url": format!("https://tidal.com/browse/artist/{id}"), "artworkUrl": info_data.get("picture").and_then(|v| v.as_str()).map(|s| format!("https://resources.tidal.com/images/{}/1280x1280.jpg", s.replace("-", "/"))), "author": artist_name, "totalTracks": tracks.len() }),
             tracks,
         })
     }
@@ -373,15 +373,18 @@ impl SourcePlugin for TidalSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
-            .iter()
+        self.search_prefixes()
+            .into_iter()
             .any(|p| identifier.starts_with(p))
-            || self.rec_prefixes.iter().any(|p| identifier.starts_with(p))
-            || self.url_regex.is_match(identifier)
+            || self
+                .rec_prefixes()
+                .into_iter()
+                .any(|p| identifier.starts_with(p))
+            || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["tdsearch:"]
     }
 
     fn is_mirror(&self) -> bool {
@@ -394,24 +397,24 @@ impl SourcePlugin for TidalSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p: &&str| identifier.starts_with(*p))
         {
             let query = &identifier[prefix.len()..];
             return self.search(query).await;
         }
 
         if let Some(prefix) = self
-            .rec_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .rec_prefixes()
+            .into_iter()
+            .find(|p: &&str| identifier.starts_with(*p))
         {
             let id = &identifier[prefix.len()..];
             return self.get_recommendations(id).await;
         }
 
-        if let Some(caps) = self.url_regex.captures(identifier) {
+        if let Some(caps) = url_regex().captures(identifier) {
             let type_str = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let id = caps.get(2).map(|m| m.as_str()).unwrap_or("");
 
@@ -434,5 +437,9 @@ impl SourcePlugin for TidalSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<crate::sources::plugin::BoxedTrack> {
         None
+    }
+
+    fn rec_prefixes(&self) -> Vec<&str> {
+        vec!["tdrec:"]
     }
 }

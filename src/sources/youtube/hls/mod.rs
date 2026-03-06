@@ -23,7 +23,7 @@ use self::{
     ts_demux::extract_adts_from_ts,
     types::Resource,
 };
-use crate::{configs::HttpProxyConfig, sources::youtube::cipher::YouTubeCipherManager};
+use crate::{config::HttpProxyConfig, sources::youtube::cipher::YouTubeCipherManager};
 
 /// Number of segments fetched into the look-ahead buffer by the background thread.
 /// Increased to 4 to provide a deeper buffer against network jitter.
@@ -121,15 +121,15 @@ impl HlsReader {
             builder = builder.local_address(ip);
         }
 
-        if let Some(ref proxy_cfg) = proxy {
-            if let Some(ref proxy_url) = proxy_cfg.url {
-                tracing::debug!("HLS: configuring proxy: {}", proxy_url);
-                let mut proxy_obj = reqwest::Proxy::all(proxy_url)?;
-                if let (Some(user), Some(pass)) = (&proxy_cfg.username, &proxy_cfg.password) {
-                    proxy_obj = proxy_obj.basic_auth(user, pass);
-                }
-                builder = builder.proxy(proxy_obj);
+        if let Some(ref proxy_cfg) = proxy
+            && let Some(ref proxy_url) = proxy_cfg.url
+        {
+            tracing::debug!("HLS: configuring proxy: {}", proxy_url);
+            let mut proxy_obj = reqwest::Proxy::all(proxy_url)?;
+            if let (Some(user), Some(pass)) = (&proxy_cfg.username, &proxy_cfg.password) {
+                proxy_obj = proxy_obj.basic_auth(user, pass);
             }
+            builder = builder.proxy(proxy_obj);
         }
 
         let client: reqwest::Client = builder.build()?;
@@ -310,11 +310,12 @@ impl Read for HlsReader {
             let remaining = self.buf.len() - self.pos;
             if remaining <= LOW_WATER_BYTES {
                 let (lock, cvar) = &*self.shared;
-                if let Some(mut state) = lock.try_lock() {
-                    if !state.need_data && !state.eos {
-                        state.need_data = true;
-                        cvar.notify_one();
-                    }
+                if let Some(mut state) = lock.try_lock()
+                    && !state.need_data
+                    && !state.eos
+                {
+                    state.need_data = true;
+                    cvar.notify_one();
                 }
             }
 
@@ -384,6 +385,7 @@ impl MediaSource for HlsReader {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prefetch_loop(
     shared: Arc<(Mutex<SharedState>, Condvar)>,
     abort_flag: Arc<AtomicBool>,
@@ -432,12 +434,10 @@ fn prefetch_loop(
                 let mut tmp_buf = Vec::with_capacity(256 * 1024);
                 for res in &batch {
                     if let Ok(resolved) = resolve_resource_static(res, &cipher_manager, &player_url)
-                    {
-                        if let Err(e) =
+                        && let Err(e) =
                             handle.block_on(fetch_and_demux_into(&client, &resolved, &mut tmp_buf))
-                        {
-                            tracing::warn!("HLS prefetch: segment fetch error during seek: {}", e);
-                        }
+                    {
+                        tracing::warn!("HLS prefetch: segment fetch error during seek: {}", e);
                     }
                 }
 
@@ -490,12 +490,11 @@ fn prefetch_loop(
                 break;
             }
 
-            if let Ok(resolved) = resolve_resource_static(res, &cipher_manager, &player_url) {
-                if let Err(e) =
+            if let Ok(resolved) = resolve_resource_static(res, &cipher_manager, &player_url)
+                && let Err(e) =
                     handle.block_on(fetch_and_demux_into(&client, &resolved, &mut tmp_buf))
-                {
-                    tracing::warn!("HLS prefetch: segment fetch error: {}", e);
-                }
+            {
+                tracing::warn!("HLS prefetch: segment fetch error: {}", e);
             }
         }
 

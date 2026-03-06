@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -16,61 +16,81 @@ use crate::{
 
 const BASE_URL: &str = "https://api-v2.soundcloud.com";
 
+fn track_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^https?://(?:www\.|m\.)?soundcloud\.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)(?:/s-[a-zA-Z0-9_-]+)?/?(?:\?.*)?$").unwrap()
+    })
+}
+
+fn playlist_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^https?://(?:www\.|m\.)?soundcloud\.com/([a-zA-Z0-9_-]+)/sets/([a-zA-Z0-9_:-]+)(?:/[a-zA-Z0-9_-]+)?/?(?:\?.*)?$").unwrap()
+    })
+}
+
+fn liked_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^https?://(?:www\.|m\.)?soundcloud\.com/([a-zA-Z0-9_-]+)/likes/?(?:\?.*)?$")
+            .unwrap()
+    })
+}
+
+fn short_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^https://on\.soundcloud\.com/[a-zA-Z0-9_-]+/?(?:\?.*)?$").unwrap()
+    })
+}
+
+fn mobile_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^https://soundcloud\.app\.goo\.gl/[a-zA-Z0-9_-]+/?(?:\?.*)?$").unwrap()
+    })
+}
+
+fn liked_user_urn_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#""urn":"soundcloud:users:(\d+)","username":"([^"]+)""#).unwrap())
+}
+
+fn user_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^https?://(?:www\.|m\.)?soundcloud\.com/([a-zA-Z0-9_-]+)(?:/(tracks|popular-tracks|albums|sets|reposts|spotlight))?/?(?:\?.*)?$").unwrap()
+    })
+}
+
+fn search_url_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"^https?://(?:www\.|m\.)?soundcloud\.com/search(?:/(?:sounds|people|albums|sets))?/?(?:\?.*)?$").unwrap()
+    })
+}
+
 /// SoundCloud audio source.
 pub struct SoundCloudSource {
     client: Arc<reqwest::Client>,
-    config: crate::configs::SoundCloudConfig,
+    config: crate::config::SoundCloudConfig,
     token_tracker: Arc<SoundCloudTokenTracker>,
-    /// Regex patterns
-    track_url_re: Regex,
-    playlist_url_re: Regex,
-    liked_url_re: Regex,
-    short_url_re: Regex,
-    mobile_url_re: Regex,
-    liked_user_urn_re: Regex,
-    user_url_re: Regex,
-    search_url_re: Regex,
-    search_prefixes: Vec<String>,
 }
 
 impl SoundCloudSource {
     pub fn new(
-        config: crate::configs::SoundCloudConfig,
+        config: crate::config::SoundCloudConfig,
         client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
         let token_tracker = Arc::new(SoundCloudTokenTracker::new(client.clone(), &config));
         token_tracker.clone().init();
 
         Ok(Self {
-      client,
-      config,
-      token_tracker,
-      track_url_re: Regex::new(
-        r"^https?://(?:www\.|m\.)?soundcloud\.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)(?:/s-[a-zA-Z0-9_-]+)?/?(?:\?.*)?$"
-      ).unwrap(),
-      playlist_url_re: Regex::new(
-        r"^https?://(?:www\.|m\.)?soundcloud\.com/([a-zA-Z0-9_-]+)/sets/([a-zA-Z0-9_:-]+)(?:/[a-zA-Z0-9_-]+)?/?(?:\?.*)?$"
-      ).unwrap(),
-      liked_url_re: Regex::new(
-        r"^https?://(?:www\.|m\.)?soundcloud\.com/([a-zA-Z0-9_-]+)/likes/?(?:\?.*)?$"
-      ).unwrap(),
-      short_url_re: Regex::new(
-        r"^https://on\.soundcloud\.com/[a-zA-Z0-9_-]+/?(?:\?.*)?$"
-      ).unwrap(),
-      mobile_url_re: Regex::new(
-        r"^https://soundcloud\.app\.goo\.gl/[a-zA-Z0-9_-]+/?(?:\?.*)?$"
-      ).unwrap(),
-      liked_user_urn_re: Regex::new(
-        r#""urn":"soundcloud:users:(\d+)","username":"([^"]+)""#
-      ).unwrap(),
-      user_url_re: Regex::new(
-        r"^https?://(?:www\.|m\.)?soundcloud\.com/([a-zA-Z0-9_-]+)(?:/(tracks|popular-tracks|albums|sets|reposts|spotlight))?/?(?:\?.*)?$"
-      ).unwrap(),
-      search_url_re: Regex::new(
-        r"^https?://(?:www\.|m\.)?soundcloud\.com/search(?:/(?:sounds|people|albums|sets))?/?(?:\?.*)?$"
-      ).unwrap(),
-      search_prefixes: vec!["scsearch:".to_string()],
-    })
+            client,
+            config,
+            token_tracker,
+        })
     }
 
     /// Resolve a URL via the SoundCloud resolve API.
@@ -107,14 +127,18 @@ impl SoundCloudSource {
     fn parse_track(&self, json: &Value) -> Result<Track, String> {
         let id = json
             .get("id")
-            .map(|v| v.to_string().trim_matches('"').to_string())
-            .ok_or_else(|| "Missing track ID".to_string())?;
+            .and_then(|v| {
+                v.as_str()
+                    .map(|s| s.to_owned())
+                    .or_else(|| Some(v.to_string()))
+            })
+            .ok_or_else(|| "Missing track ID".to_owned())?;
 
         let title = json
             .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown")
-            .to_string();
+            .to_owned();
 
         trace!("SoundCloud: Parsing track {}: {}", id, title);
 
@@ -157,7 +181,7 @@ impl SoundCloudSource {
             .and_then(|u| u.get("username"))
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown")
-            .to_string();
+            .to_owned();
         let duration = json
             .get("full_duration")
             .or_else(|| json.get("duration"))
@@ -167,7 +191,7 @@ impl SoundCloudSource {
             .get("permalink_url")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
         let artwork_url = json
             .get("artwork_url")
             .and_then(|v| v.as_str())
@@ -178,7 +202,7 @@ impl SoundCloudSource {
             .and_then(|m| m.get("isrc"))
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
 
         let track = Track::new(TrackInfo {
             identifier: id,
@@ -191,7 +215,7 @@ impl SoundCloudSource {
             uri: uri.clone(),
             artwork_url,
             isrc,
-            source_name: "soundcloud".to_string(),
+            source_name: "soundcloud".to_owned(),
         });
 
         Ok(track)
@@ -253,7 +277,7 @@ impl SoundCloudSource {
             })
             .or_else(|| transcodings.first())?;
 
-        let lookup_url = selected.get("url").and_then(|v| v.as_str())?.to_string();
+        let lookup_url = selected.get("url").and_then(|v| v.as_str())?.to_owned();
         let proto = selected
             .get("format")
             .and_then(|f| f.get("protocol"))
@@ -305,7 +329,7 @@ impl SoundCloudSource {
         let stream_url = json
             .get("url")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_owned());
         if let Some(ref url) = stream_url {
             debug!("SoundCloud: Resolved playback URL: {}", url);
         }
@@ -430,7 +454,7 @@ impl SoundCloudSource {
         // Do a HEAD request with no redirects to get the Location header
         let resp = self.client.head(url).send().await.ok()?;
 
-        let location = resp.headers().get("location")?.to_str().ok()?.to_string();
+        let location = resp.headers().get("location")?.to_str().ok()?.to_owned();
         Some(location)
     }
 
@@ -459,7 +483,7 @@ impl SoundCloudSource {
             .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("Untitled playlist")
-            .to_string();
+            .to_owned();
 
         let raw_tracks = json
             .get("tracks")
@@ -473,7 +497,7 @@ impl SoundCloudSource {
 
         for t in &raw_tracks {
             if t.get("title").is_some() {
-                if let Some(track) = self.parse_track(t).ok() {
+                if let Ok(track) = self.parse_track(t) {
                     complete.push(track);
                 }
             } else if let Some(id) = t.get("id").map(|v| v.to_string()) {
@@ -491,18 +515,17 @@ impl SoundCloudSource {
         // Batch fetch stub tracks in groups of 50
         for chunk in needed.chunks(50) {
             let ids = chunk.join(",");
-            let batch_url = format!("{}/tracks?ids={}&client_id={}", BASE_URL, ids, client_id);
+            let batch_url = format!("{BASE_URL}/tracks?ids={ids}&client_id={client_id}");
 
             let builder = self.client.get(&batch_url);
 
-            if let Ok(resp) = builder.send().await {
-                if let Ok(json) = resp.json::<Value>().await {
-                    if let Some(arr) = json.as_array() {
-                        for item in arr {
-                            if let Some(track) = self.parse_track(item).ok() {
-                                complete.push(track);
-                            }
-                        }
+            if let Ok(resp) = builder.send().await
+                && let Ok(json) = resp.json::<Value>().await
+                && let Some(arr) = json.as_array()
+            {
+                for item in arr {
+                    if let Ok(track) = self.parse_track(item) {
+                        complete.push(track);
                     }
                 }
             }
@@ -540,7 +563,7 @@ impl SoundCloudSource {
             Err(_) => return LoadResult::Empty {},
         };
 
-        let caps = match self.liked_user_urn_re.captures(&html) {
+        let caps = match liked_user_urn_re().captures(&html) {
             Some(c) => c,
             None => return LoadResult::Empty {},
         };
@@ -548,10 +571,8 @@ impl SoundCloudSource {
         let user_id = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         let user_name = caps.get(2).map(|m| m.as_str()).unwrap_or("User");
 
-        let liked_url = format!(
-            "{}/users/{}/likes?limit=200&offset=0&client_id={}",
-            BASE_URL, user_id, client_id
-        );
+        let liked_url =
+            format!("{BASE_URL}/users/{user_id}/likes?limit=200&offset=0&client_id={client_id}");
 
         let resp = match self.client.get(&liked_url).send().await {
             Ok(r) => r,
@@ -594,14 +615,14 @@ impl SoundCloudSource {
             None => return LoadResult::Empty {},
         };
 
-        let caps = match self.user_url_re.captures(url) {
+        let caps = match user_url_re().captures(url) {
             Some(c) => c,
             None => return LoadResult::Empty {},
         };
         let username = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         let sub_path = caps.get(2).map(|m| m.as_str()).unwrap_or("");
 
-        let clean_url = format!("https://soundcloud.com/{}", username);
+        let clean_url = format!("https://soundcloud.com/{username}");
 
         let json = match self.api_resolve(&clean_url, &client_id).await {
             Some(v) => v,
@@ -621,7 +642,7 @@ impl SoundCloudSource {
             .get("username")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown User")
-            .to_string();
+            .to_owned();
 
         debug!(
             "SoundCloud: Loading user '{}' (id={}) with sub-path '{}'",
@@ -690,7 +711,7 @@ impl SoundCloudSource {
                         &client_id,
                     )
                     .await;
-                if matches!(result, LoadResult::Empty {}) && sub_path == "" {
+                if matches!(result, LoadResult::Empty {}) && sub_path.is_empty() {
                     // If root URL and spotlight is empty, fall back to tracks
                     self.load_collection_tracks(
                         user_id,
@@ -717,8 +738,7 @@ impl SoundCloudSource {
         client_id: &str,
     ) -> LoadResult {
         let req_url = format!(
-            "{}/users/{}/{}?client_id={}&limit=200&offset=0&linked_partitioning=1",
-            BASE_URL, user_id, endpoint, client_id
+            "{BASE_URL}/users/{user_id}/{endpoint}?client_id={client_id}&limit=200&offset=0&linked_partitioning=1"
         );
 
         let resp = match self.client.get(&req_url).send().await {
@@ -757,10 +777,10 @@ impl SoundCloudSource {
                         Some(item)
                     };
 
-                    if let Some(tj) = track_json {
-                        if let Ok(track) = self.parse_track(tj) {
-                            tracks.push(track);
-                        }
+                    if let Some(tj) = track_json
+                        && let Ok(track) = self.parse_track(tj)
+                    {
+                        tracks.push(track);
                     }
                 }
             }
@@ -789,8 +809,8 @@ impl SourcePlugin for SoundCloudSource {
 
     fn can_handle(&self, identifier: &str) -> bool {
         if self
-            .search_prefixes
-            .iter()
+            .search_prefixes()
+            .into_iter()
             .any(|p| identifier.starts_with(p))
         {
             return true;
@@ -798,20 +818,20 @@ impl SourcePlugin for SoundCloudSource {
         // Normalize: strip mobile prefix
         let url = identifier
             .strip_prefix("https://m.")
-            .map(|s| format!("https://{}", s))
-            .unwrap_or_else(|| identifier.to_string());
+            .map(|s| format!("https://{s}"))
+            .unwrap_or_else(|| identifier.to_owned());
 
-        self.short_url_re.is_match(&url)
-            || self.mobile_url_re.is_match(identifier)
-            || self.liked_url_re.is_match(&url)
-            || self.playlist_url_re.is_match(&url)
-            || self.user_url_re.is_match(&url)
-            || self.search_url_re.is_match(&url)
-            || self.track_url_re.is_match(&url)
+        short_url_re().is_match(&url)
+            || mobile_url_re().is_match(identifier)
+            || liked_url_re().is_match(&url)
+            || playlist_url_re().is_match(&url)
+            || user_url_re().is_match(&url)
+            || search_url_re().is_match(&url)
+            || track_url_re().is_match(&url)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["scsearch:"]
     }
 
     async fn load(
@@ -821,21 +841,21 @@ impl SourcePlugin for SoundCloudSource {
     ) -> LoadResult {
         // 1. Search
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             let query = identifier.strip_prefix(prefix).unwrap();
             return self.search_tracks(query.trim()).await;
         }
 
         // 2. Resolve redirects
-        let url = if self.mobile_url_re.is_match(identifier) {
+        let url = if mobile_url_re().is_match(identifier) {
             match self.resolve_mobile_url(identifier).await {
                 Some(u) => u,
                 None => return LoadResult::Empty {},
             }
-        } else if self.short_url_re.is_match(identifier) {
+        } else if short_url_re().is_match(identifier) {
             match self.resolve_short_url(identifier).await {
                 Some(u) => u,
                 None => return LoadResult::Empty {},
@@ -844,33 +864,32 @@ impl SourcePlugin for SoundCloudSource {
             // Strip mobile subdomain
             identifier
                 .strip_prefix("https://m.")
-                .map(|s| format!("https://{}", s))
-                .unwrap_or_else(|| identifier.to_string())
+                .map(|s| format!("https://{s}"))
+                .unwrap_or_else(|| identifier.to_owned())
         };
 
         // 3. Search URL
-        if self.search_url_re.is_match(&url) {
-            if let Ok(uri) = reqwest::Url::parse(&url) {
-                if let Some((_, query)) = uri.query_pairs().find(|(k, _)| k == "q") {
-                    return self.search_tracks(&query).await;
-                }
-            }
+        if search_url_re().is_match(&url)
+            && let Ok(uri) = reqwest::Url::parse(&url)
+            && let Some((_, query)) = uri.query_pairs().find(|(k, _)| k == "q")
+        {
+            return self.search_tracks(&query).await;
         }
 
         // 4. Dispatch
-        if self.liked_url_re.is_match(&url) {
+        if liked_url_re().is_match(&url) {
             return self.load_liked_tracks(&url).await;
         }
 
-        if self.playlist_url_re.is_match(&url) {
+        if playlist_url_re().is_match(&url) {
             return self.load_playlist(&url).await;
         }
 
-        if self.user_url_re.is_match(&url) {
+        if user_url_re().is_match(&url) {
             return self.load_user(&url).await;
         }
 
-        if self.track_url_re.is_match(&url) {
+        if track_url_re().is_match(&url) {
             return self.load_single_track(&url).await;
         }
 
@@ -883,15 +902,15 @@ impl SourcePlugin for SoundCloudSource {
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<Box<dyn PlayableTrack>> {
         // Resolve identifier to a URL if needed
-        let url = if self.mobile_url_re.is_match(identifier) {
+        let url = if mobile_url_re().is_match(identifier) {
             self.resolve_mobile_url(identifier).await?
-        } else if self.short_url_re.is_match(identifier) {
+        } else if short_url_re().is_match(identifier) {
             self.resolve_short_url(identifier).await?
         } else {
             identifier
                 .strip_prefix("https://m.")
-                .map(|s| format!("https://{}", s))
-                .unwrap_or_else(|| identifier.to_string())
+                .map(|s| format!("https://{s}"))
+                .unwrap_or_else(|| identifier.to_owned())
         };
 
         let client_id = self.token_tracker.get_client_id().await?;
@@ -900,7 +919,7 @@ impl SourcePlugin for SoundCloudSource {
         self.get_track_from_url(&url, &client_id, local_addr).await
     }
 
-    fn get_proxy_config(&self) -> Option<crate::configs::HttpProxyConfig> {
+    fn get_proxy_config(&self) -> Option<crate::config::HttpProxyConfig> {
         self.config.proxy.clone()
     }
 }
