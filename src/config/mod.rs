@@ -1,5 +1,6 @@
 pub mod filters;
 pub mod lyrics;
+pub mod metrics;
 pub mod player;
 pub mod server;
 pub mod sources;
@@ -8,6 +9,7 @@ use std::{fs, path::Path};
 
 pub use filters::*;
 pub use lyrics::*;
+pub use metrics::*;
 pub use player::*;
 use serde::Deserialize;
 pub use server::*;
@@ -27,6 +29,8 @@ pub struct AppConfig {
     pub filters: FiltersConfig,
     #[serde(default)]
     pub player: PlayerConfig,
+    #[serde(default)]
+    pub metrics: MetricsConfig,
 }
 
 impl AppConfig {

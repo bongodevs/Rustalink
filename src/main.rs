@@ -15,7 +15,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{Router, routing::get};
 use dashmap::DashMap;
-use rustalink::{common::types::AnyResult, rest, server::AppState, ws};
+use rustalink::{common::types::AnyResult, monitoring, rest, server::AppState, ws};
 use tracing::info;
 
 #[tokio::main]
@@ -61,11 +61,20 @@ async fn main() -> AnyResult<()> {
         system_state: parking_lot::Mutex::new(sysinfo::System::new_all()),
     });
 
-    let app = Router::new()
+    monitoring::prometheus::init(shared_state.clone());
+
+    let mut app = Router::new()
         .route("/v4/websocket", get(ws::websocket_handler))
         .with_state(shared_state.clone())
         .merge(rest::router(shared_state.clone()))
         .layer(tower_http::trace::TraceLayer::new_for_http());
+
+    if config.metrics.prometheus.enabled {
+        app = app.route(
+            &config.metrics.prometheus.endpoint,
+            get(monitoring::prometheus::metrics_handler),
+        );
+    }
 
     let ip: std::net::IpAddr = config.server.address.parse()?;
     let address = SocketAddr::from((ip, config.server.port));

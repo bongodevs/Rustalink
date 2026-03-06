@@ -224,3 +224,8 @@ phaser = true
 phonograph = true
 reverb = true
 spatial = true
+
+
+[metrics.prometheus]
+enabled = false
+endpoint = "/metrics"
