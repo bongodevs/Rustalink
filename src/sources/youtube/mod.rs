@@ -449,7 +449,43 @@ impl YouTubeSource {
         let prefer_music = prefix == "ytmsearch:";
         let query = &identifier[prefix.len()..];
 
-        let primary = self.prioritize_clients(&self.search_clients, prefer_music);
+        let is_music = |c: &Arc<dyn YouTubeClient>| {
+            c.name().contains("Music") || c.name().contains("Remix")
+        };
+
+        if prefer_music {
+            // Collect all music-tagged clients across all pools, deduped.
+            let mut seen = std::collections::HashSet::new();
+            let mut music_clients: Vec<&Arc<dyn YouTubeClient>> = Vec::new();
+            for pool in [
+                &self.search_clients[..],
+                &self.resolve_clients[..],
+                &self.playback_clients[..],
+            ] {
+                for c in pool {
+                    if is_music(c) && seen.insert(c.name()) {
+                        music_clients.push(c);
+                    }
+                }
+            }
+
+            for client in &music_clients {
+                tracing::debug!("Searching '{}' with {}", query, client.name());
+                match client.search(query, context, self.oauth.clone()).await {
+                    Ok(tracks) if !tracks.is_empty() => return LoadResult::Search(tracks),
+                    Ok(_) => continue,
+                    Err(e) => tracing::warn!("Music search error with {}: {}", client.name(), e),
+                }
+            }
+
+            tracing::debug!(
+                "All music clients returned empty for '{}', falling back to regular search",
+                query
+            );
+        }
+
+        // ytsearch: try configured search clients, then fallback to any remaining client.
+        let primary = self.prioritize_clients(&self.search_clients, false);
         for client in &primary {
             tracing::debug!("Searching '{}' with {}", query, client.name());
             match client.search(query, context, self.oauth.clone()).await {
@@ -459,8 +495,7 @@ impl YouTubeSource {
             }
         }
 
-        // All configured search clients failed — try remaining clients as fallback.
-        let fallback = self.fallback_clients(&primary, prefer_music);
+        let fallback = self.fallback_clients(&primary, false);
         if !fallback.is_empty() {
             tracing::debug!(
                 "All search clients failed for '{}', trying fallback clients",
@@ -560,14 +595,13 @@ impl YouTubeSource {
                             tracks,
                         });
                     }
-                    _ => continue,
+            _ => continue,
                 }
             }
         }
 
-        // Track info: try resolve clients first.
         let id = self.extract_id(identifier);
-        let resolve_clients = self.prioritize_clients(&self.resolve_clients, is_music_url);
+        let resolve_clients: Vec<&Arc<dyn YouTubeClient>> = self.resolve_clients.iter().collect();
 
         for client in &resolve_clients {
             tracing::debug!("Resolving track '{}' with {}", id, client.name());
@@ -575,14 +609,20 @@ impl YouTubeSource {
                 .get_track_info(&id, context, self.oauth.clone())
                 .await
             {
-                Ok(Some(track)) => return LoadResult::Track(track),
+                Ok(Some(mut track)) => {
+                    if is_music_url {
+                        track.info.uri =
+                            Some(format!("https://music.youtube.com/watch?v={}", id));
+                    }
+                    return LoadResult::Track(track);
+                }
                 Ok(None) => continue,
                 Err(e) => tracing::warn!("Resolve error with {}: {}", client.name(), e),
             }
         }
 
         // All resolve clients failed — fall back to all remaining clients.
-        let fallback = self.fallback_clients(&resolve_clients, is_music_url);
+        let fallback = self.fallback_clients(&resolve_clients, false);
         if !fallback.is_empty() {
             tracing::debug!(
                 "All resolve clients failed for '{}', trying {} fallback client(s)",
@@ -592,10 +632,14 @@ impl YouTubeSource {
         }
         for client in fallback {
             tracing::debug!("Fallback resolve '{}' with {}", id, client.name());
-            if let Ok(Some(track)) = client
+            if let Ok(Some(mut track)) = client
                 .get_track_info(&id, context, self.oauth.clone())
                 .await
             {
+                if is_music_url {
+                    track.info.uri =
+                        Some(format!("https://music.youtube.com/watch?v={}", id));
+                }
                 return LoadResult::Track(track);
             }
         }

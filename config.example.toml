@@ -42,13 +42,12 @@ search = ["MUSIC_ANDROID", "MUSIC_WEB", "ANDROID", "WEB"]
 playback = [
     "ANDROID_VR",
     "TV_CAST",
-    "ANDROID_MUSIC",
     "WEB_EMBEDDED",
     "TV",
     "WEB",
     "IOS",
 ]
-resolve = ["WEB", "MUSIC_WEB", "ANDROID", "TVHTML5_SIMPLY"]
+resolve = ["WEB", "IOS", "MUSIC_WEB", "ANDROID", "TVHTML5_SIMPLY"]
 
 [sources.youtube.cipher]
 # url = "http://your-cipher-host/js"
