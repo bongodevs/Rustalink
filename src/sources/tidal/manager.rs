@@ -3,9 +3,18 @@ use std::sync::{Arc, OnceLock};
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
+use base64::{Engine as _, engine::general_purpose};
+use tracing::{debug, warn};
 
-use super::{client::TidalClient, oauth::TidalOAuth, token::TidalTokenTracker, track::TidalTrack};
+use super::{
+    client::TidalClient,
+    model::{Manifest, PlaybackInfo},
+    oauth::TidalOAuth,
+    token::TidalTokenTracker,
+    track::TidalTrack,
+};
 use crate::{
+    common::types::AudioFormat,
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
     sources::SourcePlugin,
 };
@@ -237,6 +246,59 @@ impl TidalSource {
         })
     }
 
+    async fn resolve_by_isrc(&self, isrc: &str) -> LoadResult {
+        // v2 only; requires OAuth Bearer. scraper token won't work here.
+        let token = match self.client.token_tracker.get_oauth_token().await {
+            Some(t) => t,
+            None => {
+                warn!("Tidal ISRC lookup requires an OAuth token; none configured");
+                return LoadResult::Empty {};
+            }
+        };
+
+        let url = format!(
+            "https://openapi.tidal.com/v2/tracks?countryCode={}",
+            self.client.country_code
+        );
+
+        let resp = self
+            .client
+            .base_request(self.client.inner.get(&url))
+            .query(&[("filter[isrc]", isrc)])
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await;
+
+        let r = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                debug!("Tidal ISRC request failed: {e}");
+                return LoadResult::Empty {};
+            }
+        };
+
+        if !r.status().is_success() {
+            debug!("Tidal ISRC response {}: {}", r.status(), r.text().await.unwrap_or_default());
+            return LoadResult::Empty {};
+        }
+
+        let data: serde_json::Value = match r.json().await {
+            Ok(d) => d,
+            Err(e) => {
+                debug!("Tidal ISRC response parse error: {e}");
+                return LoadResult::Empty {};
+            }
+        };
+
+        match data.pointer("/data/0/id").and_then(|v| v.as_str()) {
+            Some(id) => self.get_track_data(id).await,
+            None => {
+                debug!("Tidal ISRC={isrc} not found in catalog");
+                LoadResult::Empty {}
+            }
+        }
+    }
+
     async fn search(&self, query: &str) -> LoadResult {
         let encoded = urlencoding::encode(query);
         match self
@@ -330,6 +392,10 @@ impl SourcePlugin for TidalSource {
             .iter()
             .any(|p| identifier.starts_with(p))
             || self
+                .isrc_prefixes()
+                .iter()
+                .any(|p| identifier.starts_with(p))
+            || self
                 .rec_prefixes()
                 .iter()
                 .any(|p| identifier.starts_with(p))
@@ -338,6 +404,9 @@ impl SourcePlugin for TidalSource {
 
     fn search_prefixes(&self) -> Vec<&str> {
         vec!["tdsearch:"]
+    }
+    fn isrc_prefixes(&self) -> Vec<&str> {
+        vec!["tdisrc:"]
     }
     fn rec_prefixes(&self) -> Vec<&str> {
         vec!["tdrec:"]
@@ -357,6 +426,14 @@ impl SourcePlugin for TidalSource {
             .find(|p| identifier.starts_with(**p))
         {
             return self.search(&identifier[prefix.len()..]).await;
+        }
+
+        if let Some(prefix) = self
+            .isrc_prefixes()
+            .iter()
+            .find(|p| identifier.starts_with(**p))
+        {
+            return self.resolve_by_isrc(&identifier[prefix.len()..]).await;
         }
 
         if let Some(prefix) = self
@@ -388,19 +465,101 @@ impl SourcePlugin for TidalSource {
         identifier: &str,
         _: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<crate::sources::plugin::BoxedTrack> {
-        let (id, _type) = if let Some(caps) = url_regex().captures(identifier) {
+        let id = if let Some(caps) = url_regex().captures(identifier) {
             let type_str = caps.get(1).map_or("", |m| m.as_str());
             let id = caps.get(2).map_or("", |m| m.as_str());
             if type_str != "track" {
                 return None;
             }
-            (id.to_owned(), type_str.to_owned())
+            id.to_owned()
         } else {
-            (identifier.to_owned(), "track".to_owned())
+            identifier.to_owned()
         };
+
+        let token = match self.client.token_tracker.get_oauth_token().await {
+            Some(t) => t,
+            None => {
+                warn!("Tidal playback requires an OAuth login");
+                return None;
+            }
+        };
+
+        let quality = &self.client.quality;
+        let url = format!(
+            "https://api.tidal.com/v1/tracks/{}/playbackinfo?audioquality={}&playbackmode=STREAM&assetpresentation=FULL&countryCode={}",
+            id, quality, self.client.country_code
+        );
+
+        debug!("Tidal: Resolving playback info for {}", id);
+
+        let resp = match self
+            .client
+            .inner
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "TIDAL/3704 CFNetwork/1220.1 Darwin/20.3.0")
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Tidal: Failed to fetch playback info: {}", e);
+                return None;
+            }
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            warn!("Tidal: Playback API returned {}: {}", status, body);
+            return None;
+        }
+
+        let info: PlaybackInfo = match resp.json().await {
+            Ok(i) => i,
+            Err(e) => {
+                warn!("Tidal: Failed to parse playback info: {}", e);
+                return None;
+            }
+        };
+
+        let decoded = match general_purpose::STANDARD.decode(&info.manifest) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!("Tidal: Failed to decode manifest: {}", e);
+                return None;
+            }
+        };
+
+        let manifest: Manifest = match serde_json::from_slice(&decoded) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("Tidal: Failed to parse manifest JSON: {}", e);
+                return None;
+            }
+        };
+
+        let stream_url = match manifest.urls.first() {
+            Some(u) => u.clone(),
+            None => {
+                warn!("Tidal: No stream URL in manifest");
+                return None;
+            }
+        };
+
+        let mut kind = AudioFormat::from_url(&stream_url);
+        if kind == AudioFormat::Unknown {
+            kind = if quality == "LOSSLESS" || quality == "HI_RES_LOSSLESS" {
+                AudioFormat::Flac
+            } else {
+                AudioFormat::Aac
+            };
+        }
 
         Some(Box::new(TidalTrack {
             identifier: id,
+            stream_url,
+            kind,
             client: self.client.clone(),
         }))
     }
