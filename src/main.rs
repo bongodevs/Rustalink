@@ -20,7 +20,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> AnyResult<()> {
-    let config = rustalink::config::AppConfig::load();
+    let config = rustalink::config::AppConfig::load().await?;
 
     rustalink::common::logger::init(
         config

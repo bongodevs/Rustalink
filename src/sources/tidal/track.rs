@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tracing::{error, debug};
+use tracing::{debug, error};
 
 use super::client::TidalClient;
 use crate::{
