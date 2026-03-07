@@ -50,6 +50,7 @@ Direct stream extraction and resolution.
 - [x] **Bandcamp**: Native search and track resolution.
 - [x] **MixCloud**: Native search and track resolution.
 - [x] **Audiomack**: Native search and track resolution.
+- [x] **Reddit**: Url resolution and audio extraction.
 - [x] **HTTP / Local**: Direct file and remote URL streaming.
 
 ### Mirroring
