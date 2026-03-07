@@ -130,6 +130,16 @@ artist_load_limit = 10
 # access_token = "your-oauth-token"
 # proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
 
+[sources.vkmusic]
+enabled = false
+search_limit = 10
+playlist_load_limit = 1   # pages × 50 tracks
+artist_load_limit = 1     # pages × 10 tracks
+recommendations_load_limit = 10
+# user_token = "your-vk-access-token"    # get from browser devtools: POST /?act=web_token → response → access_token
+# user_cookie = "your-full-vk-cookie"    # get from browser devtools: POST /?act=web_token → request → cookie header
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
 [sources.anghami]
 enabled = false
 search_limit = 10

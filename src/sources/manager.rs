@@ -24,6 +24,7 @@ use super::{
     spotify::SpotifySource,
     tidal::TidalSource,
     yandexmusic::YandexMusicSource,
+    vkmusic::VkMusicSource,
     youtube::{YouTubeSource, YoutubeStreamContext, cipher::YouTubeCipherManager},
 };
 use crate::common::HttpClientPool;
@@ -324,6 +325,8 @@ impl SourceManager {
 
         Self::register_yandex(sources, config, http_pool);
 
+        Self::register_vkmusic(sources, config, http_pool);
+
         if config.sources.http.as_ref().is_some_and(|c| c.enabled) {
             tracing::info!("Loaded source: http");
             sources.push(Box::new(HttpSource::new()));
@@ -413,6 +416,37 @@ impl SourceManager {
                     Err(e) => {
                         tracing::error!("Yandex Music source failed to initialize: {}", e);
                     }
+                }
+            }
+        }
+    }
+
+    fn register_vkmusic(
+        sources: &mut Vec<BoxedSource>,
+        config: &crate::config::AppConfig,
+        http_pool: &Arc<HttpClientPool>,
+    ) {
+        if let Some(c) = config.sources.vkmusic.as_ref()
+            && c.enabled
+        {
+            let has_auth = c.user_token.is_some() || c.user_cookie.is_some();
+            if !has_auth {
+                tracing::warn!(
+                    "VK Music source is enabled but neither user_token nor user_cookie is set; API calls will fail."
+                );
+            }
+
+            let proxy = c.proxy.clone();
+            match VkMusicSource::new(
+                config.sources.vkmusic.clone(),
+                http_pool.get(proxy.clone()),
+            ) {
+                Ok(src) => {
+                    tracing::info!("Loaded source: VK Music");
+                    sources.push(Box::new(src));
+                }
+                Err(e) => {
+                    tracing::error!("VK Music source failed to initialize: {}", e);
                 }
             }
         }
