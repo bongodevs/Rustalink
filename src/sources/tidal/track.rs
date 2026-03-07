@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tracing::{error, info};
+use tracing::{error, debug};
 
 use super::client::TidalClient;
 use crate::{
@@ -31,7 +31,7 @@ impl PlayableTrack for TidalTrack {
         let kind = self.kind;
 
         tokio::spawn(async move {
-            info!(
+            debug!(
                 "TidalTrack: Starting playback for {} with quality {}",
                 identifier, tidal.quality
             );
