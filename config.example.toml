@@ -188,6 +188,10 @@ silence = 0
 speed = 1.0
 enforce_config = false
 
+[sources.reddit]
+enabled = false
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
 [lyrics]
 youtubemusic = true
 lrclib = true
