@@ -80,7 +80,7 @@ pub fn classify_close(code: u16) -> SessionOutcome {
         CloseAction::NotAuthenticated => SessionOutcome::Shutdown,
         CloseAction::AuthenticationFailed => SessionOutcome::Shutdown,
         CloseAction::AlreadyAuthenticated => SessionOutcome::Shutdown,
-        CloseAction::InvalidSession => SessionOutcome::Identify,
+        CloseAction::InvalidSession => SessionOutcome::Shutdown,
         CloseAction::SessionTimeout => SessionOutcome::Identify,
         CloseAction::ServerNotFound => SessionOutcome::Shutdown,
         CloseAction::UnknownProtocol => SessionOutcome::Shutdown,

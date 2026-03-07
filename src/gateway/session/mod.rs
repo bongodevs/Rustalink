@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::{
     protocol::{Message, WebSocketConfig},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     audio::{Mixer, filters::FilterChain},
@@ -173,8 +173,13 @@ impl VoiceGateway {
         persistent_state: Arc<tokio::sync::Mutex<PersistentSessionState>>,
         backoff: &mut Backoff,
     ) -> AnyResult<SessionOutcome> {
-        let url = format!("wss://{}/?v={}", self.endpoint, VOICE_GATEWAY_VERSION);
-        debug!("[{}] Connecting: {url}", self.guild_id);
+        let mut endpoint = self.endpoint.clone();
+        if endpoint.ends_with(":80") {
+            endpoint.truncate(endpoint.len() - 3);
+        }
+
+        let url = format!("wss://{}/?v={}", endpoint, VOICE_GATEWAY_VERSION);
+        debug!("[{}] Connecting to voice gateway: {url}", self.guild_id);
 
         let mut config = WebSocketConfig::default();
         config.max_message_size = None;
@@ -186,8 +191,16 @@ impl VoiceGateway {
         let (mut write, mut read) = ws_stream.split();
 
         let handshake = if is_resume {
+            trace!(
+                "[{}] Sending voice RESUME: {:?}",
+                self.guild_id, self.session_id
+            );
             self.resume_message(seq_ack.load(Ordering::Relaxed))
         } else {
+            trace!(
+                "[{}] Sending voice IDENTIFY: {:?}",
+                self.guild_id, self.session_id
+            );
             self.identify_message()
         };
 
@@ -346,7 +359,7 @@ impl VoiceGateway {
             op: 0,
             d: serde_json::json!({
                 "server_id": self.guild_id,
-                "user_id": self.user_id.to_string(),
+                "user_id": self.user_id.0,
                 "session_id": self.session_id,
                 "token": self.token,
                 "video": true,
