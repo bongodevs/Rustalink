@@ -58,8 +58,8 @@ Resolution of metadata-only sources via secondary providers.
 
 - [x] **Spotify**: Advanced matching via ISRC.
 - [x] **Apple Music**: Comprehensive search-based resolution.
-- [x] **Tidal**: Specialty provider mirroring (playback support but need refresh token).
-- [x] **Yandex**: Specialty provider mirroring.
+- [x] **Tidal**: Specialty provider mirroring (playback support but need a Tidal-HIFI subscription and refresh token) [Inspired from](https://github.com/yaronzz/Tidal-Media-Downloader).
+- [x] **Yandex**: Specialty provider mirroring (playback support but need access token).
 - [x] **Shazam**: Discovery-focused metadata resolution.
 - [x] **Anghami**: Discovery-focused metadata resolution.
 - [x] **Pandora**: Discovery-focused metadata resolution.
