@@ -475,7 +475,9 @@ impl SourceManager {
         config: &crate::config::AppConfig,
         http_pool: &Arc<HttpClientPool>,
     ) {
-        if let Some(c) = config.sources.amazonmusic.as_ref() && c.enabled {
+        if let Some(c) = config.sources.amazonmusic.as_ref()
+            && c.enabled
+        {
             let proxy = c.proxy.clone();
             let client = http_pool.get(proxy.clone());
             match AmazonMusicSource::new(c.clone(), client) {

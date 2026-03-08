@@ -26,8 +26,10 @@ use super::{
 const TRACK_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/tracks/([A-Z0-9]{10,20})";
 const ALBUM_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/albums/([A-Z0-9]{10,20})";
 const ARTIST_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/artists/([A-Z0-9]{10,20})";
-const PLAYLIST_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/playlists/([A-Z0-9]{10,20})";
-const USER_PLAYLIST_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/user-playlists/([a-zA-Z0-9]+)";
+const PLAYLIST_RE: &str =
+    r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/playlists/([A-Z0-9]{10,20})";
+const USER_PLAYLIST_RE: &str =
+    r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/user-playlists/([a-zA-Z0-9]+)";
 const DOMAIN_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.";
 
 pub struct AmazonMusicSource {
@@ -71,12 +73,14 @@ impl AmazonMusicSource {
 
         let resp = match self.client.fetch_track(&id).await {
             Some(v) => v,
-            None => return LoadResult::Error(LoadError {
-                message: Some(format!("Amazon Music: failed to fetch track '{id}'")),
-                severity: crate::common::Severity::Suspicious,
-                cause: "API request failed".to_string(),
-                cause_stack_trace: None,
-            }),
+            None => {
+                return LoadResult::Error(LoadError {
+                    message: Some(format!("Amazon Music: failed to fetch track '{id}'")),
+                    severity: crate::common::Severity::Suspicious,
+                    cause: "API request failed".to_string(),
+                    cause_stack_trace: None,
+                });
+            }
         };
 
         if is_invalid_track(&resp) {
@@ -109,11 +113,10 @@ impl AmazonMusicSource {
             return LoadResult::Empty {};
         }
 
-        let (album_name, artist_name, track_infos) =
-            match parse_album_tracks(&resp, &album_id) {
-                Some(r) => r,
-                None => return LoadResult::Empty {},
-            };
+        let (album_name, artist_name, track_infos) = match parse_album_tracks(&resp, &album_id) {
+            Some(r) => r,
+            None => return LoadResult::Empty {},
+        };
 
         let artwork = resp["methods"][0]["template"]["headerImage"]
             .as_str()
@@ -126,7 +129,10 @@ impl AmazonMusicSource {
         }
 
         LoadResult::Playlist(PlaylistData {
-            info: PlaylistInfo { name: album_name.clone(), selected_track: -1 },
+            info: PlaylistInfo {
+                name: album_name.clone(),
+                selected_track: -1,
+            },
             plugin_info: json!({
                 "type": "album",
                 "url": format!("https://music.amazon.com/albums/{album_id}"),
@@ -204,12 +210,11 @@ impl AmazonMusicSource {
                 Some(v) => v,
                 None => continue,
             };
-            let album_items = match album_resp["methods"][0]["template"]["widgets"][0]["items"]
-                .as_array()
-            {
-                Some(i) => i.clone(),
-                None => continue,
-            };
+            let album_items =
+                match album_resp["methods"][0]["template"]["widgets"][0]["items"].as_array() {
+                    Some(i) => i.clone(),
+                    None => continue,
+                };
             for track in &album_items {
                 let deeplink = match track["primaryTextLink"]["deeplink"].as_str() {
                     Some(dl) => dl,
@@ -222,9 +227,8 @@ impl AmazonMusicSource {
                 if track_id.is_empty() {
                     continue;
                 }
-                let duration_ms = super::api::duration_str_to_ms(
-                    track["secondaryText3"].as_str().unwrap_or(""),
-                );
+                let duration_ms =
+                    super::api::duration_str_to_ms(track["secondaryText3"].as_str().unwrap_or(""));
                 duration_map.insert(format!("{album_id}:{track_id}"), duration_ms);
             }
         }
@@ -255,7 +259,6 @@ impl AmazonMusicSource {
         })
     }
 
-
     async fn load_playlist(&self, url: &str) -> LoadResult {
         let playlist_id = match self.capture_id(&self.playlist_re, url) {
             Some(id) => id,
@@ -283,7 +286,10 @@ impl AmazonMusicSource {
         }
 
         LoadResult::Playlist(PlaylistData {
-            info: PlaylistInfo { name: result.name.clone(), selected_track: -1 },
+            info: PlaylistInfo {
+                name: result.name.clone(),
+                selected_track: -1,
+            },
             plugin_info: json!({
                 "type": "playlist",
                 "url": format!("https://music.amazon.com/playlists/{playlist_id}"),
@@ -322,7 +328,10 @@ impl AmazonMusicSource {
         }
 
         LoadResult::Playlist(PlaylistData {
-            info: PlaylistInfo { name: result.name.clone(), selected_track: -1 },
+            info: PlaylistInfo {
+                name: result.name.clone(),
+                selected_track: -1,
+            },
             plugin_info: json!({
                 "type": "playlist",
                 "url": format!("https://music.amazon.com/user-playlists/{playlist_id}"),
@@ -351,8 +360,7 @@ impl AmazonMusicSource {
             None => return LoadResult::Empty {},
         };
 
-        let mut unique_albums: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut unique_albums: std::collections::HashSet<String> = std::collections::HashSet::new();
         for item in &items {
             if let Some(key) = item["iconButton"]["observer"]["storageKey"].as_str()
                 && let Some(album_id) = key.split(':').next()
@@ -380,12 +388,11 @@ impl AmazonMusicSource {
                     None => continue,
                 };
 
-                let album_items = match album_resp["methods"][0]["template"]["widgets"][0]["items"]
-                    .as_array()
-                {
-                    Some(i) => i.clone(),
-                    None => continue,
-                };
+                let album_items =
+                    match album_resp["methods"][0]["template"]["widgets"][0]["items"].as_array() {
+                        Some(i) => i.clone(),
+                        None => continue,
+                    };
 
                 for track in &album_items {
                     let deeplink = match track["primaryTextLink"]["deeplink"].as_str() {
@@ -428,7 +435,9 @@ impl SourcePlugin for AmazonMusicSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes().iter().any(|p| identifier.starts_with(p))
+        self.search_prefixes()
+            .iter()
+            .any(|p| identifier.starts_with(p))
             || self.domain_re.is_match(identifier)
     }
 

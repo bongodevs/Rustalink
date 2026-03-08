@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::api::{clean_image_url, duration_str_to_ms, clean_song_title, normalize_artist};
+use super::api::{clean_image_url, clean_song_title, duration_str_to_ms, normalize_artist};
 use crate::protocol::tracks::TrackInfo;
 
 pub fn parse_track(resp: &Value, track_id: &str) -> Option<TrackInfo> {
@@ -60,7 +60,10 @@ pub fn parse_track(resp: &Value, track_id: &str) -> Option<TrackInfo> {
     })
 }
 
-pub fn parse_album_tracks(resp: &Value, _album_id: &str) -> Option<(String, String, Vec<TrackInfo>)> {
+pub fn parse_album_tracks(
+    resp: &Value,
+    _album_id: &str,
+) -> Option<(String, String, Vec<TrackInfo>)> {
     let template = &resp["methods"][0]["template"];
     let album_name = template["headerText"]["text"]
         .as_str()
@@ -85,7 +88,10 @@ pub fn parse_album_tracks(resp: &Value, _album_id: &str) -> Option<(String, Stri
                 .and_then(|dl| dl.split("/tracks/").nth(1))?
                 .to_string();
 
-            let title = item["primaryText"].as_str().unwrap_or("Unknown Title").to_string();
+            let title = item["primaryText"]
+                .as_str()
+                .unwrap_or("Unknown Title")
+                .to_string();
             let item_artist = normalize_artist(
                 item["secondaryText2"]
                     .as_str()
@@ -93,7 +99,11 @@ pub fn parse_album_tracks(resp: &Value, _album_id: &str) -> Option<(String, Stri
                     .unwrap_or(&artist_name),
             );
             let duration_ms = duration_str_to_ms(item["secondaryText3"].as_str().unwrap_or(""));
-            let art = if artwork.is_empty() { None } else { Some(clean_image_url(&artwork)) };
+            let art = if artwork.is_empty() {
+                None
+            } else {
+                Some(clean_image_url(&artwork))
+            };
 
             Some(TrackInfo {
                 identifier: track_id.clone(),
@@ -103,9 +113,7 @@ pub fn parse_album_tracks(resp: &Value, _album_id: &str) -> Option<(String, Stri
                 is_stream: false,
                 position: 0,
                 title,
-                uri: Some(format!(
-                    "https://music.amazon.com/tracks/{track_id}"
-                )),
+                uri: Some(format!("https://music.amazon.com/tracks/{track_id}")),
                 artwork_url: art,
                 isrc: None,
                 source_name: "amazonmusic".to_string(),
@@ -158,10 +166,12 @@ pub fn parse_artist_top_songs(
                 return None;
             }
 
-            let title = clean_song_title(item["primaryText"]["text"].as_str().unwrap_or("Unknown Title"));
-            let artist = normalize_artist(
-                item["secondaryText"].as_str().unwrap_or(&artist_name),
+            let title = clean_song_title(
+                item["primaryText"]["text"]
+                    .as_str()
+                    .unwrap_or("Unknown Title"),
             );
+            let artist = normalize_artist(item["secondaryText"].as_str().unwrap_or(&artist_name));
             let item_artwork = item["image"]
                 .as_str()
                 .filter(|s| !s.is_empty())
@@ -191,7 +201,11 @@ pub fn parse_artist_top_songs(
 
     let _ = artist_id;
 
-    Some(ArtistResult { name: artist_name, artwork_url, tracks })
+    Some(ArtistResult {
+        name: artist_name,
+        artwork_url,
+        tracks,
+    })
 }
 
 pub struct PlaylistResult {
@@ -227,10 +241,12 @@ pub fn parse_playlist_tracks(resp: &Value) -> Option<PlaylistResult> {
                 return None;
             }
 
-            let title = item["primaryText"].as_str().unwrap_or("Unknown Title").to_string();
-            let artist = normalize_artist(
-                item["secondaryText1"].as_str().unwrap_or("Unknown Artist"),
-            );
+            let title = item["primaryText"]
+                .as_str()
+                .unwrap_or("Unknown Title")
+                .to_string();
+            let artist =
+                normalize_artist(item["secondaryText1"].as_str().unwrap_or("Unknown Artist"));
             let duration_ms = duration_str_to_ms(item["secondaryText3"].as_str().unwrap_or(""));
             let item_art = item["image"]
                 .as_str()
@@ -254,7 +270,11 @@ pub fn parse_playlist_tracks(resp: &Value) -> Option<PlaylistResult> {
         })
         .collect();
 
-    Some(PlaylistResult { name, artwork_url, tracks })
+    Some(PlaylistResult {
+        name,
+        artwork_url,
+        tracks,
+    })
 }
 
 pub fn parse_community_playlist_tracks(resp: &Value) -> Option<PlaylistResult> {
@@ -281,10 +301,12 @@ pub fn parse_community_playlist_tracks(resp: &Value) -> Option<PlaylistResult> {
                 return None;
             }
 
-            let title = item["primaryText"].as_str().unwrap_or("Unknown Title").to_string();
-            let artist = normalize_artist(
-                item["secondaryText1"].as_str().unwrap_or("Unknown Artist"),
-            );
+            let title = item["primaryText"]
+                .as_str()
+                .unwrap_or("Unknown Title")
+                .to_string();
+            let artist =
+                normalize_artist(item["secondaryText1"].as_str().unwrap_or("Unknown Artist"));
             let duration_ms = duration_str_to_ms(item["secondaryText3"].as_str().unwrap_or(""));
             let item_art = item["image"]
                 .as_str()
@@ -308,7 +330,11 @@ pub fn parse_community_playlist_tracks(resp: &Value) -> Option<PlaylistResult> {
         })
         .collect();
 
-    Some(PlaylistResult { name, artwork_url, tracks })
+    Some(PlaylistResult {
+        name,
+        artwork_url,
+        tracks,
+    })
 }
 
 pub fn parse_search_tracks(
@@ -344,9 +370,8 @@ pub fn parse_search_tracks(
                 .unwrap_or("Unknown Title")
                 .to_string();
 
-            let artist = normalize_artist(
-                item["secondaryText"].as_str().unwrap_or("Unknown Artist"),
-            );
+            let artist =
+                normalize_artist(item["secondaryText"].as_str().unwrap_or("Unknown Artist"));
 
             let artwork = item["image"]
                 .as_str()

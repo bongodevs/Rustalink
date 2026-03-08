@@ -88,7 +88,10 @@ pub fn is_invalid_playlist(resp: &Value) -> bool {
             .as_str()
             .or_else(|| second["notification"]["message"]["innerHTML"].as_str())
             .unwrap_or("");
-        if msg.to_lowercase().contains("playlist is no longer available") {
+        if msg
+            .to_lowercase()
+            .contains("playlist is no longer available")
+        {
             return true;
         }
     }

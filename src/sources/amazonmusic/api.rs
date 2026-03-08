@@ -14,8 +14,7 @@ pub const EP_PLAYLIST_INFO: &str = "showCatalogPlaylist";
 pub const EP_COMMUNITY_PLAYLIST_INFO: &str = "showLibraryPlaylist";
 pub const EP_TRACKS_SEARCH: &str = "searchCatalogTracks";
 
-const USER_AGENT: &str =
-    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36";
+const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36";
 
 pub struct AmazonMusicClient {
     http: Arc<reqwest::Client>,
@@ -135,13 +134,16 @@ impl AmazonMusicClient {
         })
     }
 
-    pub async fn post_endpoint(&self, path: &str, mut body: Value, page_url: &str) -> Option<Value> {
+    pub async fn post_endpoint(
+        &self,
+        path: &str,
+        mut body: Value,
+        page_url: &str,
+    ) -> Option<Value> {
         let config = self.site_config().await?;
         let amzn_headers = Self::build_amzn_headers(&config, page_url);
 
-        body["headers"] = Value::String(
-            serde_json::to_string(&amzn_headers).unwrap_or_default(),
-        );
+        body["headers"] = Value::String(serde_json::to_string(&amzn_headers).unwrap_or_default());
 
         let url = format!("{API_BASE}/{path}");
 
@@ -154,7 +156,10 @@ impl AmazonMusicClient {
             .header("content-type", "text/plain;charset=UTF-8")
             .header("origin", "https://music.amazon.com")
             .header("referer", "https://music.amazon.com/")
-            .header("sec-ch-ua", "\"Chromium\";v=\"125\", \"Not.A/Brand\";v=\"24\"")
+            .header(
+                "sec-ch-ua",
+                "\"Chromium\";v=\"125\", \"Not.A/Brand\";v=\"24\"",
+            )
             .header("sec-ch-ua-mobile", "?1")
             .header("sec-ch-ua-platform", "\"Android\"")
             .header("sec-fetch-dest", "empty")
@@ -195,28 +200,48 @@ impl AmazonMusicClient {
     }
 
     pub async fn fetch_track(&self, id: &str) -> Option<Value> {
-        let page = format!("https://music.amazon.com/tracks/{}", urlencoding::encode(id));
-        self.post_endpoint(EP_TRACK_INFO, Self::entity_body(id), &page).await
+        let page = format!(
+            "https://music.amazon.com/tracks/{}",
+            urlencoding::encode(id)
+        );
+        self.post_endpoint(EP_TRACK_INFO, Self::entity_body(id), &page)
+            .await
     }
 
     pub async fn fetch_album(&self, id: &str) -> Option<Value> {
-        let page = format!("https://music.amazon.com/albums/{}", urlencoding::encode(id));
-        self.post_endpoint(EP_ALBUM_INFO, Self::entity_body(id), &page).await
+        let page = format!(
+            "https://music.amazon.com/albums/{}",
+            urlencoding::encode(id)
+        );
+        self.post_endpoint(EP_ALBUM_INFO, Self::entity_body(id), &page)
+            .await
     }
 
     pub async fn fetch_artist(&self, id: &str) -> Option<Value> {
-        let page = format!("https://music.amazon.com/artists/{}", urlencoding::encode(id));
-        self.post_endpoint(EP_ARTIST_INFO, Self::entity_body(id), &page).await
+        let page = format!(
+            "https://music.amazon.com/artists/{}",
+            urlencoding::encode(id)
+        );
+        self.post_endpoint(EP_ARTIST_INFO, Self::entity_body(id), &page)
+            .await
     }
 
     pub async fn fetch_playlist(&self, id: &str) -> Option<Value> {
-        let page = format!("https://music.amazon.com/playlists/{}", urlencoding::encode(id));
-        self.post_endpoint(EP_PLAYLIST_INFO, Self::entity_body(id), &page).await
+        let page = format!(
+            "https://music.amazon.com/playlists/{}",
+            urlencoding::encode(id)
+        );
+        self.post_endpoint(EP_PLAYLIST_INFO, Self::entity_body(id), &page)
+            .await
     }
 
     pub async fn fetch_community_playlist(&self, id: &str) -> Option<Value> {
-        let page = format!("https://music.amazon.com/user-playlists/{}", urlencoding::encode(id));
-        self.post_endpoint(EP_COMMUNITY_PLAYLIST_INFO, Self::entity_body(id), &page).await
+        let page = format!(
+            "https://music.amazon.com/user-playlists/{}",
+            urlencoding::encode(id)
+        );
+        self.post_endpoint(EP_COMMUNITY_PLAYLIST_INFO, Self::entity_body(id), &page)
+            .await
     }
 
     pub async fn search_tracks(&self, query: &str) -> Option<Value> {
@@ -255,10 +280,7 @@ pub fn duration_str_to_ms(s: &str) -> u64 {
         return 0;
     }
 
-    let parts: Vec<u64> = s
-        .split(':')
-        .filter_map(|p| p.trim().parse().ok())
-        .collect();
+    let parts: Vec<u64> = s.split(':').filter_map(|p| p.trim().parse().ok()).collect();
 
     let secs = match parts.as_slice() {
         [h, m, s] => h * 3600 + m * 60 + s,
