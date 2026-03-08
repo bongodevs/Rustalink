@@ -1,13 +1,15 @@
 use std::{net::IpAddr, sync::Arc};
 
-use flume::{Receiver, Sender};
 use regex::Regex;
 use tracing::{debug, error};
 
 use super::utils;
 use crate::{
-    audio::processor::DecoderCommand,
-    sources::{http::HttpTrack, plugin::PlayableTrack},
+    audio::{AudioFrame, processor::DecoderCommand},
+    sources::{
+        http::HttpTrack,
+        plugin::{DecoderOutput, PlayableTrack},
+    },
 };
 
 pub struct YandexMusicTrack {
@@ -18,18 +20,8 @@ pub struct YandexMusicTrack {
 }
 
 impl PlayableTrack for YandexMusicTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        Receiver<crate::audio::buffer::PooledBuffer>,
-        Sender<DecoderCommand>,
-        Receiver<String>,
-        Option<Receiver<std::sync::Arc<Vec<u8>>>>,
-    ) {
-        let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
-            (config.buffer_duration_ms / 20) as usize,
-        );
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
         let (err_tx, err_rx) = flume::bounded::<String>(1);
 
@@ -50,7 +42,7 @@ impl PlayableTrack for YandexMusicTrack {
                             local_addr,
                             proxy,
                         };
-                        let (inner_rx, inner_cmd_tx, inner_err_rx, _inner_opus_rx) =
+                        let (inner_rx, inner_cmd_tx, inner_err_rx) =
                             http_track.start_decoding(config.clone());
 
                         // Proxy commands
@@ -89,7 +81,7 @@ impl PlayableTrack for YandexMusicTrack {
             });
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }
 

@@ -77,10 +77,10 @@ async fn resolve_nested_track(
     routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
 ) -> Option<BoxedTrack> {
     for source in &manager.sources {
-        if source.can_handle(identifier) {
-            if let Some(track) = source.get_track(identifier, routeplanner.clone()).await {
-                return Some(track);
-            }
+        if source.can_handle(identifier)
+            && let Some(track) = source.get_track(identifier, routeplanner.clone()).await
+        {
+            return Some(track);
         }
     }
     None

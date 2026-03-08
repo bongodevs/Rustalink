@@ -7,11 +7,14 @@ use std::{
 use symphonia::core::io::MediaSource;
 
 use crate::{
-    audio::processor::{AudioProcessor, DecoderCommand},
+    audio::{
+        AudioFrame,
+        processor::{AudioProcessor, DecoderCommand},
+    },
     common::types::AudioFormat,
     config::HttpProxyConfig,
     sources::{
-        plugin::PlayableTrack,
+        plugin::{DecoderOutput, PlayableTrack},
         youtube::hls::{
             fetcher::fetch_segment_into, resolver::fetch_text, ts_demux::extract_adts_from_ts,
             types::Resource, utils::resolve_url,
@@ -210,16 +213,8 @@ impl MediaSource for LiveHlsReader {
 }
 
 impl PlayableTrack for TwitchTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        flume::Receiver<crate::audio::buffer::PooledBuffer>,
-        flume::Sender<DecoderCommand>,
-        flume::Receiver<String>,
-        Option<flume::Receiver<std::sync::Arc<Vec<u8>>>>,
-    ) {
-        let (tx, rx) = flume::bounded((config.buffer_duration_ms / 20) as usize);
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
         let (err_tx, err_rx) = flume::bounded::<String>(1);
 
@@ -253,6 +248,6 @@ impl PlayableTrack for TwitchTrack {
             }
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }

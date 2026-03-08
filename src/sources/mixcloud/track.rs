@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use flume::{Receiver, Sender};
-
 use crate::{
-    audio::processor::{AudioProcessor, DecoderCommand},
-    sources::plugin::PlayableTrack,
+    audio::{
+        AudioFrame,
+        processor::{AudioProcessor, DecoderCommand},
+    },
+    sources::plugin::{DecoderOutput, PlayableTrack},
 };
 
 pub struct MixcloudTrack {
@@ -16,18 +17,8 @@ pub struct MixcloudTrack {
 }
 
 impl PlayableTrack for MixcloudTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        Receiver<crate::audio::buffer::PooledBuffer>,
-        Sender<DecoderCommand>,
-        Receiver<String>,
-        Option<Receiver<std::sync::Arc<Vec<u8>>>>,
-    ) {
-        let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
-            (config.buffer_duration_ms / 20) as usize,
-        );
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
         let (err_tx, err_rx) = flume::bounded::<String>(1);
 
@@ -104,6 +95,6 @@ impl PlayableTrack for MixcloudTrack {
             });
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }

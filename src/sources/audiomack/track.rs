@@ -1,11 +1,14 @@
 use std::{collections::BTreeMap, net::IpAddr, sync::Arc};
 
-use flume::{Receiver, Sender};
 use rand::{Rng, distributions::Alphanumeric, thread_rng};
 
 use crate::{
-    audio::processor::DecoderCommand,
-    sources::{audiomack::utils::build_auth_header, http::HttpTrack, plugin::PlayableTrack},
+    audio::{AudioFrame, processor::DecoderCommand},
+    sources::{
+        audiomack::utils::build_auth_header,
+        http::HttpTrack,
+        plugin::{DecoderOutput, PlayableTrack},
+    },
 };
 
 pub struct AudiomackTrack {
@@ -15,18 +18,8 @@ pub struct AudiomackTrack {
 }
 
 impl PlayableTrack for AudiomackTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        Receiver<crate::audio::buffer::PooledBuffer>,
-        Sender<DecoderCommand>,
-        flume::Receiver<String>,
-        Option<flume::Receiver<Arc<Vec<u8>>>>,
-    ) {
-        let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
-            (config.buffer_duration_ms / 20) as usize,
-        );
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
         let (err_tx, err_rx) = flume::bounded::<String>(1);
 
@@ -44,7 +37,7 @@ impl PlayableTrack for AudiomackTrack {
                         local_addr,
                         proxy: None,
                     };
-                    let (inner_rx, inner_cmd_tx, inner_err_rx, _inner_opus_rx) =
+                    let (inner_rx, inner_cmd_tx, inner_err_rx) =
                         http_track.start_decoding(config.clone());
 
                     // Proxy commands
@@ -75,7 +68,7 @@ impl PlayableTrack for AudiomackTrack {
             });
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }
 

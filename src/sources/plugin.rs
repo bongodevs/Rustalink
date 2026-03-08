@@ -4,24 +4,20 @@ use async_trait::async_trait;
 use flume::{Receiver, Sender};
 
 use crate::{
-    audio::{buffer::PooledBuffer, processor::DecoderCommand},
+    audio::{AudioFrame, processor::DecoderCommand},
     config::HttpProxyConfig,
     protocol::tracks::{LoadResult, SearchResult},
     routeplanner::RoutePlanner,
 };
 
-/// Represents the output of a decoder, providing streams for audio data and control commands.
-///
-/// Returns `(pcm_rx, cmd_tx, error_rx, opus_rx)` where:
-/// - `pcm_rx`   — Receives batched i16 PCM sample frames for transcoding.
+/// Returns `(frame_rx, cmd_tx, error_rx)` where:
+/// - `frame_rx` — Receives `AudioFrame` (PCM or Opus).
 /// - `cmd_tx`   — Sends `DecoderCommand` (e.g., seek, stop) to the decoder.
 /// - `error_rx` — Receives a fatal error message if decoding or IO fails.
-/// - `opus_rx`  — Optional receiver for raw Opus frames (e.g., YouTube WebM passthrough).
 pub type DecoderOutput = (
-    Receiver<PooledBuffer>,
+    Receiver<AudioFrame>,
     Sender<DecoderCommand>,
     Receiver<String>,
-    Option<Receiver<Arc<Vec<u8>>>>,
 );
 
 /// A track capable of initializing its own decoding process.

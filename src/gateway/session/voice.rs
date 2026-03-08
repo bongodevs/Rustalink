@@ -260,7 +260,7 @@ impl VoiceSession {
 }
 
 struct FrameResult {
-    bypass_data: Option<Arc<Vec<u8>>>,
+    bypass_data: Option<Vec<u8>>,
     has_input: bool,
     needs_encoding: bool,
 }

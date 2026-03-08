@@ -7,6 +7,7 @@ pub mod engine;
 pub mod error;
 pub mod filters;
 pub mod flow;
+pub mod frame;
 pub mod mix;
 pub mod playback;
 pub mod processor;
@@ -15,5 +16,6 @@ pub mod source;
 
 pub use buffer::{BufferPool, PooledBuffer, RingBuffer, get_byte_pool};
 pub use flow::FlowController;
+pub use frame::AudioFrame;
 pub use mix::{AudioMixer, MixLayer, Mixer};
 pub use source::{AudioSource, HttpSource, SegmentedSource, create_client};

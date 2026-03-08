@@ -1,10 +1,8 @@
-use std::{net::IpAddr, sync::Arc};
+use std::net::IpAddr;
 
-use flume::{Receiver, Sender};
-
-use crate::{
-    audio::processor::DecoderCommand,
-    sources::{http::HttpTrack, plugin::PlayableTrack},
+use crate::sources::{
+    http::HttpTrack,
+    plugin::{DecoderOutput, PlayableTrack},
 };
 
 pub struct VkMusicTrack {
@@ -14,15 +12,7 @@ pub struct VkMusicTrack {
 }
 
 impl PlayableTrack for VkMusicTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        Receiver<crate::audio::buffer::PooledBuffer>,
-        Sender<DecoderCommand>,
-        Receiver<String>,
-        Option<Receiver<Arc<Vec<u8>>>>,
-    ) {
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
         HttpTrack {
             url: self.stream_url.clone(),
             local_addr: self.local_addr,

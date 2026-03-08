@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
-use flume::{Receiver, Sender};
 use md5::{Digest, Md5};
 
 use crate::{
-    audio::processor::DecoderCommand,
+    audio::{AudioFrame, processor::DecoderCommand},
     protocol::tracks::TrackInfo,
-    sources::{http::HttpTrack, plugin::PlayableTrack, qobuz::token::QobuzTokenTracker},
+    sources::{
+        http::HttpTrack,
+        plugin::{DecoderOutput, PlayableTrack},
+        qobuz::token::QobuzTokenTracker,
+    },
 };
 
 pub struct QobuzTrack {
@@ -20,18 +23,8 @@ pub struct QobuzTrack {
 }
 
 impl PlayableTrack for QobuzTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        Receiver<crate::audio::buffer::PooledBuffer>,
-        Sender<DecoderCommand>,
-        flume::Receiver<String>,
-        Option<Receiver<std::sync::Arc<Vec<u8>>>>,
-    ) {
-        let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
-            (config.buffer_duration_ms / 20) as usize,
-        );
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
         let (err_tx, err_rx) = flume::bounded::<String>(1);
 
@@ -51,7 +44,7 @@ impl PlayableTrack for QobuzTrack {
                         local_addr: None,
                         proxy: None,
                     };
-                    let (inner_rx, inner_cmd_tx, inner_err_rx, _inner_opus_rx) =
+                    let (inner_rx, inner_cmd_tx, inner_err_rx) =
                         http_track.start_decoding(config.clone());
 
                     // Proxy commands
@@ -90,7 +83,7 @@ impl PlayableTrack for QobuzTrack {
             });
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }
 

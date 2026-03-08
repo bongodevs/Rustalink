@@ -100,23 +100,20 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
         identifier, track_info.source_name
     );
 
-    let (pcm_rx, cmd_tx, err_rx, opus_rx) = playable.start_decoding(player.config.clone());
+    let (frame_rx, cmd_tx, err_rx) = playable.start_decoding(player.config.clone());
     let (handle, audio_state, vol, pos) = TrackHandle::new(cmd_tx, player.tape_stop.clone());
 
     {
         let engine = player.engine.lock().await;
         let mut mixer = engine.mixer.lock().await;
         mixer.add_track(
-            pcm_rx,
+            frame_rx,
             audio_state.clone(),
             vol,
             pos.clone(),
             player.config.clone(),
             48000,
         );
-        if let Some(opus) = opus_rx {
-            mixer.add_passthrough_track(opus, pos, audio_state.clone());
-        }
     }
 
     player.track_handle = Some(handle.clone());

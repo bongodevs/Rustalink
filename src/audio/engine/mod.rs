@@ -1,19 +1,13 @@
 pub mod encoder;
-pub mod passthrough;
-pub mod transcode;
+pub mod standard;
 
 pub use encoder::Encoder;
-pub use passthrough::PassthroughEngine;
-pub use transcode::TranscodeEngine;
+pub use standard::StandardEngine;
 
-use crate::audio::buffer::PooledBuffer;
+use crate::audio::frame::AudioFrame;
 
 pub trait Engine: Send {
-    fn push_pcm(&mut self, pcm: PooledBuffer) -> bool;
-
-    fn push_opus(&mut self, _packet: std::sync::Arc<Vec<u8>>) -> bool {
-        true
-    }
+    fn push(&mut self, frame: AudioFrame) -> bool;
 }
 
 pub type BoxedEngine = Box<dyn Engine>;

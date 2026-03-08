@@ -1,12 +1,17 @@
 use std::{net::IpAddr, sync::Arc};
 
-use flume::{Receiver, Sender};
 use tracing::warn;
 
 use crate::{
-    audio::processor::{AudioProcessor, DecoderCommand},
+    audio::{
+        AudioFrame,
+        processor::{AudioProcessor, DecoderCommand},
+    },
     config::HttpProxyConfig,
-    sources::{gaana::crypto::decrypt_stream_path, plugin::PlayableTrack},
+    sources::{
+        gaana::crypto::decrypt_stream_path,
+        plugin::{DecoderOutput, PlayableTrack},
+    },
 };
 
 pub struct GaanaTrack {
@@ -18,18 +23,8 @@ pub struct GaanaTrack {
 }
 
 impl PlayableTrack for GaanaTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        Receiver<crate::audio::buffer::PooledBuffer>,
-        Sender<DecoderCommand>,
-        flume::Receiver<String>,
-        Option<Receiver<std::sync::Arc<Vec<u8>>>>,
-    ) {
-        let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
-            (config.buffer_duration_ms / 20) as usize,
-        );
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
         let (err_tx, err_rx) = flume::bounded::<String>(1);
 
@@ -99,7 +94,7 @@ impl PlayableTrack for GaanaTrack {
             }
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }
 

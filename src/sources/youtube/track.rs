@@ -1,13 +1,12 @@
 use std::{net::IpAddr, sync::Arc};
 
-use flume::{Receiver, Sender};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    audio::processor::DecoderCommand,
+    audio::{AudioFrame, processor::DecoderCommand},
     config::HttpProxyConfig,
     sources::{
-        plugin::PlayableTrack,
+        plugin::{DecoderOutput, PlayableTrack},
         youtube::{
             cipher::YouTubeCipherManager,
             clients::YouTubeClient,
@@ -28,16 +27,8 @@ pub struct YoutubeTrack {
 }
 
 impl PlayableTrack for YoutubeTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        Receiver<crate::audio::PooledBuffer>,
-        Sender<DecoderCommand>,
-        flume::Receiver<String>,
-        Option<Receiver<std::sync::Arc<Vec<u8>>>>,
-    ) {
-        let (tx, rx) = flume::bounded((config.buffer_duration_ms / 20) as usize);
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::bounded(8);
         let (err_tx, err_rx) = flume::bounded(1);
 
@@ -219,6 +210,6 @@ impl PlayableTrack for YoutubeTrack {
             }
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }

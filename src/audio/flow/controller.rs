@@ -6,7 +6,8 @@
 use flume::{Receiver, Sender};
 
 use crate::audio::{
-    buffer::PooledBuffer,
+    AudioFrame,
+    buffer::{PooledBuffer, acquire_buffer},
     constants::FRAME_SIZE_SAMPLES,
     effects::{
         crossfade::CrossfadeController, fade::FadeEffect, tape::TapeEffect, volume::VolumeEffect,
@@ -23,27 +24,28 @@ pub struct FlowController {
     pub filters: Option<FilterChain>,
     pending_pcm: Vec<i16>,
     decoder_done: bool,
-    pcm_rx: Receiver<PooledBuffer>,
-    pcm_tx: Option<Sender<PooledBuffer>>,
+    frame_rx: Receiver<AudioFrame>,
+    frame_tx: Option<Sender<AudioFrame>>,
+    latest_opus: Option<Vec<u8>>,
 }
 
 impl FlowController {
     pub fn new(
-        pcm_rx: Receiver<PooledBuffer>,
-        pcm_tx: Sender<PooledBuffer>,
+        frame_rx: Receiver<AudioFrame>,
+        frame_tx: Sender<AudioFrame>,
         sample_rate: u32,
         channels: usize,
     ) -> Self {
-        Self::build(pcm_rx, Some(pcm_tx), sample_rate, channels)
+        Self::build(frame_rx, Some(frame_tx), sample_rate, channels)
     }
 
-    pub fn for_mixer(pcm_rx: Receiver<PooledBuffer>, sample_rate: u32, channels: usize) -> Self {
-        Self::build(pcm_rx, None, sample_rate, channels)
+    pub fn for_mixer(frame_rx: Receiver<AudioFrame>, sample_rate: u32, channels: usize) -> Self {
+        Self::build(frame_rx, None, sample_rate, channels)
     }
 
     fn build(
-        pcm_rx: Receiver<PooledBuffer>,
-        pcm_tx: Option<Sender<PooledBuffer>>,
+        frame_rx: Receiver<AudioFrame>,
+        frame_tx: Option<Sender<AudioFrame>>,
         sample_rate: u32,
         channels: usize,
     ) -> Self {
@@ -55,26 +57,38 @@ impl FlowController {
             filters: None,
             pending_pcm: Vec::with_capacity(FRAME_SIZE_SAMPLES * 2),
             decoder_done: false,
-            pcm_rx,
-            pcm_tx,
+            frame_rx,
+            frame_tx,
+            latest_opus: None,
         }
     }
 
     pub fn run(&mut self) {
-        while let Ok(pooled) = self.pcm_rx.recv() {
-            self.pending_pcm.extend_from_slice(&pooled);
+        while let Ok(frame_data) = self.frame_rx.recv() {
+            match frame_data {
+                AudioFrame::Pcm(pooled) => {
+                    self.pending_pcm.extend_from_slice(&pooled);
 
-            while self.pending_pcm.len() >= FRAME_SIZE_SAMPLES {
-                let mut frame: PooledBuffer = Vec::with_capacity(FRAME_SIZE_SAMPLES);
-                frame.extend(self.pending_pcm.drain(..FRAME_SIZE_SAMPLES));
-                self.process_frame(&mut frame);
+                    while self.pending_pcm.len() >= FRAME_SIZE_SAMPLES {
+                        let mut frame = acquire_buffer(FRAME_SIZE_SAMPLES);
+                        frame.extend(self.pending_pcm.drain(..FRAME_SIZE_SAMPLES));
+                        self.process_frame(&mut frame);
 
-                if self
-                    .pcm_tx
-                    .as_ref()
-                    .is_some_and(|tx| tx.send(frame).is_err())
-                {
-                    return;
+                        if self
+                            .frame_tx
+                            .as_ref()
+                            .is_some_and(|tx| tx.send(AudioFrame::Pcm(frame)).is_err())
+                        {
+                            return;
+                        }
+                    }
+                }
+                AudioFrame::Opus(packet) => {
+                    if let Some(tx) = &self.frame_tx
+                        && tx.send(AudioFrame::Opus(packet)).is_err()
+                    {
+                        return;
+                    }
                 }
             }
         }
@@ -93,12 +107,15 @@ impl FlowController {
     pub fn try_pop_frame(&mut self) -> Result<Option<PooledBuffer>, AudioError> {
         if !self.decoder_done {
             while self.pending_pcm.len() < FRAME_SIZE_SAMPLES {
-                match self.pcm_rx.try_recv() {
-                    Ok(chunk) if chunk.is_empty() => {
+                match self.frame_rx.try_recv() {
+                    Ok(AudioFrame::Pcm(chunk)) if chunk.is_empty() => {
                         self.pending_pcm.clear();
                         self.decoder_done = false;
                     }
-                    Ok(chunk) => self.pending_pcm.extend_from_slice(&chunk),
+                    Ok(AudioFrame::Pcm(chunk)) => self.pending_pcm.extend_from_slice(&chunk),
+                    Ok(AudioFrame::Opus(packet)) => {
+                        self.latest_opus = Some(packet);
+                    }
                     Err(flume::TryRecvError::Empty) => break,
                     Err(flume::TryRecvError::Disconnected) => {
                         self.decoder_done = true;
@@ -109,7 +126,7 @@ impl FlowController {
         }
 
         if self.pending_pcm.len() >= FRAME_SIZE_SAMPLES {
-            let mut frame: PooledBuffer = Vec::with_capacity(FRAME_SIZE_SAMPLES);
+            let mut frame = acquire_buffer(FRAME_SIZE_SAMPLES);
             frame.extend(self.pending_pcm.drain(..FRAME_SIZE_SAMPLES));
             self.process_frame(&mut frame);
             Ok(Some(frame))
@@ -133,5 +150,9 @@ impl FlowController {
         if self.crossfade.is_active() {
             self.crossfade.process(frame);
         }
+    }
+
+    pub fn take_opus(&mut self) -> Option<Vec<u8>> {
+        self.latest_opus.take()
     }
 }

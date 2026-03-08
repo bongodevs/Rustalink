@@ -5,12 +5,14 @@ use des::{
     Des,
     cipher::{BlockDecrypt, KeyInit, generic_array::GenericArray},
 };
-use flume::{Receiver, Sender};
 
 use crate::{
-    audio::processor::{AudioProcessor, DecoderCommand},
+    audio::{
+        AudioFrame,
+        processor::{AudioProcessor, DecoderCommand},
+    },
     config::HttpProxyConfig,
-    sources::plugin::PlayableTrack,
+    sources::plugin::{DecoderOutput, PlayableTrack},
 };
 
 pub struct JioSaavnTrack {
@@ -22,19 +24,11 @@ pub struct JioSaavnTrack {
 }
 
 impl PlayableTrack for JioSaavnTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        Receiver<crate::audio::buffer::PooledBuffer>,
-        Sender<DecoderCommand>,
-        flume::Receiver<String>,
-        Option<Receiver<std::sync::Arc<Vec<u8>>>>,
-    ) {
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
         let mut playback_url = match self.decrypt_url(&self.encrypted_url) {
             Some(url) => url,
             None => {
-                let (_tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(1);
+                let (_tx, rx) = flume::bounded::<AudioFrame>(1);
                 let (cmd_tx, _cmd_rx) = flume::unbounded::<DecoderCommand>();
                 let (err_tx, err_rx) = flume::bounded::<String>(1);
 
@@ -42,7 +36,7 @@ impl PlayableTrack for JioSaavnTrack {
                     "Failed to decrypt JioSaavn URL. Check your secretKey in config.toml"
                         .to_owned(),
                 );
-                return (rx, cmd_tx, err_rx, None);
+                return (rx, cmd_tx, err_rx);
             }
         };
 
@@ -50,9 +44,7 @@ impl PlayableTrack for JioSaavnTrack {
             playback_url = playback_url.replace("_96.mp4", "_320.mp4");
         }
 
-        let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
-            (config.buffer_duration_ms / 20) as usize,
-        );
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
         let (err_tx, err_rx) = flume::bounded::<String>(1);
 
@@ -90,7 +82,7 @@ impl PlayableTrack for JioSaavnTrack {
             }
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }
 

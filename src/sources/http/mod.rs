@@ -13,10 +13,16 @@ use symphonia::core::{
 use tracing::{debug, error, warn};
 
 use crate::{
-    audio::processor::{AudioProcessor, DecoderCommand},
+    audio::{
+        AudioFrame,
+        processor::{AudioProcessor, DecoderCommand},
+    },
     common::types::AnyResult,
     protocol::tracks::{LoadError, LoadResult, Track, TrackInfo},
-    sources::{SourcePlugin, plugin::PlayableTrack},
+    sources::{
+        SourcePlugin,
+        plugin::{DecoderOutput, PlayableTrack},
+    },
 };
 
 fn url_regex() -> &'static Regex {
@@ -207,18 +213,8 @@ pub struct HttpTrack {
 }
 
 impl PlayableTrack for HttpTrack {
-    fn start_decoding(
-        &self,
-        config: crate::config::player::PlayerConfig,
-    ) -> (
-        flume::Receiver<crate::audio::buffer::PooledBuffer>,
-        flume::Sender<DecoderCommand>,
-        flume::Receiver<String>,
-        Option<flume::Receiver<std::sync::Arc<Vec<u8>>>>,
-    ) {
-        let (tx, rx) = flume::bounded::<crate::audio::buffer::PooledBuffer>(
-            (config.buffer_duration_ms / 20) as usize,
-        );
+    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
         let (err_tx, err_rx) = flume::bounded::<String>(1);
 
@@ -256,6 +252,6 @@ impl PlayableTrack for HttpTrack {
             }
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }

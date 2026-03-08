@@ -18,6 +18,7 @@ use tracing::{debug, error};
 use super::client::TidalClient;
 use crate::{
     audio::{
+        AudioFrame,
         processor::{AudioProcessor, DecoderCommand},
         source::HttpSource,
     },
@@ -34,7 +35,7 @@ pub struct TidalTrack {
 
 impl PlayableTrack for TidalTrack {
     fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
-        let (tx, rx) = flume::bounded((config.buffer_duration_ms / 20) as usize);
+        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
         let (cmd_tx, cmd_rx) = flume::bounded(8);
         let (err_tx, err_rx) = flume::bounded(1);
 
@@ -108,6 +109,6 @@ impl PlayableTrack for TidalTrack {
             }
         });
 
-        (rx, cmd_tx, err_rx, None)
+        (rx, cmd_tx, err_rx)
     }
 }
