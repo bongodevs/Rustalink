@@ -379,10 +379,10 @@ fn extract_isrc(template: &Value) -> Option<String> {
     let scripts = template["templateData"]["seoHead"]["script"].as_array()?;
     for script in scripts {
         let inner_html = script["innerHTML"].as_str()?;
-        if let Ok(parsed) = serde_json::from_str::<Value>(inner_html) {
-            if let Some(isrc) = parsed["isrcCode"].as_str() {
-                return Some(isrc.to_string());
-            }
+        if let Ok(parsed) = serde_json::from_str::<Value>(inner_html)
+            && let Some(isrc) = parsed["isrcCode"].as_str()
+        {
+            return Some(isrc.to_string());
         }
     }
     None

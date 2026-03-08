@@ -354,12 +354,11 @@ impl AmazonMusicSource {
         let mut unique_albums: std::collections::HashSet<String> =
             std::collections::HashSet::new();
         for item in &items {
-            if let Some(key) = item["iconButton"]["observer"]["storageKey"].as_str() {
-                if let Some(album_id) = key.split(':').next() {
-                    if !album_id.is_empty() {
-                        unique_albums.insert(album_id.to_string());
-                    }
-                }
+            if let Some(key) = item["iconButton"]["observer"]["storageKey"].as_str()
+                && let Some(album_id) = key.split(':').next()
+                && !album_id.is_empty()
+            {
+                unique_albums.insert(album_id.to_string());
             }
         }
 
