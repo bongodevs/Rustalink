@@ -22,4 +22,5 @@ pub struct AppState {
     pub config: crate::config::AppConfig,
     pub youtube: Option<Arc<YoutubeStreamContext>>,
     pub system_state: parking_lot::Mutex<System>,
+    pub last_system_refresh: parking_lot::Mutex<std::time::Instant>,
 }

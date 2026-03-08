@@ -57,6 +57,7 @@ async fn main() -> AnyResult<()> {
         config: config.clone(),
         youtube: youtube_ctx,
         system_state: parking_lot::Mutex::new(sysinfo::System::new_all()),
+        last_system_refresh: parking_lot::Mutex::new(std::time::Instant::now()),
     });
 
     monitoring::prometheus::init(shared_state.clone());

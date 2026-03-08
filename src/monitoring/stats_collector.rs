@@ -13,16 +13,21 @@ pub fn collect_stats(app_state: &AppState, session: Option<&Session>) -> protoco
     let mut system = app_state.system_state.lock();
 
     let pid = sysinfo::Pid::from_u32(process::id());
+    let mut last_refresh = app_state.last_system_refresh.lock();
+
+    if last_refresh.elapsed() >= std::time::Duration::from_secs(5) {
+        system.refresh_specifics(
+            RefreshKind::nothing()
+                .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
+                .with_memory(MemoryRefreshKind::nothing().with_ram()),
+        );
+        *last_refresh = std::time::Instant::now();
+    }
 
     system.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::Some(&[pid]),
         true,
         ProcessRefreshKind::nothing().with_cpu().with_memory(),
-    );
-    system.refresh_specifics(
-        RefreshKind::nothing()
-            .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
-            .with_memory(MemoryRefreshKind::nothing().with_ram()),
     );
 
     let cores = system.cpus().len() as u32;

@@ -28,6 +28,7 @@ impl MixLayer {
                 std::slice::from_raw_parts(pooled.as_ptr() as *const u8, pooled.len() * 2)
             };
             self.ring_buffer.write(bytes);
+            crate::audio::buffer::release_buffer(pooled);
         }
         if self.rx.is_disconnected() {
             self.finished = true;

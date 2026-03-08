@@ -245,7 +245,7 @@ impl AudioProcessor {
                             / self.source_rate as f64)
                             .ceil() as usize
                             + 32;
-                        let mut resampled = Vec::with_capacity(capacity);
+                        let mut resampled = crate::audio::buffer::acquire_buffer(capacity);
                         if self.resampler.is_passthrough() {
                             resampled.extend_from_slice(pcm_data);
                         } else {
