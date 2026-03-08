@@ -76,19 +76,21 @@ pub fn classify_close(code: u16) -> SessionOutcome {
 
     match action {
         CloseAction::UnknownOpcode => SessionOutcome::Reconnect,
+        CloseAction::VoiceServerCrash => SessionOutcome::Reconnect,
+
         CloseAction::InvalidPayload => SessionOutcome::Identify,
-        CloseAction::NotAuthenticated => SessionOutcome::Shutdown,
-        CloseAction::AuthenticationFailed => SessionOutcome::Shutdown,
-        CloseAction::AlreadyAuthenticated => SessionOutcome::Shutdown,
-        CloseAction::InvalidSession => SessionOutcome::Shutdown,
+        CloseAction::NotAuthenticated => SessionOutcome::Identify,
+        CloseAction::AlreadyAuthenticated => SessionOutcome::Identify,
         CloseAction::SessionTimeout => SessionOutcome::Identify,
+        CloseAction::UnknownProtocol => SessionOutcome::Identify,
+        CloseAction::UnknownEncryptionMode => SessionOutcome::Identify,
+        CloseAction::BadRequest => SessionOutcome::Identify,
+
+        CloseAction::AuthenticationFailed => SessionOutcome::Shutdown,
+        CloseAction::InvalidSession => SessionOutcome::Shutdown,
         CloseAction::ServerNotFound => SessionOutcome::Shutdown,
-        CloseAction::UnknownProtocol => SessionOutcome::Shutdown,
         CloseAction::Disconnected => SessionOutcome::Shutdown,
-        CloseAction::VoiceServerCrash => SessionOutcome::Shutdown,
-        CloseAction::UnknownEncryptionMode => SessionOutcome::Shutdown,
         CloseAction::DaveProtocolRequired => SessionOutcome::Shutdown,
-        CloseAction::BadRequest => SessionOutcome::Shutdown,
         CloseAction::RateLimited => SessionOutcome::Shutdown,
         CloseAction::CallTerminated => SessionOutcome::Shutdown,
     }

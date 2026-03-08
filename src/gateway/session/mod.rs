@@ -179,7 +179,11 @@ impl VoiceGateway {
         }
 
         let url = format!("wss://{}/?v={}", endpoint, VOICE_GATEWAY_VERSION);
-        debug!("[{}] Connecting to voice gateway: {url}", self.guild_id);
+        debug!(
+            "[{}] Connecting to voice gateway: {url} (attempt {})",
+            self.guild_id,
+            backoff.attempt()
+        );
 
         let mut config = WebSocketConfig::default();
         config.max_message_size = None;
