@@ -4,13 +4,12 @@ use async_trait::async_trait;
 use regex::Regex;
 use tracing::{debug, warn};
 
+use super::{api::TwitchGqlClient, track::TwitchTrack};
 use crate::{
     config::TwitchConfig,
     protocol::tracks::{LoadError, LoadResult, Track, TrackInfo},
     sources::{SourcePlugin, plugin::BoxedTrack},
 };
-
-use super::{api::TwitchGqlClient, track::TwitchTrack};
 
 const STREAM_NAME_REGEX: &str = r"(?i)^https?://(?:www\.|go\.|m\.)?twitch\.tv/([^/]+)$";
 const TWITCH_DOMAIN_REGEX: &str = r"(?i)^https?://(?:www\.|go\.|m\.)?twitch\.tv/";
@@ -69,7 +68,10 @@ impl TwitchSource {
         }
 
         let chosen = streams.last().unwrap();
-        debug!("Twitch: chose stream with quality {} from url {}", chosen.quality, chosen.url);
+        debug!(
+            "Twitch: chose stream with quality {} from url {}",
+            chosen.quality, chosen.url
+        );
         Some(chosen.url.clone())
     }
 }
@@ -89,14 +91,21 @@ fn load_channel_streams_list(m3u8: &str) -> Vec<ChannelStreamInfo> {
         if line.starts_with("#EXT-X-STREAM-INF:") {
             let quality = line
                 .split(',')
-                .find_map(|part| part.trim().strip_prefix("VIDEO=\"").and_then(|v| v.strip_suffix('"')))
+                .find_map(|part| {
+                    part.trim()
+                        .strip_prefix("VIDEO=\"")
+                        .and_then(|v| v.strip_suffix('"'))
+                })
                 .unwrap_or("unknown")
                 .to_string();
 
             if let Some(url_line) = lines.get(i + 1) {
                 let url = url_line.trim();
                 if !url.is_empty() && !url.starts_with('#') {
-                    streams.push(ChannelStreamInfo { quality, url: url.to_string() });
+                    streams.push(ChannelStreamInfo {
+                        quality,
+                        url: url.to_string(),
+                    });
                 }
             }
         }
@@ -132,7 +141,9 @@ impl SourcePlugin for TwitchSource {
             Some(b) => b,
             None => {
                 return LoadResult::Error(LoadError {
-                    message: Some(format!("Loading Twitch channel information failed for '{stream_name}'")),
+                    message: Some(format!(
+                        "Loading Twitch channel information failed for '{stream_name}'"
+                    )),
                     severity: crate::common::Severity::Suspicious,
                     cause: "GQL request failed".to_string(),
                     cause_stack_trace: None,

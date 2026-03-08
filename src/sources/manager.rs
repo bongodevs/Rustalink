@@ -24,8 +24,8 @@ use super::{
     spotify::SpotifySource,
     tidal::TidalSource,
     twitch::TwitchSource,
-    yandexmusic::YandexMusicSource,
     vkmusic::VkMusicSource,
+    yandexmusic::YandexMusicSource,
     youtube::{YouTubeSource, YoutubeStreamContext, cipher::YouTubeCipherManager},
 };
 use crate::common::HttpClientPool;
@@ -457,7 +457,9 @@ impl SourceManager {
         config: &crate::config::AppConfig,
         http_pool: &Arc<HttpClientPool>,
     ) {
-        if let Some(c) = config.sources.twitch.as_ref() && c.enabled {
+        if let Some(c) = config.sources.twitch.as_ref()
+            && c.enabled
+        {
             let proxy = c.proxy.clone();
             let client = http_pool.get(proxy.clone());
             tracing::info!("Loaded source: Twitch");
