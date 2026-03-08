@@ -13,8 +13,6 @@ use crate::{
     gateway::{constants::OP_HEARTBEAT, session::types::VoiceGatewayMessage},
 };
 
-const JS_SAFE_MAX: u64 = (1u64 << 53) - 1;
-
 pub struct HeartbeatTracker {
     pub last_nonce: Arc<AtomicU64>,
     pub sent_at: Arc<AtomicU64>,
@@ -70,9 +68,9 @@ impl HeartbeatTracker {
                     break;
                 }
 
-                let nonce = rand::random::<u64>() & JS_SAFE_MAX;
+                let nonce = now_ms();
                 last_nonce.store(nonce, Ordering::Relaxed);
-                sent_at.store(now_ms(), Ordering::Relaxed);
+                sent_at.store(nonce, Ordering::Relaxed);
 
                 let hb = VoiceGatewayMessage {
                     op: OP_HEARTBEAT,

@@ -68,7 +68,7 @@ pub async fn handle_op(
             Ok(())
         }
         IncomingMessage::Destroy { guild_id } => {
-            session.destroy_player(&guild_id, state).await;
+            session.destroy_player(&guild_id).await;
             Ok(())
         }
     }

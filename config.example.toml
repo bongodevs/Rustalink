@@ -3,8 +3,8 @@ address = "0.0.0.0"
 port = 2333
 authorization = "youshallnotpass"
 player_update_interval = 100      # ms
-stats_interval = 60               # seconds
-websocket_ping_interval = 30      # seconds
+stats_interval = 30               # seconds
+websocket_ping_interval = 20      # seconds
 max_event_queue_size = 100
 
 [player]
@@ -130,6 +130,16 @@ artist_load_limit = 10
 # access_token = "your-oauth-token"
 # proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
 
+[sources.vkmusic]
+enabled = false
+search_limit = 10
+playlist_load_limit = 1   # pages × 50 tracks
+artist_load_limit = 1     # pages × 10 tracks
+recommendations_load_limit = 10
+# user_token = "your-vk-access-token"    # get from browser devtools: POST /?act=web_token → response → access_token
+# user_cookie = "your-full-vk-cookie"    # get from browser devtools: POST /?act=web_token → request → cookie header
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
 [sources.anghami]
 enabled = false
 search_limit = 10
@@ -190,6 +200,22 @@ enforce_config = false
 
 [sources.reddit]
 enabled = false
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.lastfm]
+enabled = false
+search_limit = 10
+# Create your API key here: https://www.last.fm/api/account/create
+# api_key = "your-lastfm-api-key"
+
+[sources.twitch]
+enabled = true
+# client_id = "your-client-id"  # leave blank for auto-discovery from twitch.tv
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+[sources.amazonmusic]
+enabled = true
+search_limit = 10
 # proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
 
 [lyrics]

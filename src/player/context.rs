@@ -102,15 +102,7 @@ impl PlayerContext {
             return;
         }
 
-        let was_playing = self.is_playing();
         self.paused = paused;
-        let is_playing = self.is_playing();
-
-        if !was_playing && is_playing {
-            self.state.playback_started();
-        } else if was_playing && !is_playing {
-            self.state.playback_stopped();
-        }
 
         if let Some(handle) = &self.track_handle {
             if paused {
@@ -129,16 +121,10 @@ impl PlayerContext {
     }
 
     pub fn stop_track(&mut self) {
-        let was_playing = self.is_playing();
-
         self.track = None;
         self.track_info = None;
         self.position = 0;
         self.end_time = None;
-
-        if was_playing {
-            self.state.playback_stopped();
-        }
 
         if let Some(handle) = self.track_handle.take() {
             handle.stop();

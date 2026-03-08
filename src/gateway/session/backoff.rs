@@ -24,4 +24,8 @@ impl Backoff {
     pub(super) fn reset(&mut self) {
         self.attempt = 0;
     }
+
+    pub(super) fn attempt(&self) -> u32 {
+        self.attempt
+    }
 }

@@ -56,9 +56,8 @@ async fn main() -> AnyResult<()> {
         lyrics_manager,
         config: config.clone(),
         youtube: youtube_ctx,
-        total_players: std::sync::atomic::AtomicU64::new(0),
-        playing_players: std::sync::atomic::AtomicU64::new(0),
         system_state: parking_lot::Mutex::new(sysinfo::System::new_all()),
+        last_system_refresh: parking_lot::Mutex::new(std::time::Instant::now()),
     });
 
     monitoring::prometheus::init(shared_state.clone());

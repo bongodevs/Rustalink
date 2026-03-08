@@ -179,7 +179,11 @@ impl VoiceGateway {
         }
 
         let url = format!("wss://{}/?v={}", endpoint, VOICE_GATEWAY_VERSION);
-        debug!("[{}] Connecting to voice gateway: {url}", self.guild_id);
+        debug!(
+            "[{}] Connecting to voice gateway: {url} (attempt {})",
+            self.guild_id,
+            backoff.attempt()
+        );
 
         let mut config = WebSocketConfig::default();
         config.max_message_size = None;
@@ -358,8 +362,8 @@ impl VoiceGateway {
         VoiceGatewayMessage {
             op: 0,
             d: serde_json::json!({
-                "server_id": self.guild_id,
-                "user_id": self.user_id.0,
+                "server_id": self.guild_id.to_string(),
+                "user_id": self.user_id.0.to_string(),
                 "session_id": self.session_id,
                 "token": self.token,
                 "video": true,
@@ -372,7 +376,7 @@ impl VoiceGateway {
         VoiceGatewayMessage {
             op: 7,
             d: serde_json::json!({
-                "server_id": self.guild_id,
+                "server_id": self.guild_id.to_string(),
                 "session_id": self.session_id,
                 "token": self.token,
                 "video": true,

@@ -83,7 +83,6 @@ impl Session {
         self.players
             .entry(guild_id.clone())
             .or_insert_with(|| {
-                state.player_created();
                 Arc::new(tokio::sync::RwLock::new(PlayerContext::new(
                     guild_id,
                     &state.config.player,
@@ -94,11 +93,10 @@ impl Session {
             .clone()
     }
 
-    pub async fn destroy_player(&self, guild_id: &GuildId, state: &AppState) -> bool {
+    pub async fn destroy_player(&self, guild_id: &GuildId) -> bool {
         if let Some((_, player_arc)) = self.players.remove(guild_id) {
             let mut player = player_arc.write().await;
             player.destroy().await;
-            state.player_destroyed();
             true
         } else {
             false
@@ -125,12 +123,12 @@ impl Session {
         }
     }
 
-    pub async fn shutdown(&self, state: &AppState) {
+    pub async fn shutdown(&self) {
         tracing::info!("Shutting down session: {}", self.session_id);
         self.stop_all_players();
         let guilds: Vec<GuildId> = self.players.iter().map(|kv| kv.key().clone()).collect();
         for guild in guilds {
-            self.destroy_player(&guild, state).await;
+            self.destroy_player(&guild).await;
         }
     }
 

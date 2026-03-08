@@ -204,9 +204,6 @@ async fn clear_player_state(ctx: &MonitorCtx) {
             .map(|h| h.is_same(&ctx.handle))
             .unwrap_or(false)
         {
-            if p.is_playing() {
-                p.state.playing_players.fetch_sub(1, Ordering::Relaxed);
-            }
             p.track = None;
             p.track_info = None;
             p.track_handle = None;

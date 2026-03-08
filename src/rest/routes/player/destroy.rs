@@ -46,7 +46,7 @@ pub async fn destroy_player(
             }
         }
 
-        session.destroy_player(&guild_id, &state).await;
+        session.destroy_player(&guild_id).await;
     }
 
     StatusCode::NO_CONTENT.into_response()

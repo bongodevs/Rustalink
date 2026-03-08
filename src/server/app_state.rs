@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use sysinfo::System;
@@ -24,25 +21,6 @@ pub struct AppState {
     pub lyrics_manager: Arc<crate::lyrics::LyricsManager>,
     pub config: crate::config::AppConfig,
     pub youtube: Option<Arc<YoutubeStreamContext>>,
-    pub total_players: AtomicU64,
-    pub playing_players: AtomicU64,
     pub system_state: parking_lot::Mutex<System>,
-}
-
-impl AppState {
-    pub fn player_created(&self) {
-        self.total_players.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn player_destroyed(&self) {
-        self.total_players.fetch_sub(1, Ordering::Relaxed);
-    }
-
-    pub fn playback_started(&self) {
-        self.playing_players.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn playback_stopped(&self) {
-        self.playing_players.fetch_sub(1, Ordering::Relaxed);
-    }
+    pub last_system_refresh: parking_lot::Mutex<std::time::Instant>,
 }

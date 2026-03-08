@@ -41,10 +41,6 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
     player.user_data = config.user_data.unwrap_or_else(|| serde_json::json!({}));
     player.stop_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    if !player.paused {
-        player.state.playback_started();
-    }
-
     let track_info = player
         .track_info
         .as_ref()
@@ -72,7 +68,7 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
         Duration::from_secs(30),
         config
             .source_manager
-            .get_track(&track_info, config.routeplanner),
+            .resolve_track(&track_info, config.routeplanner),
     )
     .await
     {
@@ -184,15 +180,10 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
 
 /// Stop the currently playing track and emit `TrackEnd: Replaced` if needed.
 async fn stop_current_track(player: &mut PlayerContext, session: &Session) {
-    let was_playing = player.is_playing();
     if let Some(handle) = &player.track_handle
         && handle.get_state() != PlaybackState::Stopped
         && let Some(track) = player.to_player_response().track
     {
-        if was_playing {
-            player.state.playing_players.fetch_sub(1, Ordering::Relaxed);
-        }
-
         session.send_message(&protocol::OutgoingMessage::Event {
             event: Box::new(RustalinkEvent::TrackEnd {
                 guild_id: player.guild_id.clone(),

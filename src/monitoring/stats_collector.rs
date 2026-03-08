@@ -13,16 +13,21 @@ pub fn collect_stats(app_state: &AppState, session: Option<&Session>) -> protoco
     let mut system = app_state.system_state.lock();
 
     let pid = sysinfo::Pid::from_u32(process::id());
+    let mut last_refresh = app_state.last_system_refresh.lock();
+
+    if last_refresh.elapsed() >= std::time::Duration::from_secs(5) {
+        system.refresh_specifics(
+            RefreshKind::nothing()
+                .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
+                .with_memory(MemoryRefreshKind::nothing().with_ram()),
+        );
+        *last_refresh = std::time::Instant::now();
+    }
 
     system.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::Some(&[pid]),
         true,
         ProcessRefreshKind::nothing().with_cpu().with_memory(),
-    );
-    system.refresh_specifics(
-        RefreshKind::nothing()
-            .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
-            .with_memory(MemoryRefreshKind::nothing().with_ram()),
     );
 
     let cores = system.cpus().len() as u32;
@@ -41,9 +46,24 @@ pub fn collect_stats(app_state: &AppState, session: Option<&Session>) -> protoco
         system.global_cpu_usage() as f64 / 100.0
     };
 
+    let mut total_players = 0;
+    let mut playing_players = 0;
+
+    for session_entry in app_state.sessions.iter() {
+        let session = session_entry.value();
+        total_players += session.players.len() as u64;
+        for player_entry in session.players.iter() {
+            if let Ok(player) = player_entry.value().try_read()
+                && player.is_playing()
+            {
+                playing_players += 1;
+            }
+        }
+    }
+
     protocol::Stats {
-        players: app_state.total_players.load(Ordering::Acquire),
-        playing_players: app_state.playing_players.load(Ordering::Acquire),
+        players: total_players,
+        playing_players,
         uptime: app_state.start_time.elapsed().as_millis() as u64,
         memory: protocol::Memory {
             free: system.available_memory(),

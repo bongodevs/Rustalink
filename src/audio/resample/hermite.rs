@@ -28,28 +28,31 @@ impl HermiteResampler {
 
     pub fn process(&mut self, input: &[i16], output: &mut PooledBuffer) {
         let num_frames = input.len() / self.channels;
+        let num_frames_f = num_frames as f32;
 
-        while self.index < num_frames as f32 {
+        while self.index < num_frames_f {
             let idx = self.index as usize;
             let t = self.index.fract();
 
             for ch in 0..self.channels {
+                let base_idx = idx * self.channels + ch;
+
                 let p0 = if idx == 0 {
                     self.last_samples[ch]
                 } else {
-                    input[(idx - 1) * self.channels + ch]
+                    input[base_idx - self.channels]
                 } as f32;
 
-                let p1 = input[idx * self.channels + ch] as f32;
+                let p1 = input[base_idx] as f32;
 
                 let p2 = if idx + 1 < num_frames {
-                    input[(idx + 1) * self.channels + ch]
+                    input[base_idx + self.channels]
                 } else {
                     input[(num_frames - 1) * self.channels + ch]
                 } as f32;
 
                 let p3 = if idx + 2 < num_frames {
-                    input[(idx + 2) * self.channels + ch]
+                    input[base_idx + 2 * self.channels]
                 } else {
                     input[(num_frames - 1) * self.channels + ch]
                 } as f32;

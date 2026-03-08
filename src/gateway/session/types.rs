@@ -40,13 +40,14 @@ enum CloseAction {
     Disconnected,
     VoiceServerCrash,
     UnknownEncryptionMode,
-    DaveProtocolRequired,
+    InternalError,
     BadRequest,
     RateLimited,
     CallTerminated,
 }
 
 const CLOSE_CODE_TABLE: &[(u16, CloseAction)] = &[
+    (4000, CloseAction::InternalError),
     (4001, CloseAction::UnknownOpcode),
     (4002, CloseAction::InvalidPayload),
     (4003, CloseAction::NotAuthenticated),
@@ -56,10 +57,9 @@ const CLOSE_CODE_TABLE: &[(u16, CloseAction)] = &[
     (4009, CloseAction::SessionTimeout),
     (4011, CloseAction::ServerNotFound),
     (4012, CloseAction::UnknownProtocol),
-    (4013, CloseAction::Disconnected),
-    (4014, CloseAction::VoiceServerCrash),
-    (4015, CloseAction::UnknownEncryptionMode),
-    (4016, CloseAction::DaveProtocolRequired),
+    (4014, CloseAction::Disconnected),
+    (4015, CloseAction::VoiceServerCrash),
+    (4016, CloseAction::UnknownEncryptionMode),
     (4020, CloseAction::BadRequest),
     (4021, CloseAction::RateLimited),
     (4022, CloseAction::CallTerminated),
@@ -76,19 +76,22 @@ pub fn classify_close(code: u16) -> SessionOutcome {
 
     match action {
         CloseAction::UnknownOpcode => SessionOutcome::Reconnect,
+        CloseAction::VoiceServerCrash => SessionOutcome::Reconnect,
+
         CloseAction::InvalidPayload => SessionOutcome::Identify,
-        CloseAction::NotAuthenticated => SessionOutcome::Shutdown,
-        CloseAction::AuthenticationFailed => SessionOutcome::Shutdown,
-        CloseAction::AlreadyAuthenticated => SessionOutcome::Shutdown,
-        CloseAction::InvalidSession => SessionOutcome::Shutdown,
+        CloseAction::NotAuthenticated => SessionOutcome::Identify,
+        CloseAction::AlreadyAuthenticated => SessionOutcome::Identify,
         CloseAction::SessionTimeout => SessionOutcome::Identify,
+        CloseAction::UnknownProtocol => SessionOutcome::Identify,
+        CloseAction::UnknownEncryptionMode => SessionOutcome::Identify,
+        CloseAction::InternalError => SessionOutcome::Identify,
+        CloseAction::BadRequest => SessionOutcome::Identify,
+
+        // Fatal/Shutdown codes
+        CloseAction::AuthenticationFailed => SessionOutcome::Shutdown,
+        CloseAction::InvalidSession => SessionOutcome::Shutdown,
         CloseAction::ServerNotFound => SessionOutcome::Shutdown,
-        CloseAction::UnknownProtocol => SessionOutcome::Shutdown,
         CloseAction::Disconnected => SessionOutcome::Shutdown,
-        CloseAction::VoiceServerCrash => SessionOutcome::Shutdown,
-        CloseAction::UnknownEncryptionMode => SessionOutcome::Shutdown,
-        CloseAction::DaveProtocolRequired => SessionOutcome::Shutdown,
-        CloseAction::BadRequest => SessionOutcome::Shutdown,
         CloseAction::RateLimited => SessionOutcome::Shutdown,
         CloseAction::CallTerminated => SessionOutcome::Shutdown,
     }
