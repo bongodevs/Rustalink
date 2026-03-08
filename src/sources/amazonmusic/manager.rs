@@ -5,12 +5,6 @@ use regex::Regex;
 use serde_json::json;
 use tracing::debug;
 
-use crate::{
-    config::AmazonMusicConfig,
-    protocol::tracks::{LoadError, LoadResult, PlaylistData, PlaylistInfo, Track},
-    sources::{SourcePlugin, plugin::BoxedTrack},
-};
-
 use super::{
     api::AmazonMusicClient,
     parsers::{
@@ -21,6 +15,11 @@ use super::{
         is_invalid_album, is_invalid_artist, is_invalid_community_playlist, is_invalid_playlist,
         is_invalid_track,
     },
+};
+use crate::{
+    config::AmazonMusicConfig,
+    protocol::tracks::{LoadError, LoadResult, PlaylistData, PlaylistInfo, Track},
+    sources::{SourcePlugin, plugin::BoxedTrack},
 };
 
 const TRACK_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/tracks/([A-Z0-9]{10,20})";
