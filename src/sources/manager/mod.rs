@@ -82,7 +82,7 @@ impl SourceManager {
     }
 
     /// Resolves a playable track from track info, falling back to mirrors if necessary.
-    pub async fn get_track(
+    pub async fn resolve_track(
         &self,
         track_info: &crate::protocol::tracks::TrackInfo,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,

@@ -68,7 +68,7 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
         Duration::from_secs(30),
         config
             .source_manager
-            .get_track(&track_info, config.routeplanner),
+            .resolve_track(&track_info, config.routeplanner),
     )
     .await
     {
