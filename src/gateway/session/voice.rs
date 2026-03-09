@@ -147,46 +147,91 @@ impl VoiceSession {
         opus: &mut [u8],
         ts_pcm: &mut [i16],
     ) -> AnyResult<()> {
-        let frame = self.get_next_frame(pcm).await;
+        let mut loop_count = 0;
 
-        let actively_streaming = frame.has_input || self.active_silence > 0;
-        if actively_streaming != self.is_speaking {
-            self.is_speaking = actively_streaming;
-            let _ = self.config.speaking_tx.send(self.is_speaking);
-        }
+        while loop_count < 10 {
+            loop_count += 1;
 
-        if let Some(opus_data) = frame.bypass_data {
-            self.reset_timers();
-            self.config.frames_sent.fetch_add(1, Ordering::Relaxed);
-            return self.encrypt_and_send(&opus_data).await;
-        }
+            let ready_from_ts = {
+                let mut filters = self.config.filter_chain.lock().await;
+                filters.has_timescale() && filters.fill_frame(ts_pcm)
+            };
 
-        if !frame.needs_encoding {
-            return self.maintain_udp().await;
-        }
+            if ready_from_ts {
+                self.update_speaking_status(true);
+                self.config.frames_sent.fetch_add(1, Ordering::Relaxed);
+                return self.encode_and_send(encoder, ts_pcm, opus).await;
+            }
 
-        if frame.has_input {
-            self.reset_timers();
-            self.config.frames_sent.fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.idle_frames += 1;
-            self.config.frames_nulled.fetch_add(1, Ordering::Relaxed);
+            let frame = self.get_next_frame(pcm).await;
 
-            if self.active_silence > 0 {
-                self.active_silence -= 1;
-                pcm.fill(0);
-            } else if self.idle_frames > MAX_SILENCE_FRAMES {
-                return self.maintain_udp().await;
+            if let Some(data) = frame.bypass_data {
+                self.reset_timers();
+                self.update_speaking_status(true);
+                self.config.frames_sent.fetch_add(1, Ordering::Relaxed);
+                return self.encrypt_and_send(&data).await;
+            }
+
+            if frame.has_input {
+                self.reset_timers();
+                self.update_speaking_status(true);
             } else {
-                pcm.fill(0);
+                self.idle_frames += 1;
+                if self.active_silence > 0 {
+                    self.active_silence -= 1;
+                    pcm.fill(0);
+                    self.update_speaking_status(true);
+                } else if self.idle_frames > MAX_SILENCE_FRAMES {
+                    self.update_speaking_status(false);
+                    return self.maintain_udp().await;
+                } else {
+                    pcm.fill(0);
+                    self.update_speaking_status(true);
+                }
+            }
+
+            let has_ts = {
+                let mut filters = self.config.filter_chain.lock().await;
+                filters.process(pcm);
+                filters.has_timescale()
+            };
+
+            if !has_ts {
+                if frame.has_input {
+                    self.config.frames_sent.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.config.frames_nulled.fetch_add(1, Ordering::Relaxed);
+                }
+                return self.encode_and_send(encoder, pcm, opus).await;
+            }
+
+            let filled_on_silence = {
+                let mut filters = self.config.filter_chain.lock().await;
+                !frame.has_input && filters.fill_frame(ts_pcm)
+            };
+
+            if !frame.has_input && !filled_on_silence {
+                break;
             }
         }
 
-        let Some(pcm_to_encode) = self.apply_filters(pcm, ts_pcm).await else {
-            return Ok(());
-        };
+        Ok(())
+    }
 
-        let size = match encoder.encode(pcm_to_encode, opus) {
+    fn update_speaking_status(&mut self, is_speaking: bool) {
+        if is_speaking != self.is_speaking {
+            self.is_speaking = is_speaking;
+            let _ = self.config.speaking_tx.send(self.is_speaking);
+        }
+    }
+
+    async fn encode_and_send(
+        &mut self,
+        encoder: &mut Encoder,
+        pcm: &[i16],
+        opus: &mut [u8],
+    ) -> AnyResult<()> {
+        let size = match encoder.encode(pcm, opus) {
             Ok(s) => s,
             Err(e) => {
                 error!("Opus encode failed: {e}");
@@ -205,48 +250,31 @@ impl VoiceSession {
 
     async fn get_next_frame(&self, pcm: &mut [i16]) -> FrameResult {
         let mut mixer = self.config.mixer.lock().await;
+
         if let Some(data) = mixer.take_opus_frame() {
-            FrameResult {
+            return FrameResult {
                 bypass_data: Some(data),
                 has_input: true,
-                needs_encoding: false,
-            }
-        } else {
-            let has_input = mixer.mix(pcm);
-            FrameResult {
-                bypass_data: None,
-                has_input,
-                needs_encoding: true,
-            }
-        }
-    }
-
-    async fn apply_filters<'a>(&self, pcm: &'a mut [i16], ts: &'a mut [i16]) -> Option<&'a [i16]> {
-        let mut filter = self.config.filter_chain.lock().await;
-        if !filter.is_active() {
-            return Some(pcm);
+            };
         }
 
-        filter.process(pcm);
-        if filter.has_timescale() {
-            if filter.fill_frame(ts) {
-                Some(ts)
-            } else {
-                None // Not enough data in timescale buffer yet
-            }
-        } else {
-            Some(pcm)
+        let has_input = mixer.mix(pcm);
+        FrameResult {
+            bypass_data: None,
+            has_input,
         }
     }
 
     async fn encrypt_and_send(&mut self, opus_data: &[u8]) -> AnyResult<()> {
         let dave = self.config.dave.clone();
         let mut guard = dave.lock().await;
+
         if let Ok(encrypted) = guard.encrypt_opus(opus_data) {
             drop(guard);
             self.transport.transmit_opus(&encrypted).await?;
             self.last_tx_time = Instant::now();
         }
+
         Ok(())
     }
 
@@ -268,5 +296,4 @@ impl VoiceSession {
 struct FrameResult {
     bypass_data: Option<Vec<u8>>,
     has_input: bool,
-    needs_encoding: bool,
 }

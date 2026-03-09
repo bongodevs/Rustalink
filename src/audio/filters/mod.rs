@@ -411,10 +411,13 @@ impl FilterChain {
             let resampled = ts.process_resample(samples);
             self.timescale_buffer.extend_from_slice(&resampled);
 
-            const MAX_TS_SAMPLES: usize = 1920 * 64;
+            const MAX_TS_SAMPLES: usize = 1920 * 1024;
             if self.timescale_buffer.len() > MAX_TS_SAMPLES {
                 let excess = self.timescale_buffer.len() - MAX_TS_SAMPLES;
-                self.timescale_buffer.drain(..excess);
+                let excess = excess - (excess % 2);
+                if excess > 0 {
+                    self.timescale_buffer.drain(..excess);
+                }
             }
         }
     }
