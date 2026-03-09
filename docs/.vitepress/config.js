@@ -20,7 +20,8 @@ export default defineConfig({
           { text: 'Configuration', link: '/guide/configuration' },
           { text: 'Architecture', link: '/guide/architecture' },
           { text: 'Filters', link: '/guide/filters' },
-          { text: 'REST API', link: '/guide/api' }
+          { text: 'REST API', link: '/guide/api' },
+          { text: 'Pterodactyl', link: '/guide/pterodactyl' }
         ]
       }
     ],
