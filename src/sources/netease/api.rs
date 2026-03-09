@@ -40,12 +40,35 @@ pub struct NeteaseSong {
 
 #[derive(Debug, Deserialize)]
 pub struct SearchResultData {
-    pub result: SearchSongsResult,
+    pub result: SearchResultInner,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct SearchSongsResult {
+pub struct SearchResultInner {
+    #[serde(default)]
     pub songs: Vec<NeteaseSong>,
+    #[serde(default)]
+    pub albums: Vec<NeteaseAlbum>,
+    #[serde(default)]
+    pub artists: Vec<NeteaseArtist>,
+    #[serde(default)]
+    pub playlists: Vec<NeteasePlaylist>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NeteasePlaylist {
+    pub id: i64,
+    pub name: String,
+    #[serde(alias = "coverImgUrl")]
+    pub cover_img_url: Option<String>,
+    pub creator: Option<NeteaseCreator>,
+    #[serde(alias = "trackCount")]
+    pub track_count: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NeteaseCreator {
+    pub nickname: String,
 }
 
 #[derive(Debug, Deserialize)]

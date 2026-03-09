@@ -178,11 +178,12 @@ impl SourcePlugin for NeteaseSource {
             }
         }
 
-        manager::get_autocomplete(
+        manager::search_full(
             &self.client,
             &self.nuid,
             &self.device_id,
             q,
+            _types,
             self.search_limit,
         )
         .await

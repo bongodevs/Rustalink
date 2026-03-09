@@ -30,6 +30,57 @@ pub fn parse_track(song: &NeteaseSong) -> Option<Track> {
     }))
 }
 
+pub fn parse_album(album: &NeteaseAlbum) -> PlaylistData {
+    PlaylistData {
+        info: PlaylistInfo {
+            name: album.name.clone(),
+            selected_track: -1,
+        },
+        plugin_info: json!({
+            "type": "album",
+            "url": format!("https://music.163.com/album?id={}", album.id),
+            "artworkUrl": album.pic_url,
+            "author": "Netease Music",
+            "totalTracks": 0
+        }),
+        tracks: Vec::new(),
+    }
+}
+
+pub fn parse_artist(artist: &NeteaseArtist) -> PlaylistData {
+    PlaylistData {
+        info: PlaylistInfo {
+            name: format!("{}'s Top Tracks", artist.name),
+            selected_track: -1,
+        },
+        plugin_info: json!({
+            "type": "artist",
+            "url": format!("https://music.163.com/artist?id={}", artist.id),
+            "artworkUrl": None::<String>,
+            "author": artist.name,
+            "totalTracks": 0
+        }),
+        tracks: Vec::new(),
+    }
+}
+
+pub fn parse_playlist(playlist: &NeteasePlaylist) -> PlaylistData {
+    PlaylistData {
+        info: PlaylistInfo {
+            name: playlist.name.clone(),
+            selected_track: -1,
+        },
+        plugin_info: json!({
+            "type": "playlist",
+            "url": format!("https://music.163.com/playlist?id={}", playlist.id),
+            "artworkUrl": playlist.cover_img_url,
+            "author": playlist.creator.as_ref().map(|c| c.nickname.clone()).unwrap_or_else(|| "Netease Music".to_string()),
+            "totalTracks": playlist.track_count.unwrap_or(0)
+        }),
+        tracks: Vec::new(),
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum TrackUrlResult {
     Success(String),
@@ -306,19 +357,69 @@ pub async fn search_tracks(
     }
 }
 
-pub async fn get_autocomplete(
+pub async fn search_full(
     client: &reqwest::Client,
     nuid: &str,
     device_id: &str,
     query: &str,
+    types: &[String],
     limit: usize,
 ) -> Option<SearchResult> {
-    let resp = get_eapi_json::<SearchResultData>(
+    let mut tracks = Vec::new();
+    let mut albums = Vec::new();
+    let mut artists = Vec::new();
+    let mut playlists = Vec::new();
+
+    let all_types = types.is_empty();
+
+    if all_types || types.contains(&"track".to_owned()) {
+        if let Some(res) = fetch_search(client, nuid, device_id, query, 1, limit).await {
+            tracks = res.songs.iter().filter_map(parse_track).collect();
+        }
+    }
+
+    if all_types || types.contains(&"album".to_owned()) {
+        if let Some(res) = fetch_search(client, nuid, device_id, query, 10, limit).await {
+            albums = res.albums.iter().map(parse_album).collect();
+        }
+    }
+
+    if all_types || types.contains(&"artist".to_owned()) {
+        if let Some(res) = fetch_search(client, nuid, device_id, query, 100, limit).await {
+            artists = res.artists.iter().map(parse_artist).collect();
+        }
+    }
+
+    if all_types || types.contains(&"playlist".to_owned()) {
+        if let Some(res) = fetch_search(client, nuid, device_id, query, 1000, limit).await {
+            playlists = res.playlists.iter().map(parse_playlist).collect();
+        }
+    }
+
+    Some(SearchResult {
+        tracks,
+        albums,
+        artists,
+        playlists,
+        texts: Vec::new(),
+        plugin: json!({}),
+    })
+}
+
+async fn fetch_search(
+    client: &reqwest::Client,
+    nuid: &str,
+    device_id: &str,
+    query: &str,
+    type_id: i32,
+    limit: usize,
+) -> Option<SearchResultInner> {
+    get_eapi_json::<SearchResultData>(
         client,
         "/api/cloudsearch/pc",
         json!({
             "s": query,
-            "type": 1,
+            "type": type_id,
             "limit": limit,
             "offset": 0,
             "total": true
@@ -326,18 +427,8 @@ pub async fn get_autocomplete(
         nuid,
         device_id,
     )
-    .await?;
-
-    let tracks = resp.result.songs.iter().filter_map(parse_track).collect();
-
-    Some(SearchResult {
-        tracks,
-        albums: Vec::new(),
-        artists: Vec::new(),
-        playlists: Vec::new(),
-        texts: Vec::new(),
-        plugin: json!({}),
-    })
+    .await
+    .map(|d| d.result)
 }
 
 pub async fn fetch_recommendations(
