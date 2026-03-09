@@ -275,7 +275,10 @@ impl SourcePlugin for NeteaseSource {
         }
 
         if stream_url.is_none() {
-            debug!("Netease: Failed to resolve playback URL for track ID: {}", id);
+            debug!(
+                "Netease: Failed to resolve playback URL for track ID: {}",
+                id
+            );
         }
 
         stream_url.map(|url| {
