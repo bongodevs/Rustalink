@@ -4,7 +4,6 @@ export default defineConfig({
   title: "Rustalink",
   description: "High-performance Rust audio server documentation",
   srcDir: './src',
-  outDir: '../.vitepress/dist',
   base: '/Rustalink/',
   cleanUrls: true,
   themeConfig: {
