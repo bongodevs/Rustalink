@@ -21,6 +21,7 @@ pub mod jiosaavn;
 pub mod lastfm;
 pub mod local;
 pub mod mixcloud;
+pub mod netease;
 pub mod pandora;
 pub mod qobuz;
 pub mod reddit;

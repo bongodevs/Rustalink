@@ -19,7 +19,6 @@ pub struct AnghamiSource {
     client: Arc<reqwest::Client>,
     udid: String,
     search_limit: usize,
-    search_prefixes: Vec<String>,
     url_regex: Regex,
 }
 
@@ -32,7 +31,6 @@ impl AnghamiSource {
             client,
             udid,
             search_limit: ag_config.search_limit,
-            search_prefixes: vec!["agsearch:".to_owned()],
             url_regex: Regex::new(
                 r"^https?://(?:play\.|www\.)?anghami\.com/(?P<type>song|album|playlist|artist)/(?P<id>[0-9]+)",
             )
@@ -568,14 +566,14 @@ impl SourcePlugin for AnghamiSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
-            .iter()
+        self.search_prefixes()
+            .into_iter()
             .any(|p| identifier.starts_with(p))
             || self.url_regex.is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["agsearch:"]
     }
 
     fn is_mirror(&self) -> bool {
@@ -588,9 +586,9 @@ impl SourcePlugin for AnghamiSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             return self.get_search(&identifier[prefix.len()..]).await;
         }

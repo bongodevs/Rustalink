@@ -15,6 +15,7 @@ pub mod jiosaavn;
 pub mod lastfm;
 pub mod local;
 pub mod mixcloud;
+pub mod netease;
 pub mod pandora;
 pub mod qobuz;
 pub mod reddit;
@@ -42,6 +43,7 @@ pub use jiosaavn::*;
 pub use lastfm::*;
 pub use local::*;
 pub use mixcloud::*;
+pub use netease::*;
 pub use pandora::*;
 pub use qobuz::*;
 pub use reddit::*;
@@ -84,6 +86,7 @@ pub struct SourcesConfig {
     pub mixcloud: Option<MixcloudConfig>,
     pub bandcamp: Option<BandcampConfig>,
     pub twitch: Option<TwitchConfig>,
+    pub netease: Option<NeteaseMusicConfig>,
     pub vkmusic: Option<VkMusicConfig>,
     pub yandexmusic: Option<YandexMusicConfig>,
     pub google_tts: Option<GoogleTtsConfig>,

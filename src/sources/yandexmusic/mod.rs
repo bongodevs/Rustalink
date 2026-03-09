@@ -20,8 +20,6 @@ pub struct YandexMusicSource {
     url_pattern: Regex,
     playlist_pattern: Regex,
     playlist_uuid_pattern: Regex,
-    search_prefixes: Vec<String>,
-    rec_prefixes: Vec<String>,
     search_limit: usize,
     playlist_load_limit: usize,
     album_load_limit: usize,
@@ -48,8 +46,6 @@ impl YandexMusicSource {
             url_pattern: Regex::new(r"(?i)^https?://music\.yandex\.(ru|com|kz|by)/(artist|album|track)/(?P<id1>[0-9]+)(/(track)/(?P<id2>[0-9]+))?/?").unwrap(),
             playlist_pattern: Regex::new(r"(?i)^https?://music\.yandex\.(ru|com|kz|by)/users/(?P<user>[^/]+)/playlists/(?P<id>[0-9]+)/?").unwrap(),
             playlist_uuid_pattern: Regex::new(r"(?i)^https?://music\.yandex\.(ru|com|kz|by)/playlists/(?P<uuid>[0-9a-z-]+)").unwrap(),
-            search_prefixes: vec!["ymsearch:".to_string()],
-            rec_prefixes: vec!["ymrec:".to_string()],
             search_limit: config.search_limit,
             playlist_load_limit: config.playlist_load_limit,
             album_load_limit: config.album_load_limit,
@@ -167,7 +163,7 @@ impl YandexMusicSource {
         Some(PlaylistData {
             info: PlaylistInfo {
                 name,
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": r#type }),
             tracks: Vec::new(),
@@ -253,7 +249,7 @@ impl YandexMusicSource {
                     .as_str()
                     .unwrap_or("Yandex Music Album")
                     .to_string(),
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": "album" }),
             tracks,
@@ -288,7 +284,7 @@ impl YandexMusicSource {
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name: format!("{}'s Top Tracks", name),
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": "artist" }),
             tracks,
@@ -327,6 +323,34 @@ impl YandexMusicSource {
         self.build_playlist_result(data)
     }
 
+    async fn get_recommendations(&self, id: &str) -> LoadResult {
+        if !id.chars().all(|c| c.is_ascii_digit()) {
+            return LoadResult::Empty {};
+        }
+
+        let data = match self
+            .api_request(&format!("/tracks/{}/similar", id), None)
+            .await
+        {
+            Some(d) => d,
+            None => return LoadResult::Empty {},
+        };
+
+        let tracks = self.parse_tracks(&data["similarTracks"]);
+        if tracks.is_empty() {
+            return LoadResult::Empty {};
+        }
+
+        LoadResult::Playlist(PlaylistData {
+            info: PlaylistInfo {
+                name: "Yandex Music Recommendations".to_string(),
+                selected_track: -1,
+            },
+            plugin_info: json!({ "type": "recommendations" }),
+            tracks,
+        })
+    }
+
     fn build_playlist_result(&self, data: Value) -> LoadResult {
         let tracks = self.parse_tracks(&data["tracks"]);
         if tracks.is_empty() {
@@ -349,7 +373,7 @@ impl YandexMusicSource {
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name: title,
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": "playlist" }),
             tracks,
@@ -441,21 +465,24 @@ impl SourcePlugin for YandexMusicSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
+        self.search_prefixes()
             .iter()
             .any(|p| identifier.starts_with(p))
-            || self.rec_prefixes.iter().any(|p| identifier.starts_with(p))
+            || self
+                .rec_prefixes()
+                .iter()
+                .any(|p| identifier.starts_with(p))
             || self.url_pattern.is_match(identifier)
             || self.playlist_pattern.is_match(identifier)
             || self.playlist_uuid_pattern.is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["ymsearch:"]
     }
 
     fn rec_prefixes(&self) -> Vec<&str> {
-        self.rec_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["ymrec:"]
     }
 
     async fn load(
@@ -464,21 +491,21 @@ impl SourcePlugin for YandexMusicSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             return self.search(identifier.strip_prefix(prefix).unwrap()).await;
         }
 
         if let Some(prefix) = self
-            .rec_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .rec_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
-            // For now, ymrec: query maps to search as Yandex recommendations
-            // usually require a track/artist ID which search helps find.
-            return self.search(identifier.strip_prefix(prefix).unwrap()).await;
+            return self
+                .get_recommendations(identifier.strip_prefix(prefix).unwrap())
+                .await;
         }
 
         self.resolve_url(identifier).await

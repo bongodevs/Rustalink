@@ -23,7 +23,6 @@ pub struct AppleMusicSource {
     album_load_limit: usize,
     playlist_page_load_concurrency: usize,
     album_page_load_concurrency: usize,
-    search_prefixes: Vec<String>,
     url_regex: Regex,
 }
 
@@ -55,7 +54,6 @@ impl AppleMusicSource {
             album_load_limit: a_limit,
             playlist_page_load_concurrency: p_conc,
             album_page_load_concurrency: a_conc,
-            search_prefixes: vec!["amsearch:".to_owned()],
             url_regex: Regex::new(r"https?://(?:www\.)?music\.apple\.com/(?:[a-zA-Z]{2}/)?(album|playlist|artist|song)/[^/]+/([a-zA-Z0-9\-.]+)(?:\?i=(\d+))?").unwrap(),
         })
     }
@@ -68,14 +66,14 @@ impl SourcePlugin for AppleMusicSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
+        self.search_prefixes()
             .iter()
             .any(|p| identifier.starts_with(p))
             || self.url_regex.is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["amsearch:"]
     }
 
     fn is_mirror(&self) -> bool {
@@ -88,9 +86,9 @@ impl SourcePlugin for AppleMusicSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             let query = &identifier[prefix.len()..];
             return self.search(query).await;
@@ -125,7 +123,11 @@ impl SourcePlugin for AppleMusicSource {
         types: &[String],
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<crate::protocol::tracks::SearchResult> {
-        let q = if let Some(prefix) = self.search_prefixes.iter().find(|p| query.starts_with(*p)) {
+        let q = if let Some(prefix) = self
+            .search_prefixes()
+            .into_iter()
+            .find(|p| query.starts_with(p))
+        {
             &query[prefix.len()..]
         } else {
             query

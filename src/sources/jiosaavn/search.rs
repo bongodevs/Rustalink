@@ -67,7 +67,6 @@ impl JioSaavnSource {
 
         let all_types = types.is_empty();
 
-        // Parse Songs -> Tracks
         if (all_types || types.contains(&"track".to_owned()))
             && let Some(songs) = json
                 .get("songs")
@@ -81,7 +80,6 @@ impl JioSaavnSource {
             }
         }
 
-        // Batch update track details for duration and perma_url
         if !tracks.is_empty() {
             let pids: Vec<String> = tracks.iter().map(|t| t.info.identifier.clone()).collect();
             let pids_str = pids.join(",");
@@ -94,7 +92,6 @@ impl JioSaavnSource {
             if let Some(details_json) = get_json(&self.client, &details_params).await {
                 for track in &mut tracks {
                     if let Some(detail) = details_json.get(&track.info.identifier) {
-                        // Update length
                         if let Some(duration) = detail
                             .get("duration")
                             .and_then(|v| v.as_str())
@@ -104,12 +101,10 @@ impl JioSaavnSource {
                             track.info.length = duration * 1000;
                         }
 
-                        // Update URI
                         if let Some(perma_url) = detail.get("perma_url").and_then(|v| v.as_str()) {
                             track.info.uri = Some(perma_url.to_owned());
                         }
 
-                        // Enrich pluginInfo
                         track.plugin_info = serde_json::json!({
                             "albumName": detail
                                 .get("album")
@@ -135,7 +130,6 @@ impl JioSaavnSource {
                             "isPreview": false
                         });
 
-                        // Update Author
                         if let Some(artists) =
                             detail.get("primary_artists").and_then(|v| v.as_str())
                             && !artists.is_empty()
@@ -149,14 +143,12 @@ impl JioSaavnSource {
                             track.info.author = super::helpers::clean_string(&limited_artists);
                         }
 
-                        // Re-encode track with updated info
                         track.encoded = track.encode();
                     }
                 }
             }
         }
 
-        // Parse Albums -> PlaylistData
         if (all_types || types.contains(&"album".to_owned()))
             && let Some(data) = json
                 .get("albums")
@@ -170,7 +162,6 @@ impl JioSaavnSource {
             }
         }
 
-        // Parse Artists -> PlaylistData
         if (all_types || types.contains(&"artist".to_owned()))
             && let Some(data) = json
                 .get("artists")
@@ -184,7 +175,6 @@ impl JioSaavnSource {
             }
         }
 
-        // Parse Playlists -> PlaylistData
         if (all_types || types.contains(&"playlist".to_owned()))
             && let Some(data) = json
                 .get("playlists")
@@ -198,7 +188,6 @@ impl JioSaavnSource {
             }
         }
 
-        // Parse TopQuery -> Respective Type
         if (all_types || types.is_empty())
             && let Some(top_data) = json
                 .get("topquery")

@@ -22,8 +22,6 @@ pub struct VkMusicSource {
     playlist_track_limit: usize,
     artist_track_limit: usize,
     rec_limit: usize,
-    search_prefixes: Vec<String>,
-    rec_prefixes: Vec<String>,
     track_re: Regex,
     playlist_z_re: Regex,
     playlist_path_re: Regex,
@@ -47,8 +45,6 @@ impl VkMusicSource {
             playlist_track_limit: cfg.playlist_load_limit * 50,
             artist_track_limit: cfg.artist_load_limit * 10,
             rec_limit: cfg.recommendations_load_limit,
-            search_prefixes: vec!["vksearch:".to_string()],
-            rec_prefixes: vec!["vkrec:".to_string()],
             track_re: Regex::new(
                 r"(?i)https?://vk\.(?:com|ru)/audio(?P<owner>-?\d+)_(?P<id>\d+)(?:_(?P<hash>[a-z0-9]+))?",
             ).unwrap(),
@@ -118,7 +114,7 @@ impl VkMusicSource {
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name: "VK Music Recommendations".to_string(),
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": "recommendations" }),
             tracks,
@@ -169,7 +165,7 @@ impl VkMusicSource {
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name: title,
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": pl_type }),
             tracks,
@@ -236,7 +232,7 @@ impl VkMusicSource {
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name: format!("{}'s Top Tracks", name),
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": "artist" }),
             tracks,
@@ -268,7 +264,7 @@ impl VkMusicSource {
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name: "VK Music".to_string(),
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": "playlist" }),
             tracks,
@@ -338,7 +334,7 @@ impl VkMusicSource {
         Some(PlaylistData {
             info: PlaylistInfo {
                 name: title.to_string(),
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": kind, "uri": uri }),
             tracks: Vec::new(),
@@ -361,7 +357,7 @@ impl VkMusicSource {
         Some(PlaylistData {
             info: PlaylistInfo {
                 name: format!("{}'s Top Tracks", name),
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({ "type": "artist", "artworkUrl": artwork, "uri": format!("https://vk.com/artist/{}", domain) }),
             tracks: Vec::new(),
@@ -376,8 +372,8 @@ impl SourcePlugin for VkMusicSource {
     }
 
     fn can_handle(&self, id: &str) -> bool {
-        self.search_prefixes.iter().any(|p| id.starts_with(p))
-            || self.rec_prefixes.iter().any(|p| id.starts_with(p))
+        self.search_prefixes().iter().any(|p| id.starts_with(p))
+            || self.rec_prefixes().iter().any(|p| id.starts_with(p))
             || self.track_re.is_match(id)
             || self.playlist_z_re.is_match(id)
             || self.playlist_path_re.is_match(id)
@@ -386,11 +382,11 @@ impl SourcePlugin for VkMusicSource {
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["vksearch:"]
     }
 
     fn rec_prefixes(&self) -> Vec<&str> {
-        self.rec_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["vkrec:"]
     }
 
     async fn load(
@@ -399,22 +395,20 @@ impl SourcePlugin for VkMusicSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(p.as_str()))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
-            return self
-                .search(identifier.strip_prefix(prefix.as_str()).unwrap())
-                .await;
+            return self.search(identifier.strip_prefix(prefix).unwrap()).await;
         }
 
         if let Some(prefix) = self
-            .rec_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(p.as_str()))
+            .rec_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             return self
-                .recommendations(identifier.strip_prefix(prefix.as_str()).unwrap())
+                .recommendations(identifier.strip_prefix(prefix).unwrap())
                 .await;
         }
 
@@ -462,9 +456,9 @@ impl SourcePlugin for VkMusicSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<crate::protocol::tracks::SearchResult> {
         let q = self
-            .search_prefixes
-            .iter()
-            .find_map(|p| query.strip_prefix(p.as_str()))
+            .search_prefixes()
+            .into_iter()
+            .find_map(|p| query.strip_prefix(p))
             .unwrap_or(query);
 
         let count = self.search_limit.to_string();

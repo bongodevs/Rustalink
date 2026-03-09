@@ -130,7 +130,6 @@ impl LyricsManager {
         while let Some(result) = futures.next().await {
             if let Some(lyrics) = result {
                 if lyrics.lines.is_some() {
-                    // Return synced lyrics immediately
                     return Some(lyrics);
                 } else {
                     fallback_text.get_or_insert(lyrics);

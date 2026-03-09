@@ -22,9 +22,6 @@ use crate::{
 const PUBLIC_API_BASE: &str = "https://api.deezer.com";
 const PRIVATE_API_BASE: &str = "https://www.deezer.com/ajax/gw-light.php";
 
-pub(crate) const SEARCH_PREFIX: &str = "dzsearch:";
-pub(crate) const ISRC_PREFIX: &str = "dzisrc:";
-pub(crate) const RECOMMENDATION_PREFIX: &str = "dzrec:";
 pub(crate) const REC_ARTIST_PREFIX: &str = "artist=";
 pub(crate) const REC_TRACK_PREFIX: &str = "track=";
 pub(crate) const SHARE_URL_PREFIX: &str = "https://deezer.page.link/";
@@ -72,19 +69,31 @@ impl SourcePlugin for DeezerSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        identifier.starts_with(SEARCH_PREFIX)
-            || identifier.starts_with(ISRC_PREFIX)
-            || identifier.starts_with(RECOMMENDATION_PREFIX)
+        self.search_prefixes()
+            .iter()
+            .any(|p| identifier.starts_with(p))
+            || self
+                .isrc_prefixes()
+                .iter()
+                .any(|p| identifier.starts_with(p))
+            || self
+                .rec_prefixes()
+                .iter()
+                .any(|p| identifier.starts_with(p))
             || identifier.starts_with(SHARE_URL_PREFIX)
             || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        vec![SEARCH_PREFIX]
+        vec!["dzsearch:"]
     }
 
     fn isrc_prefixes(&self) -> Vec<&str> {
-        vec![ISRC_PREFIX]
+        vec!["dzisrc:"]
+    }
+
+    fn rec_prefixes(&self) -> Vec<&str> {
+        vec!["dzrec:"]
     }
 
     async fn load(
@@ -92,19 +101,25 @@ impl SourcePlugin for DeezerSource {
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        if let Some(query) = identifier.strip_prefix(SEARCH_PREFIX) {
-            return self.search(query).await;
-        }
-
-        if let Some(isrc) = identifier.strip_prefix(ISRC_PREFIX) {
-            if let Some(track) = self.get_track_by_isrc(isrc).await {
-                return LoadResult::Track(track);
+        for prefix in self.search_prefixes() {
+            if let Some(query) = identifier.strip_prefix(prefix) {
+                return self.search(query).await;
             }
-            return LoadResult::Empty {};
         }
 
-        if let Some(query) = identifier.strip_prefix(RECOMMENDATION_PREFIX) {
-            return self.get_recommendations(query).await;
+        for prefix in self.isrc_prefixes() {
+            if let Some(isrc) = identifier.strip_prefix(prefix) {
+                if let Some(track) = self.get_track_by_isrc(isrc).await {
+                    return LoadResult::Track(track);
+                }
+                return LoadResult::Empty {};
+            }
+        }
+
+        for prefix in self.rec_prefixes() {
+            if let Some(query) = identifier.strip_prefix(prefix) {
+                return self.get_recommendations(query).await;
+            }
         }
 
         if identifier.starts_with(SHARE_URL_PREFIX) {
@@ -177,7 +192,13 @@ impl SourcePlugin for DeezerSource {
         types: &[String],
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<crate::protocol::tracks::SearchResult> {
-        let q = query.strip_prefix(SEARCH_PREFIX).unwrap_or(query);
+        let mut q = query;
+        for prefix in self.search_prefixes() {
+            if let Some(stripped) = query.strip_prefix(prefix) {
+                q = stripped;
+                break;
+            }
+        }
         self.get_autocomplete(q, types).await
     }
 }

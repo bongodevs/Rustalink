@@ -25,7 +25,6 @@ pub fn extract_adts_from_ts(ts_data: &[u8]) -> Vec<u8> {
 
     let mut offset = 0;
 
-    // Try to find the sync byte at start
     while offset < ts_data.len() && ts_data[offset] != TS_SYNC_BYTE {
         offset += 1;
     }
@@ -35,7 +34,6 @@ pub fn extract_adts_from_ts(ts_data: &[u8]) -> Vec<u8> {
         offset += TS_PACKET_SIZE;
 
         if packet[0] != TS_SYNC_BYTE {
-            // Lost sync - try to re-sync
             let remaining = &ts_data[offset..];
             if let Some(sync_pos) = remaining.iter().position(|&b| b == TS_SYNC_BYTE) {
                 offset += sync_pos;
@@ -54,19 +52,16 @@ pub fn extract_adts_from_ts(ts_data: &[u8]) -> Vec<u8> {
             continue;
         }
 
-        // Determine payload start position
         let mut payload_offset: usize = 4;
 
-        if adaptation_field_control == 2 || adaptation_field_control == 3 {
-            // Adaptation field present
-            if payload_offset < TS_PACKET_SIZE {
-                let adaptation_length = packet[payload_offset] as usize;
-                payload_offset += 1 + adaptation_length;
-            }
+        if (adaptation_field_control == 2 || adaptation_field_control == 3)
+            && payload_offset < TS_PACKET_SIZE
+        {
+            let adaptation_length = packet[payload_offset] as usize;
+            payload_offset += 1 + adaptation_length;
         }
 
         if adaptation_field_control == 0 || adaptation_field_control == 2 {
-            // No payload
             continue;
         }
 
@@ -76,7 +71,6 @@ pub fn extract_adts_from_ts(ts_data: &[u8]) -> Vec<u8> {
 
         let payload = &packet[payload_offset..];
 
-        // PAT (Program Association Table)
         if pid == PAT_PID {
             if let Some(pid) = parse_pat(payload, payload_start) {
                 pmt_pid = Some(pid);
@@ -84,7 +78,6 @@ pub fn extract_adts_from_ts(ts_data: &[u8]) -> Vec<u8> {
             continue;
         }
 
-        // PMT (Program Map Table)
         if Some(pid) == pmt_pid {
             if let Some(pid) = parse_pmt(payload, payload_start) {
                 audio_pid = Some(pid);
@@ -92,7 +85,6 @@ pub fn extract_adts_from_ts(ts_data: &[u8]) -> Vec<u8> {
             continue;
         }
 
-        // Audio PES data
         if Some(pid) == audio_pid {
             extract_pes_payload(payload, payload_start, &mut adts_out);
         }
@@ -104,7 +96,6 @@ pub fn extract_adts_from_ts(ts_data: &[u8]) -> Vec<u8> {
 /// Parse PAT to find PMT PID.
 fn parse_pat(payload: &[u8], payload_start: bool) -> Option<u16> {
     let data = if payload_start && !payload.is_empty() {
-        // Skip pointer field
         let pointer = payload[0] as usize;
         if 1 + pointer >= payload.len() {
             return None;
@@ -134,7 +125,6 @@ fn parse_pat(payload: &[u8], payload_start: bool) -> Option<u16> {
         let pid = ((data[pos + 2] as u16 & 0x1F) << 8) | data[pos + 3] as u16;
 
         if program_number != 0 {
-            // Non-zero = actual program, return its PMT PID
             return Some(pid);
         }
         pos += 4;
@@ -177,7 +167,6 @@ fn parse_pmt(payload: &[u8], payload_start: bool) -> Option<u16> {
             return Some(elementary_pid);
         }
 
-        // Also check for common MPEG audio (MP3 in TS)
         if stream_type == 0x03 || stream_type == 0x04 {
             return Some(elementary_pid);
         }
@@ -191,14 +180,11 @@ fn parse_pmt(payload: &[u8], payload_start: bool) -> Option<u16> {
 /// Extract elementary stream payload from PES packet data.
 fn extract_pes_payload(payload: &[u8], payload_start: bool, out: &mut Vec<u8>) {
     if payload_start {
-        // PES packet starts here — strip PES header
         if payload.len() < 9 {
             return;
         }
 
-        // Verify PES start code: 0x00 0x00 0x01
         if payload[0] != 0x00 || payload[1] != 0x00 || payload[2] != 0x01 {
-            // Not a valid PES start — just append raw data
             out.extend_from_slice(payload);
             return;
         }
@@ -211,7 +197,6 @@ fn extract_pes_payload(payload: &[u8], payload_start: bool, out: &mut Vec<u8>) {
             out.extend_from_slice(&payload[pes_header_size..]);
         }
     } else {
-        // Continuation of PES payload — append directly
         out.extend_from_slice(payload);
     }
 }

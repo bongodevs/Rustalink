@@ -14,9 +14,6 @@ pub mod recommendations;
 pub mod search;
 pub mod track;
 
-pub(crate) const SEARCH_PREFIX_JS: &str = "jssearch:";
-pub(crate) const REC_PREFIX_JS: &str = "jsrec:";
-
 fn url_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
@@ -85,17 +82,22 @@ impl crate::sources::plugin::SourcePlugin for JioSaavnSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        identifier.starts_with(SEARCH_PREFIX_JS)
-            || identifier.starts_with(REC_PREFIX_JS)
+        self.search_prefixes()
+            .iter()
+            .any(|p| identifier.starts_with(p))
+            || self
+                .rec_prefixes()
+                .iter()
+                .any(|p| identifier.starts_with(p))
             || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        vec![SEARCH_PREFIX_JS]
+        vec!["jssearch:"]
     }
 
     fn rec_prefixes(&self) -> Vec<&str> {
-        vec![REC_PREFIX_JS]
+        vec!["jsrec:"]
     }
 
     async fn load(
@@ -103,15 +105,18 @@ impl crate::sources::plugin::SourcePlugin for JioSaavnSource {
         identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        if let Some(query) = identifier.strip_prefix(REC_PREFIX_JS) {
-            return self.get_recommendations(query).await;
+        for prefix in self.rec_prefixes() {
+            if let Some(query) = identifier.strip_prefix(prefix) {
+                return self.get_recommendations(query).await;
+            }
         }
 
-        if let Some(query) = identifier.strip_prefix(SEARCH_PREFIX_JS) {
-            return self.search(query).await;
+        for prefix in self.search_prefixes() {
+            if let Some(query) = identifier.strip_prefix(prefix) {
+                return self.search(query).await;
+            }
         }
 
-        // Regex Match URL
         if let Some(caps) = url_regex().captures(identifier) {
             let type_ = caps.name("type").map(|m| m.as_str()).unwrap_or("");
             let id = caps.name("id").map(|m| m.as_str()).unwrap_or("");
@@ -180,7 +185,13 @@ impl crate::sources::plugin::SourcePlugin for JioSaavnSource {
         types: &[String],
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<crate::protocol::tracks::SearchResult> {
-        let q = query.strip_prefix(SEARCH_PREFIX_JS).unwrap_or(query);
+        let mut q = query;
+        for prefix in self.search_prefixes() {
+            if let Some(stripped) = query.strip_prefix(prefix) {
+                q = stripped;
+                break;
+            }
+        }
         self.get_autocomplete(q, types).await
     }
 }

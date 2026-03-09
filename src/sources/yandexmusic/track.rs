@@ -45,7 +45,6 @@ impl PlayableTrack for YandexMusicTrack {
                         let (inner_rx, inner_cmd_tx, inner_err_rx) =
                             http_track.start_decoding(config.clone());
 
-                        // Proxy commands
                         let inner_cmd_tx_clone = inner_cmd_tx.clone();
                         tokio::spawn(async move {
                             while let Ok(cmd) = cmd_rx.recv_async().await {
@@ -55,7 +54,6 @@ impl PlayableTrack for YandexMusicTrack {
                             }
                         });
 
-                        // Proxy errors
                         let err_tx_clone = err_tx.clone();
                         tokio::spawn(async move {
                             while let Ok(err) = inner_err_rx.recv_async().await {
@@ -63,7 +61,6 @@ impl PlayableTrack for YandexMusicTrack {
                             }
                         });
 
-                        // Proxy samples
                         while let Ok(sample) = inner_rx.recv_async().await {
                             if tx.send(sample).is_err() {
                                 break;
@@ -92,7 +89,6 @@ async fn fetch_download_url(client: &Arc<reqwest::Client>, id: &str) -> Option<S
 
     let results = data["result"].as_array()?;
 
-    // Find MP3 with highest bitrate
     let mut mp3_items: Vec<_> = results
         .iter()
         .filter(|item| item["codec"].as_str() == Some("mp3"))
@@ -102,7 +98,6 @@ async fn fetch_download_url(client: &Arc<reqwest::Client>, id: &str) -> Option<S
     let best_mp3 = mp3_items.last()?;
     let download_info_url = best_mp3["downloadInfoUrl"].as_str()?;
 
-    // Fetch XML
     let xml_resp = client.get(download_info_url).send().await.ok()?;
     let xml_text = xml_resp.text().await.ok()?;
 

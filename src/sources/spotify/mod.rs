@@ -267,8 +267,8 @@ impl SourcePlugin for SpotifySource {
     ) -> Option<crate::protocol::tracks::SearchResult> {
         let mut q = query;
         for prefix in self.search_prefixes() {
-            if q.starts_with(prefix) {
-                q = &q[prefix.len()..];
+            if let Some(stripped) = q.strip_prefix(prefix) {
+                q = stripped;
                 break;
             }
         }

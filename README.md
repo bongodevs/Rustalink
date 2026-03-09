@@ -68,7 +68,8 @@ Resolution of metadata-only sources via secondary providers.
 - [x] **Anghami**
 - [x] **Pandora**
 - [x] **Last.fm**
-- [x] **Amazon Music**:
+- [x] **Amazon Music**
+- [x] **Netease**: Direct playback with automatic mirroring fallback.
 ### Utilities
 - [x] **Text-to-Speech**
 

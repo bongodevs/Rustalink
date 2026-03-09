@@ -23,10 +23,8 @@ impl SourceManager {
         let http_pool = Arc::new(HttpClientPool::new());
         let mut sources = Vec::new();
 
-        // Initialize all sources via the registration module
         registration::register_all(&mut sources, config, &http_pool);
 
-        // YouTube special case: needs to expose stream context and cipher manager for the server
         let (youtube_cipher_manager, youtube_stream_ctx) =
             registration::init_youtube_context(config, &http_pool);
 
@@ -89,7 +87,6 @@ impl SourceManager {
     ) -> Option<BoxedTrack> {
         let identifier = track_info.uri.as_deref().unwrap_or(&track_info.identifier);
 
-        // 1. Try primary source resolution
         for source in &self.sources {
             if source.can_handle(identifier) {
                 tracing::trace!(
@@ -105,7 +102,6 @@ impl SourceManager {
             }
         }
 
-        // 2. Fallback to mirrors if configured
         if let Some(mirrors) = &self.mirrors {
             return resolver::resolve_with_mirrors(
                 self,

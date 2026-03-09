@@ -142,7 +142,6 @@ impl SoundCloudSource {
 
         trace!("SoundCloud: Parsing track {}: {}", id, title);
 
-        // Check if track is blocked
         if json.get("policy").and_then(|v| v.as_str()) == Some("BLOCK") {
             trace!(
                 "SoundCloud: Track '{}' is blocked by policy (likely geo-blocked). Returning metadata for mirroring.",
@@ -154,7 +153,6 @@ impl SoundCloudSource {
             trace!("SoundCloud: Track '{}' is a Go+ (premium) track", title);
         }
 
-        // Check for preview-only tracks
         if let Some(transcodings) = json
             .get("media")
             .and_then(|m| m.get("transcodings"))
@@ -221,7 +219,6 @@ impl SoundCloudSource {
         Ok(track)
     }
 
-    /// Select the best transcoding format and return (stream_kind, lookup_url).
     fn select_format(transcodings: &[Value]) -> Option<(SoundCloudStreamKind, String)> {
         if transcodings.is_empty() {
             return None;
@@ -554,7 +551,6 @@ impl SoundCloudSource {
             None => return LoadResult::Empty {},
         };
 
-        // Fetch the liked page HTML to extract user ID
         let html = match self.client.get(url).send().await {
             Ok(r) => match r.text().await {
                 Ok(t) => t,
@@ -764,7 +760,6 @@ impl SoundCloudSource {
             let collection = json.get("collection").and_then(|v| v.as_array());
             if let Some(items) = collection {
                 for item in items {
-                    // Handle wrapped objects (like in spotlight or reposts)
                     let track_json = if item.get("track").is_some() {
                         item.get("track")
                     } else if item.get("kind").and_then(|v| v.as_str()) == Some("track") {

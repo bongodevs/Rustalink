@@ -23,7 +23,6 @@ static TRALBUM_PATTERN: OnceLock<Regex> = OnceLock::new();
 
 pub struct BandcampSource {
     client: Arc<reqwest::Client>,
-    search_prefixes: Vec<String>,
     search_limit: usize,
 }
 
@@ -34,7 +33,6 @@ impl BandcampSource {
     ) -> Result<Self, String> {
         Ok(Self {
             client,
-            search_prefixes: vec!["bcsearch:".to_owned()],
             search_limit: config.map(|c| c.search_limit).unwrap_or(10),
         })
     }
@@ -183,7 +181,7 @@ impl BandcampSource {
                 return LoadResult::Playlist(PlaylistData {
                     info: PlaylistInfo {
                         name: playlist_name,
-                        selected_track: 0,
+                        selected_track: -1,
                     },
                     plugin_info: json!({}),
                     tracks,
@@ -262,14 +260,14 @@ impl SourcePlugin for BandcampSource {
 
     fn can_handle(&self, identifier: &str) -> bool {
         let url_re = URL_PATTERN.get_or_init(|| Regex::new(r"(?i)^https?://(?P<subdomain>[^/]+)\.bandcamp\.com/(?P<type>track|album)/(?P<slug>[^/?]+)").unwrap());
-        self.search_prefixes
+        self.search_prefixes()
             .iter()
             .any(|p| identifier.starts_with(p))
             || url_re.is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["bcsearch:"]
     }
 
     async fn load(
@@ -278,9 +276,9 @@ impl SourcePlugin for BandcampSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             return self.search(&identifier[prefix.len()..]).await;
         }

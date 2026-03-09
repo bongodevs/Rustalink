@@ -62,7 +62,7 @@ impl JioSaavnSource {
                     return LoadResult::Playlist(PlaylistData {
                         info: PlaylistInfo {
                             name: "JioSaavn Recommendations".to_owned(),
-                            selected_track: 0,
+                            selected_track: -1,
                         },
                         plugin_info: serde_json::json!({
                           "type": "recommendations",

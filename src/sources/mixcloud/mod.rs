@@ -441,7 +441,9 @@ impl SourcePlugin for MixcloudSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        identifier.starts_with("mcsearch:")
+        self.search_prefixes()
+            .iter()
+            .any(|p| identifier.starts_with(p))
             || track_url_re().is_match(identifier)
             || playlist_url_re().is_match(identifier)
             || user_url_re().is_match(identifier)
@@ -456,8 +458,12 @@ impl SourcePlugin for MixcloudSource {
         identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        if let Some(query) = identifier.strip_prefix("mcsearch:") {
-            return self.search(query).await;
+        if let Some(prefix) = self
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
+        {
+            return self.search(&identifier[prefix.len()..]).await;
         }
 
         if let Some(caps) = playlist_url_re().captures(identifier) {

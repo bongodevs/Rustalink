@@ -9,7 +9,6 @@ use super::{
 pub fn parse_m3u8(text: &str, base_url: &str) -> M3u8Playlist {
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
 
-    // Decide master vs. media by presence of EXT-X-STREAM-INF.
     let is_master = lines.iter().any(|l| l.starts_with("#EXT-X-STREAM-INF"));
 
     if is_master {
@@ -103,7 +102,6 @@ pub fn parse_m3u8(text: &str, base_url: &str) -> M3u8Playlist {
             next_offset = r.offset + r.length;
             pending_range = Some(r);
         } else if line.starts_with("#EXTINF:") {
-            // Parse duration from #EXTINF:<duration>,
             let seg_duration = line
                 .strip_prefix("#EXTINF:")
                 .and_then(|rest| rest.split(',').next())

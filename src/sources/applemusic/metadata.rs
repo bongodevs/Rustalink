@@ -133,7 +133,6 @@ impl AppleMusicSource {
     }
 
     pub(crate) async fn resolve_artist(&self, id: &str) -> LoadResult {
-        // Fetch top songs
         let path = format!(
             "/catalog/{}/artists/{}/view/top-songs",
             self.country_code, id
@@ -145,7 +144,6 @@ impl AppleMusicSource {
 
         let tracks_data = data.pointer("/data").and_then(|v| v.as_array());
 
-        // Fetch artist info for name/artwork
         let artist_path = format!("/catalog/{}/artists/{}", self.country_code, id);
         let artist_data = self.api_request(&artist_path).await;
 

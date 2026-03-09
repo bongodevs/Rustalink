@@ -793,8 +793,13 @@ impl SourcePlugin for PandoraSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        identifier.starts_with("pdsearch:")
-            || identifier.starts_with("pdrec:")
+        self.search_prefixes()
+            .iter()
+            .any(|p| identifier.starts_with(p))
+            || self
+                .rec_prefixes()
+                .iter()
+                .any(|p| identifier.starts_with(p))
             || url_regex().is_match(identifier)
     }
 
@@ -815,14 +820,24 @@ impl SourcePlugin for PandoraSource {
         identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        if let Some(query) = identifier.strip_prefix("pdsearch:") {
+        if let Some(prefix) = self
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
+        {
+            let query = identifier.strip_prefix(prefix).unwrap();
             if query.is_empty() {
                 return LoadResult::Empty {};
             }
             return self.get_search(query).await;
         }
 
-        if let Some(id) = identifier.strip_prefix("pdrec:") {
+        if let Some(prefix) = self
+            .rec_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
+        {
+            let id = identifier.strip_prefix(prefix).unwrap();
             if id.is_empty() {
                 return LoadResult::Empty {};
             }

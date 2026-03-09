@@ -14,9 +14,6 @@ use crate::{
 const API_URL: &str = "https://gaana.com/apiv2";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 
-const SEARCH_PREFIX_GN: &str = "gnsearch:";
-const SEARCH_PREFIX_GAANA: &str = "gaanasearch:";
-
 fn url_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
@@ -518,13 +515,14 @@ impl SourcePlugin for GaanaSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        identifier.starts_with(SEARCH_PREFIX_GN)
-            || identifier.starts_with(SEARCH_PREFIX_GAANA)
+        self.search_prefixes()
+            .iter()
+            .any(|p| identifier.starts_with(p))
             || url_regex().is_match(identifier)
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        vec![SEARCH_PREFIX_GN, SEARCH_PREFIX_GAANA]
+        vec!["gnsearch:", "gaanasearch:"]
     }
 
     async fn load(
@@ -532,11 +530,10 @@ impl SourcePlugin for GaanaSource {
         identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
-        if let Some(query) = identifier
-            .strip_prefix(SEARCH_PREFIX_GN)
-            .or_else(|| identifier.strip_prefix(SEARCH_PREFIX_GAANA))
-        {
-            return self.search(query.trim()).await;
+        for prefix in self.search_prefixes() {
+            if let Some(query) = identifier.strip_prefix(prefix) {
+                return self.search(query.trim()).await;
+            }
         }
 
         if let Some(caps) = url_regex().captures(identifier) {

@@ -25,7 +25,6 @@ static LIKES_REGEX: OnceLock<Regex> = OnceLock::new();
 
 pub struct AudiomackSource {
     client: Arc<reqwest::Client>,
-    search_prefixes: Vec<String>,
     search_limit: usize,
 }
 
@@ -38,7 +37,6 @@ impl AudiomackSource {
 
         Ok(Self {
             client,
-            search_prefixes: vec!["amksearch:".to_owned()],
             search_limit,
         })
     }
@@ -455,7 +453,9 @@ impl SourcePlugin for AudiomackSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes.iter().any(|p| identifier.starts_with(p))
+        self.search_prefixes()
+            .iter()
+            .any(|p| identifier.starts_with(p))
             || SONG_REGEX
                 .get_or_init(|| Regex::new(r"https?://(?:www\.)?audiomack\.com/(?P<artist>[^/]+)/song/(?P<slug>[^/?#]+)").unwrap())
                 .is_match(identifier)
@@ -474,7 +474,7 @@ impl SourcePlugin for AudiomackSource {
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["amksearch:"]
     }
 
     async fn load(
@@ -483,9 +483,9 @@ impl SourcePlugin for AudiomackSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             let query = identifier.strip_prefix(prefix).unwrap();
             return self.search(query).await;

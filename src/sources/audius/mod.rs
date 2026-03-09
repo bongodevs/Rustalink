@@ -20,7 +20,6 @@ static USER_PATTERN: OnceLock<Regex> = OnceLock::new();
 
 pub struct AudiusSource {
     client: Arc<reqwest::Client>,
-    search_prefixes: Vec<String>,
     app_name: String,
     search_limit: usize,
     playlist_load_limit: usize,
@@ -36,7 +35,6 @@ impl AudiusSource {
 
         Ok(Self {
             client,
-            search_prefixes: vec!["ausearch:".to_owned(), "audsearch:".to_owned()],
             app_name: config.app_name.unwrap_or_else(|| "Rustalink".to_owned()),
             search_limit: config.search_limit,
             playlist_load_limit: config.playlist_load_limit,
@@ -175,7 +173,7 @@ impl AudiusSource {
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name,
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({}),
             tracks,
@@ -217,7 +215,7 @@ impl AudiusSource {
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name,
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({}),
             tracks,
@@ -301,7 +299,7 @@ impl SourcePlugin for AudiusSource {
     }
 
     fn can_handle(&self, identifier: &str) -> bool {
-        self.search_prefixes
+        self.search_prefixes()
             .iter()
             .any(|p| identifier.starts_with(p))
             || TRACK_PATTERN
@@ -319,7 +317,7 @@ impl SourcePlugin for AudiusSource {
     }
 
     fn search_prefixes(&self) -> Vec<&str> {
-        self.search_prefixes.iter().map(|s| s.as_str()).collect()
+        vec!["ausearch:", "audsearch:"]
     }
 
     async fn load(
@@ -328,9 +326,9 @@ impl SourcePlugin for AudiusSource {
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> LoadResult {
         if let Some(prefix) = self
-            .search_prefixes
-            .iter()
-            .find(|p| identifier.starts_with(*p))
+            .search_prefixes()
+            .into_iter()
+            .find(|p| identifier.starts_with(p))
         {
             return self.search(&identifier[prefix.len()..]).await;
         }

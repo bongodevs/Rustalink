@@ -18,6 +18,7 @@ use crate::{
         lastfm::LastFMSource,
         local::LocalSource,
         mixcloud::MixcloudSource,
+        netease::NeteaseSource,
         pandora::PandoraSource,
         plugin::BoxedSource,
         qobuz::QobuzSource,
@@ -334,6 +335,7 @@ fn register_core_sources(
 
     register_yandex(sources, config, http_pool);
     register_vkmusic(sources, config, http_pool);
+    register_netease(sources, config, http_pool);
     register_twitch(sources, config, http_pool);
     register_amazonmusic(sources, config, http_pool);
 
@@ -451,6 +453,27 @@ fn register_vkmusic(
             }
             Err(e) => {
                 tracing::error!("VK Music source failed to initialize: {}", e);
+            }
+        }
+    }
+}
+
+fn register_netease(
+    sources: &mut Vec<BoxedSource>,
+    config: &crate::config::AppConfig,
+    http_pool: &Arc<HttpClientPool>,
+) {
+    if let Some(c) = config.sources.netease.as_ref()
+        && c.enabled
+    {
+        let proxy = c.proxy.clone();
+        match NeteaseSource::new(config.sources.netease.clone(), http_pool.get(proxy.clone())) {
+            Ok(src) => {
+                tracing::info!("Loaded source: Netease Music");
+                sources.push(Box::new(src));
+            }
+            Err(e) => {
+                tracing::error!("Netease Music source failed to initialize: {}", e);
             }
         }
     }

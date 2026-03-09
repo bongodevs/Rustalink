@@ -49,7 +49,6 @@ impl YouTubeOAuth {
                 let sep_border = format!("  ├{}┤", "─".repeat(inner_width));
                 let bot_border = format!("  └{}┘", "─".repeat(inner_width));
 
-                // Warning line
                 let warning = "!!! USE A BURNER ACCOUNT FOR YOUTUBE OAUTH !!!";
                 let warning_pad = inner_width.saturating_sub(warning.len());
                 let warning_left = warning_pad / 2;
@@ -66,7 +65,6 @@ impl YouTubeOAuth {
                 );
                 crate::log_println!("\x1b[1;33m{}\x1b[0m", sep_border);
 
-                // Step 1
                 let s1_prefix = " 1. Visit: ";
                 let s1_padding =
                     inner_width.saturating_sub(s1_prefix.len() + verification_url.len());
@@ -78,7 +76,6 @@ impl YouTubeOAuth {
                     pad = s1_padding
                 );
 
-                // Step 2
                 let s2_prefix = " 2. Enter code: ";
                 let s2_code = format!(" {} ", user_code);
                 let s2_padding = inner_width.saturating_sub(s2_prefix.len() + s2_code.len());
@@ -206,7 +203,6 @@ impl YouTubeOAuth {
             .unwrap()
             .as_secs();
 
-        // Check if cached token at this index is valid
         {
             let expiry = self.token_expiry.read().await;
             let token = self.access_token.read().await;
@@ -217,7 +213,6 @@ impl YouTubeOAuth {
             }
         }
 
-        // Need to refresh using the specified index
         let refresh_token = &tokens[idx % max_tokens];
         if refresh_token.is_empty() {
             return None;

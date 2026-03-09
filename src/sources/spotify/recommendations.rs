@@ -146,7 +146,7 @@ impl SpotifyRecommendations {
         LoadResult::Playlist(PlaylistData {
             info: PlaylistInfo {
                 name: "Spotify Recommendations".to_owned(),
-                selected_track: 0,
+                selected_track: -1,
             },
             plugin_info: json!({
               "type": "recommendations",

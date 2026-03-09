@@ -75,7 +75,6 @@ impl SpotifySearch {
 
         let all_types = types.is_empty();
 
-        // Parse Tracks
         if (all_types || types.contains(&"track".to_owned()))
             && let Some(items) = data
                 .pointer("/data/searchV2/tracksV2/items")
@@ -139,7 +138,6 @@ impl SpotifySearch {
                 }
             }
         }
-        // Parse Albums
         if (all_types || types.contains(&"album".to_owned()))
             && let Some(items) = data
                 .pointer("/data/searchV2/albumsV2/items")
@@ -185,7 +183,6 @@ impl SpotifySearch {
             }
         }
 
-        // Parse Artists
         if (all_types || types.contains(&"artist".to_owned()))
             && let Some(items) = data
                 .pointer("/data/searchV2/artistsV2/items")
@@ -234,7 +231,6 @@ impl SpotifySearch {
             }
         }
 
-        // Parse Playlists
         if all_types || types.contains(&"playlist".to_owned()) {
             let playlist_paths = [
                 "/data/searchV2/playlistsV2/items",
