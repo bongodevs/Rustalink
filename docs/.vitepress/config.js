@@ -3,7 +3,6 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: "Rustalink",
   description: "High-performance Rust audio server documentation",
-  srcDir: './src',
   base: '/Rustalink/',
   cleanUrls: true,
   themeConfig: {
