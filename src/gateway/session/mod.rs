@@ -47,6 +47,7 @@ pub struct VoiceGateway {
     pub frames_sent: Arc<std::sync::atomic::AtomicU64>,
     pub frames_nulled: Arc<std::sync::atomic::AtomicU64>,
     pub udp_socket: Shared<Option<Arc<tokio::net::UdpSocket>>>,
+    pub dave: Shared<crate::gateway::DaveHandler>,
     outer_token: CancellationToken,
 }
 
@@ -87,6 +88,10 @@ impl VoiceGateway {
             frames_sent: config.frames_sent,
             frames_nulled: config.frames_nulled,
             udp_socket: Arc::new(tokio::sync::Mutex::new(None)),
+            dave: Arc::new(tokio::sync::Mutex::new(crate::gateway::DaveHandler::new(
+                config.user_id,
+                config.channel_id,
+            ))),
             outer_token: CancellationToken::new(),
         }
     }

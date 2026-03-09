@@ -87,18 +87,25 @@ pub struct SpeakConfig {
     pub frames_nulled: Arc<std::sync::atomic::AtomicU64>,
     pub cancel_token: CancellationToken,
     pub speaking_tx: UnboundedSender<bool>,
+    pub persistent_state: Arc<tokio::sync::Mutex<super::types::PersistentSessionState>>,
 }
 
 pub async fn speak_loop(config: SpeakConfig) -> AnyResult<()> {
-    let mut encoder = Encoder::new().map_err(map_boxed_err)?;
+    let rtp_state = {
+        let state = config.persistent_state.lock().await;
+        state.rtp_state
+    };
+
     let transport = VoiceTransport::new(
         config.socket.clone(),
         config.addr,
         config.ssrc,
         config.key,
         &config.mode,
+        rtp_state,
     )?;
 
+    let mut encoder = Encoder::new().map_err(map_boxed_err)?;
     let mut session = VoiceSession::new(config, transport);
     session.run(&mut encoder).await
 }
@@ -135,7 +142,15 @@ impl VoiceSession {
         while !self.config.cancel_token.is_cancelled() {
             interval.tick().await;
             self.tick(encoder, &mut pcm, &mut opus, &mut ts_pcm).await?;
+
+            if self.config.frames_sent.load(Ordering::Relaxed) % 100 == 0 {
+                let mut state = self.config.persistent_state.lock().await;
+                state.rtp_state = Some(self.transport.rtp);
+            }
         }
+
+        let mut state = self.config.persistent_state.lock().await;
+        state.rtp_state = Some(self.transport.rtp);
 
         Ok(())
     }

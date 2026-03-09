@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 
 use davey::{AeadInPlace, Aes256Gcm, KeyInit};
@@ -18,21 +19,22 @@ use crate::{
 pub struct VoiceTransport {
     socket: Arc<UdpSocket>,
     address: SocketAddr,
-    ssrc: u32,
-    crypto: CryptoBackend,
-    rtp: RtpState,
-    buffer: Vec<u8>,
+    pub ssrc: u32,
+    pub crypto: CryptoBackend,
+    pub rtp: RtpState,
+    pub buffer: Vec<u8>,
 }
 
-enum CryptoBackend {
+pub enum CryptoBackend {
     XSalsa20Poly1305(Box<XSalsa20Poly1305>),
     Aes256Gcm(Box<Aes256Gcm>),
 }
 
-struct RtpState {
-    sequence: u16,
-    timestamp: u32,
-    nonce: u32,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct RtpState {
+    pub sequence: u16,
+    pub timestamp: u32,
+    pub nonce: u32,
 }
 
 impl VoiceTransport {
@@ -42,6 +44,7 @@ impl VoiceTransport {
         ssrc: u32,
         secret_key: [u8; 32],
         mode: &str,
+        rtp_state: Option<RtpState>,
     ) -> AnyResult<Self> {
         let crypto = match mode {
             "aead_aes256_gcm_rtpsize" => {
@@ -57,7 +60,7 @@ impl VoiceTransport {
             address,
             ssrc,
             crypto,
-            rtp: RtpState::randomize(),
+            rtp: rtp_state.unwrap_or_else(RtpState::randomize),
             buffer: Vec::with_capacity(UDP_PACKET_BUF_CAPACITY),
         })
     }

@@ -8,7 +8,7 @@ use std::{
 };
 
 use serde_json::Value;
-use tokio::sync::{Mutex, mpsc::UnboundedSender};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
@@ -81,10 +81,7 @@ impl<'a> SessionState<'a> {
             selected_mode: DEFAULT_VOICE_MODE.to_string(),
             connected_users: users,
             udp_socket,
-            dave: Arc::new(Mutex::new(DaveHandler::new(
-                gateway.user_id,
-                gateway.channel_id,
-            ))),
+            dave: gateway.dave.clone(),
             heartbeat: HeartbeatTracker::new(),
             heartbeat_handle: None,
             conn_token,
@@ -522,6 +519,7 @@ impl<'a> SessionState<'a> {
             frames_nulled: self.gateway.frames_nulled.clone(),
             cancel_token: self.conn_token.clone(),
             speaking_tx: self.speaking_tx.clone().unwrap(), // Internal error if None
+            persistent_state: self.persistent_state.clone(),
         };
 
         self.speak_task = Some(tokio::spawn(async move {
