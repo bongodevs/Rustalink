@@ -98,7 +98,7 @@ impl PlayableTrack for GaanaTrack {
     }
 }
 
-async fn fetch_stream_url_internal(
+pub(super) async fn fetch_stream_url_internal(
     client: &Arc<reqwest::Client>,
     track_id: &str,
     quality: &str,

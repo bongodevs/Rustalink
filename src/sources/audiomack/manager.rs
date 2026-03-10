@@ -541,10 +541,20 @@ impl SourcePlugin for AudiomackSource {
             }
         }
 
+        let local_addr = routeplanner.and_then(|rp| rp.get_address());
+
+        let stream_url = super::track::fetch_stream_url(&self.client, &track_id).await;
+        if stream_url.is_none() {
+            warn!(
+                "Audiomack: no stream URL for track {}, falling back to mirrors",
+                track_id
+            );
+            return None;
+        }
+
         Some(Box::new(AudiomackTrack {
-            client: self.client.clone(),
-            identifier: track_id,
-            local_addr: routeplanner.and_then(|rp| rp.get_address()),
+            stream_url: stream_url.unwrap(),
+            local_addr,
         }))
     }
 

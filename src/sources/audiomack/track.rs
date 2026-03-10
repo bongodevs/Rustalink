@@ -2,77 +2,29 @@ use std::{collections::BTreeMap, net::IpAddr, sync::Arc};
 
 use rand::{Rng, distributions::Alphanumeric, thread_rng};
 
-use crate::{
-    audio::{AudioFrame, processor::DecoderCommand},
-    sources::{
-        audiomack::utils::build_auth_header,
-        http::HttpTrack,
-        plugin::{DecoderOutput, PlayableTrack},
-    },
+use crate::sources::{
+    audiomack::utils::build_auth_header,
+    http::HttpTrack,
+    plugin::{DecoderOutput, PlayableTrack},
 };
 
 pub struct AudiomackTrack {
-    pub client: Arc<reqwest::Client>,
-    pub identifier: String,
+    pub stream_url: String,
     pub local_addr: Option<IpAddr>,
 }
 
 impl PlayableTrack for AudiomackTrack {
     fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
-        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
-        let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
-        let (err_tx, err_rx) = flume::bounded::<String>(1);
-
-        let identifier = self.identifier.clone();
-        let client = self.client.clone();
-        let local_addr = self.local_addr;
-
-        let handle = tokio::runtime::Handle::current();
-        std::thread::spawn(move || {
-            let _guard = handle.enter();
-            handle.block_on(async move {
-                if let Some(url) = fetch_stream_url(&client, &identifier).await {
-                    let http_track = HttpTrack {
-                        url,
-                        local_addr,
-                        proxy: None,
-                    };
-                    let (inner_rx, inner_cmd_tx, inner_err_rx) =
-                        http_track.start_decoding(config.clone());
-
-                    // Proxy commands
-                    let cmd_tx_clone = inner_cmd_tx.clone();
-                    std::thread::spawn(move || {
-                        while let Ok(cmd) = cmd_rx.recv() {
-                            let _ = cmd_tx_clone.send(cmd);
-                        }
-                    });
-
-                    // Proxy errors
-                    let err_tx_clone = err_tx.clone();
-                    std::thread::spawn(move || {
-                        while let Ok(err) = inner_err_rx.recv() {
-                            let _ = err_tx_clone.send(err);
-                        }
-                    });
-
-                    // Proxy samples
-                    while let Ok(sample) = inner_rx.recv() {
-                        if tx.send(sample).is_err() {
-                            break;
-                        }
-                    }
-                } else {
-                    let _ = err_tx.send("Failed to fetch Audiomack stream URL".to_owned());
-                }
-            });
-        });
-
-        (rx, cmd_tx, err_rx)
+        let http_track = HttpTrack {
+            url: self.stream_url.clone(),
+            local_addr: self.local_addr,
+            proxy: None,
+        };
+        http_track.start_decoding(config)
     }
 }
 
-async fn fetch_stream_url(client: &Arc<reqwest::Client>, identifier: &str) -> Option<String> {
+pub async fn fetch_stream_url(client: &Arc<reqwest::Client>, identifier: &str) -> Option<String> {
     let nonce = generate_nonce();
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -80,7 +32,7 @@ async fn fetch_stream_url(client: &Arc<reqwest::Client>, identifier: &str) -> Op
         .as_secs()
         .to_string();
 
-    // Strategy 1: POST /music/{id}/play (preferred for web)
+    // Strategy 1: POST /music/{id}/play
     let post_url = format!("https://api.audiomack.com/v1/music/{identifier}/play");
     let mut body = BTreeMap::new();
     body.insert("environment".to_owned(), "desktop-web".to_owned());
@@ -99,7 +51,7 @@ async fn fetch_stream_url(client: &Arc<reqwest::Client>, identifier: &str) -> Op
         return Some(url);
     }
 
-    // Strategy 2: GET /music/play/{id} (legacy/fallback)
+    // Strategy 2: GET /music/play/{id} (fallback)
     let get_url = format!("https://api.audiomack.com/v1/music/play/{identifier}");
     let mut query = BTreeMap::new();
     query.insert("environment".to_owned(), "desktop-web".to_owned());
