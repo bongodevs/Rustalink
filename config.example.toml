@@ -17,7 +17,7 @@ tape = { tape_stop = true, tape_stop_duration_ms = 500, curve = "sinusoidal" } #
 
 [player.mirrors]
 # List of mirror provider patterns. %ISRC% or %QUERY%
-providers = ["jssearch:%QUERY%", "amksearch:%QUERY%", "scsearch:%QUERY%"]
+providers = ["ytsearch:%ISRC%", "ytsearch:%QUERY%", "scsearch:%QUERY%"]
 
 [player.mirrors.best_match]
 # Enable weighted scoring to find the best-matching candidate.
