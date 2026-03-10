@@ -171,10 +171,17 @@ impl SourcePlugin for DeezerSource {
             identifier.to_owned()
         };
 
+        let resolved =
+            track::verify_track_resolvable(&self.client, &track_id, &self.token_tracker).await;
+
+        if resolved.is_none() {
+            tracing::warn!("Deezer: no stream URL for track {track_id}, falling back to mirrors");
+            return None;
+        }
+
         Some(Box::new(DeezerTrack {
             client: self.client.clone(),
             track_id,
-            arl_index: 0, // get_token will rotate
             token_tracker: self.token_tracker.clone(),
             master_key: self
                 .config

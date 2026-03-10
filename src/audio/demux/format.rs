@@ -1,5 +1,3 @@
-//! Audio format detection via header byte sniffing.
-
 use crate::common::types::AudioFormat;
 
 /// Sniff the container format from the first bytes of arbitrary data.

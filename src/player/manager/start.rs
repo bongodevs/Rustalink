@@ -72,15 +72,10 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
     )
     .await
     {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            error!("Failed to resolve track: {}", identifier);
-            send_load_failed(
-                player,
-                &config.session,
-                format!("Failed to resolve: {identifier}"),
-            )
-            .await;
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
+            error!("Failed to resolve track: {} (Error: {})", identifier, e);
+            send_load_failed(player, &config.session, e).await;
             return;
         }
         Err(_) => {
@@ -102,6 +97,8 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
 
     let (frame_rx, cmd_tx, err_rx) = playable.start_decoding(player.config.clone());
     let (handle, audio_state, vol, pos) = TrackHandle::new(cmd_tx, player.tape_stop.clone());
+
+    handle.set_volume(player.volume as f32 / 100.0);
 
     {
         let engine = player.engine.lock().await;

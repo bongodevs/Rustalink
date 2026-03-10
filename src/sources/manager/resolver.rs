@@ -9,7 +9,18 @@ pub async fn resolve_with_mirrors(
     identifier: &str,
     mirrors: &crate::config::server::MirrorsConfig,
     routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-) -> Option<BoxedTrack> {
+) -> Result<BoxedTrack, String> {
+    if mirrors.best_match.scoring {
+        return super::best_match::resolve_scored(
+            manager,
+            track_info,
+            identifier,
+            mirrors,
+            routeplanner,
+        )
+        .await;
+    }
+
     let isrc = track_info.isrc.as_deref().unwrap_or("");
     let query = format!("{} - {}", track_info.title, track_info.author);
 
@@ -63,24 +74,36 @@ pub async fn resolve_with_mirrors(
         };
 
         if let Some(track) = res {
-            return Some(track);
+            return Ok(track);
         }
     }
 
-    None
+    tracing::warn!(
+        "[Mirror] no valid mirror found for track: {} - {}",
+        track_info.title,
+        track_info.author
+    );
+    Err(format!(
+        "No mirror found for track: {} - {}",
+        track_info.title, track_info.author
+    ))
 }
 
 /// Helper to resolve a playable track from a source after a mirror redirect.
-async fn resolve_nested_track(
+pub async fn resolve_nested_track(
     manager: &SourceManager,
     identifier: &str,
     routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
 ) -> Option<BoxedTrack> {
     for source in &manager.sources {
-        if source.can_handle(identifier)
-            && let Some(track) = source.get_track(identifier, routeplanner.clone()).await
-        {
-            return Some(track);
+        if source.can_handle(identifier) {
+            if let Some(track) = source.get_track(identifier, routeplanner.clone()).await {
+                return Some(track);
+            }
+
+            if source.name() != "http" {
+                return None;
+            }
         }
     }
     None

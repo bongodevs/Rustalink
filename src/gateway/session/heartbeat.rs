@@ -74,6 +74,7 @@ impl HeartbeatTracker {
 
                 let hb = VoiceGatewayMessage {
                     op: OP_HEARTBEAT,
+                    seq: None,
                     d: serde_json::json!({ "t": nonce, "seq_ack": seq_ack.load(Ordering::Relaxed) }),
                 };
 

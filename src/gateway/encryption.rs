@@ -28,10 +28,13 @@ pub struct DaveHandler {
     external_sender_set: bool,
     pending_proposals: Vec<Vec<u8>>,
     was_ready: bool,
+    recognized_users: HashSet<UserId>,
 }
 
 impl DaveHandler {
     pub fn new(user_id: UserId, channel_id: ChannelId) -> Self {
+        let mut recognized_users = HashSet::new();
+        recognized_users.insert(user_id);
         Self {
             session: None,
             user_id,
@@ -41,10 +44,32 @@ impl DaveHandler {
             external_sender_set: false,
             pending_proposals: Vec::new(),
             was_ready: false,
+            recognized_users,
         }
     }
 
+    pub fn add_users(&mut self, uids: &[u64]) {
+        for &uid in uids {
+            self.recognized_users.insert(UserId(uid));
+        }
+        debug!("DAVE adding users: {:?}", uids);
+    }
+
+    pub fn remove_user(&mut self, uid: u64) {
+        self.recognized_users.remove(&UserId(uid));
+        debug!("DAVE removing user: {}", uid);
+    }
+
+    pub fn set_protocol_version(&mut self, version: u16) {
+        self.protocol_version = version;
+    }
+
     pub fn setup_session(&mut self, version: u16) -> AnyResult<Vec<u8>> {
+        if version == 0 {
+            self.reset();
+            return Ok(Vec::new());
+        }
+
         let nz_version = NonZeroU16::new(version).unwrap_or(DAVE_MIN_VERSION);
 
         let session = if let Some(s) = &mut self.session {
@@ -98,19 +123,17 @@ impl DaveHandler {
         }
     }
 
-    pub fn prepare_epoch(&mut self, epoch: u64, protocol_version: u16) {
-        if epoch == 1
-            && let Err(e) = self.setup_session(protocol_version)
-        {
-            warn!("DAVE prepare_epoch setup failed: {e}");
+    pub fn prepare_epoch(&mut self, epoch: u64, protocol_version: u16) -> Option<Vec<u8>> {
+        if epoch == 1 {
+            match self.setup_session(protocol_version) {
+                Ok(kp) => return Some(kp),
+                Err(e) => warn!("DAVE prepare_epoch setup failed: {e}"),
+            }
         }
+        None
     }
 
-    pub fn process_external_sender(
-        &mut self,
-        data: &[u8],
-        connected_users: &HashSet<UserId>,
-    ) -> AnyResult<Vec<Vec<u8>>> {
+    pub fn process_external_sender(&mut self, data: &[u8]) -> AnyResult<Vec<Vec<u8>>> {
         let mut responses = Vec::new();
 
         if let Some(session) = &mut self.session {
@@ -122,9 +145,10 @@ impl DaveHandler {
                     "DAVE processing {} buffered proposals",
                     self.pending_proposals.len()
                 );
+                let user_ids: Vec<u64> = self.recognized_users.iter().map(|u| u.0).collect();
                 for prop_data in std::mem::take(&mut self.pending_proposals) {
                     if let Ok(Some(res)) =
-                        Self::do_process_proposals(session, &prop_data, connected_users)
+                        Self::do_process_proposals(session, &prop_data, &user_ids)
                     {
                         responses.push(res);
                     }
@@ -165,11 +189,7 @@ impl DaveHandler {
         Ok(transition_id)
     }
 
-    pub fn process_proposals(
-        &mut self,
-        data: &[u8],
-        connected_users: &HashSet<UserId>,
-    ) -> AnyResult<Option<Vec<u8>>> {
+    pub fn process_proposals(&mut self, data: &[u8]) -> AnyResult<Option<Vec<u8>>> {
         if data.is_empty() {
             return Err(short_payload_err("DAVE proposals"));
         }
@@ -188,13 +208,14 @@ impl DaveHandler {
             Some(s) => s,
             None => return Ok(None),
         };
-        Self::do_process_proposals(session, data, connected_users)
+        let user_ids: Vec<u64> = self.recognized_users.iter().map(|u| u.0).collect();
+        Self::do_process_proposals(session, data, &user_ids)
     }
 
     fn do_process_proposals(
         session: &mut DaveSession,
         data: &[u8],
-        connected_users: &HashSet<UserId>,
+        user_ids: &[u64],
     ) -> AnyResult<Option<Vec<u8>>> {
         let op_type = match data[0] {
             0 => ProposalsOperationType::APPEND,
@@ -202,9 +223,8 @@ impl DaveHandler {
             raw => return Err(map_boxed_err(format!("Unknown DAVE proposals op: {raw}"))),
         };
 
-        let user_ids: Vec<u64> = connected_users.iter().map(|u| u.0).collect();
         let result = session
-            .process_proposals(op_type, &data[1..], Some(&user_ids))
+            .process_proposals(op_type, &data[1..], Some(user_ids))
             .map_err(map_boxed_err)?;
 
         if let Some(cw) = result {

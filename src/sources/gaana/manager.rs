@@ -579,6 +579,15 @@ impl SourcePlugin for GaanaSource {
             identifier.to_owned()
         };
 
+        let stream_url =
+            super::track::fetch_stream_url_internal(&self.client, &track_id, &self.stream_quality)
+                .await;
+
+        if stream_url.is_none() {
+            warn!("Gaana: no stream URL for track {track_id}, falling back to mirrors");
+            return None;
+        }
+
         Some(Box::new(GaanaTrack {
             client: self.client.clone(),
             track_id,

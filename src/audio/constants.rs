@@ -30,13 +30,13 @@ pub const LAYER_BUFFER_SIZE: usize = 1_024 * 1_024;
 
 // ── Segmented remote reader ──────────────────────────────────────────────────
 
-pub const CHUNK_SIZE: usize = 128 * 1_024;
-pub const PREFETCH_CHUNKS: usize = 2;
+pub const CHUNK_SIZE: usize = 256 * 1_024;
+pub const PREFETCH_CHUNKS: usize = 4;
 pub const MAX_CONCURRENT_FETCHES: usize = 2;
 pub const HTTP_CLIENT_TIMEOUT_SECS: u64 = 15;
 pub const MAX_FETCH_RETRIES: u32 = 5;
 pub const WORKER_IDLE_MS: u64 = 50;
-pub const FETCH_WAIT_MS: u64 = 500;
+pub const FETCH_WAIT_MS: u64 = 250;
 pub const PROBE_TIMEOUT_SECS: u64 = 10;
 
 // ── HttpSource ───────────────────────────────────────────────────────────────

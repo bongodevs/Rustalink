@@ -6,6 +6,8 @@ use crate::common::types::AnyError;
 #[derive(Serialize, Deserialize, Debug)]
 pub struct VoiceGatewayMessage {
     pub op: u8,
+    #[serde(rename = "seq", skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u32>,
     pub d: Value,
 }
 
@@ -24,6 +26,7 @@ pub struct PersistentSessionState {
     pub ssrc: u32,
     pub udp_addr: Option<std::net::SocketAddr>,
     pub session_key: Option<[u8; 32]>,
+    pub rtp_state: Option<crate::gateway::udp_link::RtpState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,7 +92,7 @@ pub fn classify_close(code: u16) -> SessionOutcome {
 
         // Fatal/Shutdown codes
         CloseAction::AuthenticationFailed => SessionOutcome::Shutdown,
-        CloseAction::InvalidSession => SessionOutcome::Shutdown,
+        CloseAction::InvalidSession => SessionOutcome::Identify,
         CloseAction::ServerNotFound => SessionOutcome::Shutdown,
         CloseAction::Disconnected => SessionOutcome::Shutdown,
         CloseAction::RateLimited => SessionOutcome::Shutdown,
@@ -118,12 +121,12 @@ pub enum VoiceOp {
     ClientDisconnect = 13,
     Codecs = 14,
     MediaSinkWants = 15,
-    VoiceBackendVersion = 16,
     VoiceFlags = 18,
     VoicePlatform = 20,
     DavePrepareTransition = 21,
     DaveExecuteTransition = 22,
     DaveTransitionReady = 23,
+    VoiceBackendVersion = 16,
     DavePrepareEpoch = 24,
     DaveMlsExternalSender = 25,
     DaveMlsKeyPackage = 26,
@@ -132,6 +135,7 @@ pub enum VoiceOp {
     DaveMlsAnnounceCommitTransition = 29,
     DaveMlsWelcome = 30,
     DaveMlsInvalidCommitWelcome = 31,
+    NoRoute = 32,
 }
 
 impl VoiceOp {
@@ -152,12 +156,10 @@ impl VoiceOp {
             13 => Self::ClientDisconnect,
             14 => Self::Codecs,
             15 => Self::MediaSinkWants,
-            16 => Self::VoiceBackendVersion,
             18 => Self::VoiceFlags,
             20 => Self::VoicePlatform,
             21 => Self::DavePrepareTransition,
             22 => Self::DaveExecuteTransition,
-            23 => Self::DaveTransitionReady,
             24 => Self::DavePrepareEpoch,
             25 => Self::DaveMlsExternalSender,
             26 => Self::DaveMlsKeyPackage,
@@ -166,6 +168,9 @@ impl VoiceOp {
             29 => Self::DaveMlsAnnounceCommitTransition,
             30 => Self::DaveMlsWelcome,
             31 => Self::DaveMlsInvalidCommitWelcome,
+            23 => Self::DaveTransitionReady,
+            16 => Self::VoiceBackendVersion,
+            32 => Self::NoRoute,
             _ => return None,
         })
     }

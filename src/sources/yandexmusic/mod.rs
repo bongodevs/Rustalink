@@ -537,6 +537,15 @@ impl SourcePlugin for YandexMusicSource {
             identifier.to_string()
         };
 
+        let stream_url = track::fetch_download_url(&self.client, &track_id).await;
+        if stream_url.is_none() {
+            debug!(
+                "Yandex Music: no stream URL for track {}, falling back to mirrors",
+                track_id
+            );
+            return None;
+        }
+
         Some(Box::new(track::YandexMusicTrack {
             client: self.client.clone(),
             track_id,

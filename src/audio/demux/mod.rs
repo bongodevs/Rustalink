@@ -1,17 +1,3 @@
-//! Demux layer — format detection and container parsing.
-//!
-//! # Usage
-//!
-//! ```rust
-//! use crate::audio::demux::{detect_format, AudioFormat};
-//!
-//! let header = &bytes[..12]; // first bytes of the stream
-//! match detect_format(header) {
-//!     AudioFormat::WebmOpus => { /* use WebmOpusDemuxer */ }
-//!     _ => { /* use AudioProcessor transcode path */ }
-//! }
-//! ```
-
 pub mod format;
 pub mod webm_opus;
 
@@ -29,9 +15,7 @@ pub use webm_opus::WebmOpusDemuxer;
 use crate::audio::constants::{MIXER_CHANNELS, TARGET_SAMPLE_RATE};
 pub use crate::common::types::AudioFormat;
 
-/// Resolved demux result returned by `open_format`.
 pub enum DemuxResult {
-    /// Symphonia-probed format reader + selected track id + codec decoder.
     Transcode {
         format: Box<dyn FormatReader>,
         track_id: u32,
@@ -41,9 +25,6 @@ pub enum DemuxResult {
     },
 }
 
-/// Open a media source and detect its format.
-///
-/// Returns a `DemuxResult` describing the decode path, or a symphonia `Error`.
 pub fn open_format(
     source: Box<dyn MediaSource>,
     kind: Option<crate::common::types::AudioFormat>,

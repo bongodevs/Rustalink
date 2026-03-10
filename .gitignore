@@ -16,3 +16,9 @@ extra/*
 config.toml
 local.config.toml
 .env
+
+# VitePress Docs
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+

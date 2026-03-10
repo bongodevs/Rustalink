@@ -46,6 +46,8 @@ pub struct VoiceGateway {
     event_tx: Option<UnboundedSender<RustalinkEvent>>,
     pub frames_sent: Arc<std::sync::atomic::AtomicU64>,
     pub frames_nulled: Arc<std::sync::atomic::AtomicU64>,
+    pub udp_socket: Shared<Option<Arc<tokio::net::UdpSocket>>>,
+    pub dave: Shared<crate::gateway::DaveHandler>,
     outer_token: CancellationToken,
 }
 
@@ -85,6 +87,11 @@ impl VoiceGateway {
             event_tx: config.event_tx,
             frames_sent: config.frames_sent,
             frames_nulled: config.frames_nulled,
+            udp_socket: Arc::new(tokio::sync::Mutex::new(None)),
+            dave: Arc::new(tokio::sync::Mutex::new(crate::gateway::DaveHandler::new(
+                config.user_id,
+                config.channel_id,
+            ))),
             outer_token: CancellationToken::new(),
         }
     }
@@ -92,7 +99,7 @@ impl VoiceGateway {
     pub async fn run(self) -> AnyResult<()> {
         let mut backoff = Backoff::new();
         let mut is_resume = false;
-        let seq_ack = Arc::new(AtomicI64::new(-1));
+        let seq_ack = Arc::new(AtomicI64::new(0));
         let persistent_state = Arc::new(tokio::sync::Mutex::new(PersistentSessionState::default()));
 
         while !self.outer_token.is_cancelled() {
@@ -130,13 +137,14 @@ impl VoiceGateway {
                         return Ok(());
                     }
                     is_resume = false;
-                    seq_ack.store(-1, Ordering::Relaxed);
+                    seq_ack.store(0, Ordering::Relaxed);
                     // Clear persistent state on identify to avoid using stale keys/addr
                     {
                         let mut state = persistent_state.lock().await;
                         state.udp_addr = None;
                         state.session_key = None;
                     }
+                    *self.udp_socket.lock().await = None;
                     let delay = std::time::Duration::from_millis(RECONNECT_DELAY_FRESH_MS);
                     debug!(
                         "[{}] Session invalid; identifying fresh in {:?}",
@@ -194,29 +202,6 @@ impl VoiceGateway {
             .map_err(map_boxed_err)?;
         let (mut write, mut read) = ws_stream.split();
 
-        let handshake = if is_resume {
-            trace!(
-                "[{}] Sending voice RESUME: {:?}",
-                self.guild_id, self.session_id
-            );
-            self.resume_message(seq_ack.load(Ordering::Relaxed))
-        } else {
-            trace!(
-                "[{}] Sending voice IDENTIFY: {:?}",
-                self.guild_id, self.session_id
-            );
-            self.identify_message()
-        };
-
-        write
-            .send(Message::Text(
-                serde_json::to_string(&handshake)
-                    .map_err(map_boxed_err)?
-                    .into(),
-            ))
-            .await
-            .map_err(map_boxed_err)?;
-
         let conn_token = CancellationToken::new();
         let (ws_tx, mut ws_rx) = unbounded_channel::<Message>();
 
@@ -235,22 +220,66 @@ impl VoiceGateway {
             }
         });
 
-        let (speaking_tx, mut speaking_rx) = unbounded_channel::<bool>();
-
-        let mut state = handler::SessionState::new(
+        let mut state = handler::SessionState::new_v8(
             self,
             ws_tx.clone(),
             seq_ack.clone(),
             conn_token.clone(),
-            speaking_tx,
             persistent_state,
             backoff,
         )
+        .await
         .map_err(|e| {
             warn!("[{}] Init session failed: {e}", self.guild_id);
             conn_token.cancel();
             e
         })?;
+
+        // V8 Handshake: Wait for Op 8 HELLO before identifying
+        let msg = read.next().await;
+        match msg {
+            Some(Ok(m)) => {
+                if let Some(out) = self.handle_ws_message(&mut state, m).await {
+                    conn_token.cancel();
+                    return Ok(out);
+                }
+            }
+            Some(Err(e)) => {
+                warn!("[{}] Initial read error: {e}", self.guild_id);
+                conn_token.cancel();
+                return Ok(SessionOutcome::Reconnect);
+            }
+            None => {
+                warn!("[{}] WS closed before HELLO", self.guild_id);
+                conn_token.cancel();
+                return Ok(SessionOutcome::Reconnect);
+            }
+        }
+
+        let handshake = if is_resume {
+            trace!(
+                "[{}] Sending voice RESUME: {:?}",
+                self.guild_id, self.session_id
+            );
+            self.resume_message(seq_ack.load(Ordering::Relaxed))
+        } else {
+            trace!(
+                "[{}] Sending voice IDENTIFY: {:?}",
+                self.guild_id, self.session_id
+            );
+            self.identify_message()
+        };
+
+        ws_tx
+            .send(Message::Text(
+                serde_json::to_string(&handshake)
+                    .map_err(map_boxed_err)?
+                    .into(),
+            ))
+            .map_err(|_| map_boxed_err("failed to send handshake"))?;
+
+        let (speaking_tx, mut speaking_rx) = unbounded_channel::<bool>();
+        state.set_speaking_tx(speaking_tx);
 
         let outcome = loop {
             tokio::select! {
@@ -316,6 +345,7 @@ impl VoiceGateway {
     ) {
         let msg = VoiceGatewayMessage {
             op: 5,
+            seq: None,
             d: serde_json::json!({
                 "speaking": if is_speaking { 1u8 } else { 0u8 },
                 "delay": 0,
@@ -361,6 +391,7 @@ impl VoiceGateway {
     fn identify_message(&self) -> VoiceGatewayMessage {
         VoiceGatewayMessage {
             op: 0,
+            seq: None,
             d: serde_json::json!({
                 "server_id": self.guild_id.to_string(),
                 "user_id": self.user_id.0.to_string(),
@@ -375,6 +406,7 @@ impl VoiceGateway {
     fn resume_message(&self, seq_ack: i64) -> VoiceGatewayMessage {
         VoiceGatewayMessage {
             op: 7,
+            seq: None,
             d: serde_json::json!({
                 "server_id": self.guild_id.to_string(),
                 "session_id": self.session_id,

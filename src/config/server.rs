@@ -81,6 +81,37 @@ pub struct RoutePlannerConfig {
 #[serde(default)]
 pub struct MirrorsConfig {
     pub providers: Vec<String>,
+    pub best_match: BestMatchConfig,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
+pub struct BestMatchConfig {
+    pub scoring: bool,
+    pub throttled_prefixes: Vec<String>,
+    pub min_similarity: f64,
+    pub high_confidence: f64,
+    pub immediate_use: f64,
+    pub weight_title: f64,
+    pub weight_artist: f64,
+    pub weight_duration: f64,
+    pub duration_tolerance_ms: u64,
+}
+
+impl Default for BestMatchConfig {
+    fn default() -> Self {
+        Self {
+            scoring: true,
+            throttled_prefixes: vec!["ytmsearch:".into(), "ytsearch:".into()],
+            min_similarity: 0.50,
+            high_confidence: 0.75,
+            immediate_use: 0.88,
+            weight_title: 0.50,
+            weight_artist: 0.30,
+            weight_duration: 0.20,
+            duration_tolerance_ms: 3_000,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]

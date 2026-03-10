@@ -17,7 +17,6 @@ use crate::{
 pub struct DeezerTrack {
     pub client: Arc<reqwest::Client>,
     pub track_id: String,
-    pub arl_index: usize,
     pub token_tracker: Arc<crate::sources::deezer::token::DeezerTokenTracker>,
     pub master_key: String,
     pub local_addr: Option<IpAddr>,
@@ -239,4 +238,91 @@ impl PlayableTrack for DeezerTrack {
 
         (rx, cmd_tx, err_rx)
     }
+}
+
+pub(super) async fn verify_track_resolvable(
+    client: &Arc<reqwest::Client>,
+    track_id: &str,
+    token_tracker: &crate::sources::deezer::token::DeezerTokenTracker,
+) -> Option<String> {
+    let tokens = token_tracker.get_token().await?;
+
+    let song_url = format!(
+        "https://www.deezer.com/ajax/gw-light.php?method=song.getData&input=3&api_version=1.0&api_token={}",
+        tokens.api_token
+    );
+    let json: serde_json::Value = client
+        .post(&song_url)
+        .header(
+            "Cookie",
+            format!(
+                "sid={}; dzr_uniq_id={}",
+                tokens.session_id, tokens.dzr_uniq_id
+            ),
+        )
+        .json(&serde_json::json!({ "sng_id": track_id }))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    if json
+        .get("error")
+        .and_then(|v| v.as_array())
+        .is_some_and(|e| !e.is_empty())
+    {
+        token_tracker.invalidate_token(tokens.arl_index).await;
+        return None;
+    }
+
+    let track_token = json
+        .get("results")
+        .and_then(|r| r.get("TRACK_TOKEN"))
+        .and_then(|v| v.as_str())?
+        .to_owned();
+
+    let media_body = serde_json::json!({
+        "license_token": tokens.license_token,
+        "media": [{
+            "type": "FULL",
+            "formats": [
+                { "cipher": "BF_CBC_STRIPE", "format": "MP3_128" }
+            ]
+        }],
+        "track_tokens": [track_token]
+    });
+
+    let media_json: serde_json::Value = client
+        .post("https://media.deezer.com/v1/get_url")
+        .json(&media_body)
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    if media_json
+        .get("data")
+        .and_then(|d| d.get(0))
+        .and_then(|d| d.get("errors"))
+        .and_then(|e| e.as_array())
+        .is_some_and(|e| !e.is_empty())
+    {
+        token_tracker.invalidate_token(tokens.arl_index).await;
+        return None;
+    }
+
+    media_json
+        .get("data")
+        .and_then(|d| d.get(0))
+        .and_then(|d| d.get("media"))
+        .and_then(|m| m.get(0))
+        .and_then(|m| m.get("sources"))
+        .and_then(|s| s.get(0))
+        .and_then(|s| s.get("url"))
+        .and_then(|u| u.as_str())
+        .map(|s| s.to_owned())
 }
