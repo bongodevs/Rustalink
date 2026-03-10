@@ -77,20 +77,11 @@ pub struct RoutePlannerConfig {
     pub excluded_ips: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 pub struct MirrorsConfig {
     pub providers: Vec<String>,
     pub best_match: BestMatchConfig,
-}
-
-impl Default for MirrorsConfig {
-    fn default() -> Self {
-        Self {
-            providers: Vec::new(),
-            best_match: BestMatchConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

@@ -72,15 +72,10 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
     )
     .await
     {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            error!("Failed to resolve track: {}", identifier);
-            send_load_failed(
-                player,
-                &config.session,
-                format!("Failed to resolve: {identifier}"),
-            )
-            .await;
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
+            error!("Failed to resolve track: {} (Error: {})", identifier, e);
+            send_load_failed(player, &config.session, e).await;
             return;
         }
         Err(_) => {

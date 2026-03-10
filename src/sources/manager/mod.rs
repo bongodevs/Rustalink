@@ -5,9 +5,9 @@ use crate::{
     sources::plugin::{BoxedSource, BoxedTrack},
 };
 
+mod best_match;
 mod registration;
 mod resolver;
-mod best_match;
 
 /// Source Manager handles the lifecycle and coordination of all audio sources.
 pub struct SourceManager {
@@ -80,12 +80,11 @@ impl SourceManager {
         None
     }
 
-    /// Resolves a playable track from track info, falling back to mirrors if necessary.
     pub async fn resolve_track(
         &self,
         track_info: &crate::protocol::tracks::TrackInfo,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<BoxedTrack> {
+    ) -> Result<BoxedTrack, String> {
         let identifier = track_info.uri.as_deref().unwrap_or(&track_info.identifier);
 
         for source in &self.sources {
@@ -97,7 +96,7 @@ impl SourceManager {
                 );
 
                 if let Some(track) = source.get_track(identifier, routeplanner.clone()).await {
-                    return Some(track);
+                    return Ok(track);
                 }
                 break;
             }
@@ -114,8 +113,10 @@ impl SourceManager {
             .await;
         }
 
-        tracing::debug!("Failed to resolve playable track for: {}", identifier);
-        None
+        Err(format!(
+            "Failed to resolve playable track for: {}",
+            identifier
+        ))
     }
 
     /// Get names of all registered sources.

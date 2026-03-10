@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::{FuturesOrdered, FuturesUnordered, StreamExt};
 
 use crate::sources::{manager::SourceManager, plugin::BoxedTrack};
 
@@ -32,7 +32,13 @@ fn normalize(s: &str) -> String {
 
     let clean: String = stripped
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect();
 
     clean.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -48,9 +54,7 @@ fn levenshtein(a: &str, b: &str) -> usize {
         curr[0] = i;
         for j in 1..=n {
             let cost = usize::from(a[i - 1] != b[j - 1]);
-            curr[j] = (prev[j] + 1)
-                .min(curr[j - 1] + 1)
-                .min(prev[j - 1] + cost);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -134,7 +138,7 @@ pub async fn resolve_scored(
     identifier: &str,
     mirrors: &crate::config::server::MirrorsConfig,
     routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-) -> Option<BoxedTrack> {
+) -> Result<BoxedTrack, String> {
     let isrc = track_info.isrc.as_deref().unwrap_or("");
     let query = format!("{} {}", track_info.title, track_info.author);
     let cfg = &mirrors.best_match;
@@ -192,7 +196,7 @@ pub async fn resolve_scored(
     }
 
     if !isrc_providers.is_empty() {
-        let mut futs: FuturesUnordered<_> = isrc_providers
+        let mut futs: FuturesOrdered<_> = isrc_providers
             .iter()
             .map(|p| search_provider(manager, track_info, p, routeplanner.clone(), cfg, true))
             .collect();
@@ -207,7 +211,7 @@ pub async fn resolve_scored(
                     mr.provider,
                     mr.score,
                 );
-                return Some(mr.track);
+                return Ok(mr.track);
             }
         }
     }
@@ -232,10 +236,10 @@ pub async fn resolve_scored(
                 );
 
                 if mr.score >= cfg.immediate_use {
-                    return Some(mr.track);
+                    return Ok(mr.track);
                 }
 
-                if global_best.as_ref().map_or(true, |b| mr.score > b.score) {
+                if global_best.as_ref().is_none_or(|b| mr.score > b.score) {
                     global_best = Some(mr);
                 }
             }
@@ -243,8 +247,15 @@ pub async fn resolve_scored(
     }
 
     for provider in &throttled_providers {
-        if let Some(mr) =
-            search_provider(manager, track_info, provider, routeplanner.clone(), cfg, true).await
+        if let Some(mr) = search_provider(
+            manager,
+            track_info,
+            provider,
+            routeplanner.clone(),
+            cfg,
+            true,
+        )
+        .await
         {
             tracing::info!(
                 "[Mirror] throttled match \"{}\" via {} (score {:.3})",
@@ -252,7 +263,7 @@ pub async fn resolve_scored(
                 mr.provider,
                 mr.score
             );
-            return Some(mr.track);
+            return Ok(mr.track);
         }
     }
 
@@ -263,7 +274,7 @@ pub async fn resolve_scored(
             best.provider,
             best.score
         );
-        return Some(best.track);
+        return Ok(best.track);
     }
 
     tracing::warn!(
@@ -271,7 +282,10 @@ pub async fn resolve_scored(
         track_info.title,
         track_info.author
     );
-    None
+    Err(format!(
+        "No mirror found for track: {} - {}",
+        track_info.title, track_info.author
+    ))
 }
 
 async fn search_provider(
@@ -329,7 +343,9 @@ async fn search_provider(
             break;
         }
         let id = info.uri.as_deref().unwrap_or(&info.identifier);
-        if let Some(track) = super::resolver::resolve_nested_track(manager, id, routeplanner.clone()).await {
+        if let Some(track) =
+            super::resolver::resolve_nested_track(manager, id, routeplanner.clone()).await
+        {
             return Some(MirrorResult {
                 track,
                 score,
