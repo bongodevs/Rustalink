@@ -16,7 +16,7 @@ opus_encoding_quality = 10                                                     #
 tape = { tape_stop = true, tape_stop_duration_ms = 500, curve = "sinusoidal" } # curve: linear | exponential | sinusoidal
 
 [player.mirrors]
-# Provider patterns tried when the primary source fails to resolve a track.
+# Provider patterns tried when the source is a mirrored source (metadata only no playable streams)
 # Placeholders: %ISRC% (track ISRC code) and %QUERY% (title + artist).
 # Providers without %ISRC% in their pattern are always tried; those with %ISRC%
 # are skipped automatically when the track has no ISRC.
