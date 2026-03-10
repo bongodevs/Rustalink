@@ -28,22 +28,21 @@ impl PlayableTrack for MixcloudTrack {
         let stream_url_opt = self.stream_url.clone();
         let local_addr = self.local_addr;
 
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
-            handle.block_on(async move {
-                let (hls_url, stream_url) = if hls_url_opt.is_some() || stream_url_opt.is_some() {
-                    (hls_url_opt, stream_url_opt)
-                } else {
-                    let (enc_hls, enc_url) = super::fetch_track_stream_info(&client, &uri)
-                        .await
-                        .unwrap_or((None, None));
-                    (
-                        enc_hls.map(|s| super::decrypt(&s)),
-                        enc_url.map(|s| super::decrypt(&s)),
-                    )
-                };
+        tokio::spawn(async move {
+            let (hls_url, stream_url) = if hls_url_opt.is_some() || stream_url_opt.is_some() {
+                (hls_url_opt, stream_url_opt)
+            } else {
+                let (enc_hls, enc_url) = super::fetch_track_stream_info(&client, &uri)
+                    .await
+                    .unwrap_or((None, None));
+                (
+                    enc_hls.map(|s| super::decrypt(&s)),
+                    enc_url.map(|s| super::decrypt(&s)),
+                )
+            };
 
+            let err_tx_for_setup = err_tx.clone();
+            let setup_res = tokio::task::spawn_blocking(move || {
                 let (reader, kind) = if let Some(url) = hls_url {
                     match crate::sources::youtube::hls::HlsReader::new(
                         &url, local_addr, None, None, None,
@@ -77,22 +76,31 @@ impl PlayableTrack for MixcloudTrack {
                 };
 
                 if let Some(r) = reader {
-                    match AudioProcessor::new(r, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
-                        Ok(mut processor) => {
-                            if let Err(e) = processor.run() {
-                                tracing::error!("Mixcloud audio processor error: {e}");
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Mixcloud failed to initialize processor: {e}");
-                            let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
-                        }
-                    }
+                    AudioProcessor::new(r, kind, tx, cmd_rx, Some(err_tx_for_setup), config)
+                        .map_err(|e| e.to_string())
                 } else {
-                    tracing::error!("Mixcloud: failed to create reader");
-                    let _ = err_tx.send("Mixcloud: failed to create reader".to_owned());
+                    Err("Mixcloud: failed to create reader".to_string())
                 }
-            });
+            })
+            .await
+            .expect("failed to spawn mixcloud setup task");
+
+            match setup_res {
+                Ok(mut processor) => {
+                    std::thread::Builder::new()
+                        .name(format!("mixcloud-decoder-{}", uri))
+                        .spawn(move || {
+                            if let Err(e) = processor.run() {
+                                tracing::error!("Mixcloud audio processor error for {}: {}", uri, e);
+                            }
+                        })
+                        .expect("failed to spawn mixcloud decoder thread");
+                }
+                Err(e) => {
+                    tracing::error!("Mixcloud failed to initialize processor for {}: {}", uri, e);
+                    let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
+                }
+            }
         });
 
         (rx, cmd_tx, err_rx)

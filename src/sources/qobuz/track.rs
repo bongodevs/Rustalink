@@ -32,55 +32,51 @@ impl PlayableTrack for QobuzTrack {
         let token_tracker = self.token_tracker.to_owned();
         let client = self.client.to_owned();
 
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
-            handle.block_on(async move {
-                let url = switch_media_url(&client, &token_tracker, &info.identifier).await;
+        tokio::spawn(async move {
+            let url = switch_media_url(&client, &token_tracker, &info.identifier).await;
 
-                if let Ok(Some(url)) = url {
-                    let http_track = HttpTrack {
-                        url,
-                        local_addr: None,
-                        proxy: None,
-                    };
-                    let (inner_rx, inner_cmd_tx, inner_err_rx) =
-                        http_track.start_decoding(config.clone());
+            if let Ok(Some(url)) = url {
+                let http_track = HttpTrack {
+                    url,
+                    local_addr: None,
+                    proxy: None,
+                };
+                let (inner_rx, inner_cmd_tx, inner_err_rx) =
+                    http_track.start_decoding(config.clone());
 
-                    // Proxy commands
-                    let cmd_tx_clone = inner_cmd_tx.clone();
-                    tokio::spawn(async move {
-                        while let Ok(cmd) = cmd_rx.recv_async().await {
-                            let _ = cmd_tx_clone.send(cmd);
-                        }
-                    });
-
-                    // Proxy errors
-                    let err_tx_clone = err_tx.clone();
-                    tokio::spawn(async move {
-                        while let Ok(err) = inner_err_rx.recv_async().await {
-                            let _ = err_tx_clone.send(err);
-                        }
-                    });
-
-                    // Proxy samples
-                    while let Ok(sample) = inner_rx.recv_async().await {
-                        if tx.send(sample).is_err() {
-                            break;
-                        }
+                // Proxy commands
+                let cmd_tx_clone = inner_cmd_tx.clone();
+                tokio::spawn(async move {
+                    while let Ok(cmd) = cmd_rx.recv_async().await {
+                        let _ = cmd_tx_clone.send(cmd);
                     }
-                } else {
-                    let error_msg = if let Err(e) = url {
-                        format!(
-                            "Qobuz: Failed to resolve media URL for {identifier}: {e}",
-                            identifier = info.identifier
-                        )
-                    } else {
-                        "Failed to resolve Qobuz media URL".to_owned()
-                    };
-                    let _ = err_tx.send(error_msg);
+                });
+
+                // Proxy errors
+                let err_tx_clone = err_tx.clone();
+                tokio::spawn(async move {
+                    while let Ok(err) = inner_err_rx.recv_async().await {
+                        let _ = err_tx_clone.send(err);
+                    }
+                });
+
+                // Proxy samples
+                while let Ok(sample) = inner_rx.recv_async().await {
+                    if tx.send(sample).is_err() {
+                        break;
+                    }
                 }
-            });
+            } else {
+                let error_msg = if let Err(e) = url {
+                    format!(
+                        "Qobuz: Failed to resolve media URL for {identifier}: {e}",
+                        identifier = info.identifier
+                    )
+                } else {
+                    "Failed to resolve Qobuz media URL".to_owned()
+                };
+                let _ = err_tx.send(error_msg);
+            }
         });
 
         (rx, cmd_tx, err_rx)

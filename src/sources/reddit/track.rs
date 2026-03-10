@@ -26,50 +26,46 @@ impl PlayableTrack for RedditTrack {
         let stream_url = self.audio_url.clone();
         let local_addr = self.local_addr;
 
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
-            handle.block_on(async move {
-                if let Some(url) = stream_url {
-                    debug!("Reddit playback URL: {url}");
-                    let http_track = HttpTrack {
-                        url,
-                        local_addr,
-                        proxy: None,
-                    };
+        tokio::spawn(async move {
+            if let Some(url) = stream_url {
+                debug!("Reddit playback URL: {url}");
+                let http_track = HttpTrack {
+                    url,
+                    local_addr,
+                    proxy: None,
+                };
 
-                    let (inner_rx, inner_cmd_tx, inner_err_rx) =
-                        http_track.start_decoding(config.clone());
+                let (inner_rx, inner_cmd_tx, inner_err_rx) =
+                    http_track.start_decoding(config.clone());
 
-                    // Command proxy
-                    let inner_cmd_tx_clone = inner_cmd_tx.clone();
-                    tokio::spawn(async move {
-                        while let Ok(cmd) = cmd_rx.recv_async().await {
-                            if inner_cmd_tx_clone.send(cmd).is_err() {
-                                break;
-                            }
-                        }
-                    });
-
-                    // Error proxy
-                    let err_tx_clone = err_tx.clone();
-                    tokio::spawn(async move {
-                        while let Ok(err) = inner_err_rx.recv_async().await {
-                            let _ = err_tx_clone.send(err);
-                        }
-                    });
-
-                    // Samples proxy
-                    while let Ok(sample) = inner_rx.recv_async().await {
-                        if tx.send(sample).is_err() {
+                // Command proxy
+                let inner_cmd_tx_clone = inner_cmd_tx.clone();
+                tokio::spawn(async move {
+                    while let Ok(cmd) = cmd_rx.recv_async().await {
+                        if inner_cmd_tx_clone.send(cmd).is_err() {
                             break;
                         }
                     }
-                } else {
-                    error!("No audio stream available for Reddit track");
-                    let _ = err_tx.send("Resource unavailable".to_owned());
+                });
+
+                // Error proxy
+                let err_tx_clone = err_tx.clone();
+                tokio::spawn(async move {
+                    while let Ok(err) = inner_err_rx.recv_async().await {
+                        let _ = err_tx_clone.send(err);
+                    }
+                });
+
+                // Samples proxy
+                while let Ok(sample) = inner_rx.recv_async().await {
+                    if tx.send(sample).is_err() {
+                        break;
+                    }
                 }
-            });
+            } else {
+                error!("No audio stream available for Reddit track");
+                let _ = err_tx.send("Resource unavailable".to_owned());
+            }
         });
 
         (rx, cmd_tx, err_rx)

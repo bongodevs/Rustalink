@@ -34,60 +34,68 @@ impl PlayableTrack for GaanaTrack {
         let local_addr = self.local_addr;
         let proxy = self.proxy.clone();
 
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
+        tokio::spawn(async move {
             let track_id_for_log = track_id.clone();
 
-            let hls_url = handle.block_on(async move {
-                fetch_stream_url_internal(&client, &track_id, &quality).await
-            });
+            let hls_url = fetch_stream_url_internal(&client, &track_id, &quality).await;
 
             if let Some(url) = hls_url {
-                let is_plugin_hls = url.contains(".m3u8") || url.contains("/api/manifest/hls_");
+                let err_tx_for_setup = err_tx.clone();
+                let setup_res = tokio::task::spawn_blocking(move || {
+                    let is_plugin_hls = url.contains(".m3u8") || url.contains("/api/manifest/hls_");
 
-                let reader = if is_plugin_hls {
-                    crate::sources::youtube::hls::HlsReader::new(
-                        &url, local_addr, None, None, proxy,
-                    )
-                    .ok()
-                    .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
-                } else {
-                    super::reader::GaanaReader::new(&url, local_addr, proxy)
+                    let reader = if is_plugin_hls {
+                        crate::sources::youtube::hls::HlsReader::new(
+                            &url, local_addr, None, None, proxy,
+                        )
                         .ok()
                         .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
-                };
+                    } else {
+                        super::reader::GaanaReader::new(&url, local_addr, proxy)
+                            .ok()
+                            .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
+                    };
 
-                let kind = if is_plugin_hls {
-                    Some(crate::common::types::AudioFormat::Aac)
-                } else {
-                    std::path::Path::new(&url)
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(crate::common::types::AudioFormat::from_ext)
-                };
+                    let kind = if is_plugin_hls {
+                        Some(crate::common::types::AudioFormat::Aac)
+                    } else {
+                        std::path::Path::new(&url)
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(crate::common::types::AudioFormat::from_ext)
+                    };
 
-                if let Some(reader) = reader {
-                    match AudioProcessor::new(
-                        reader,
-                        kind,
-                        tx,
-                        cmd_rx,
-                        Some(err_tx.clone()),
-                        config,
-                    ) {
-                        Ok(mut processor) => {
-                            if let Err(e) = processor.run() {
-                                tracing::error!("GaanaTrack audio processor error: {e}");
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("GaanaTrack failed to initialize processor: {e}");
-                            let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
-                        }
+                    if let Some(reader) = reader {
+                        AudioProcessor::new(
+                            reader,
+                            kind,
+                            tx,
+                            cmd_rx,
+                            Some(err_tx_for_setup),
+                            config,
+                        ).map_err(|e| e.to_string())
+                    } else {
+                        Err("GaanaTrack: Failed to create reader".to_string())
                     }
-                } else {
-                    tracing::error!("GaanaTrack: Failed to create reader for {url}");
+                })
+                .await
+                .expect("failed to spawn gaana setup task");
+
+                match setup_res {
+                    Ok(mut processor) => {
+                        std::thread::Builder::new()
+                            .name(format!("gaana-decoder-{}", track_id_for_log))
+                            .spawn(move || {
+                                if let Err(e) = processor.run() {
+                                    tracing::error!("GaanaTrack audio processor error for {}: {}", track_id_for_log, e);
+                                }
+                            })
+                            .expect("failed to spawn gaana decoder thread");
+                    }
+                    Err(e) => {
+                        tracing::error!("GaanaTrack failed to initialize processor for {}: {}", track_id_for_log, e);
+                        let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
+                    }
                 }
             } else {
                 warn!("GaanaTrack: Failed to fetch stream URL for {track_id_for_log}");

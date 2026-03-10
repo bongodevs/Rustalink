@@ -32,58 +32,54 @@ impl PlayableTrack for AudiusTrack {
         let stream_url = self.stream_url.clone();
         let local_addr = self.local_addr;
 
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
-            handle.block_on(async move {
-                let final_url = if let Some(url) = stream_url {
-                    Some(url)
-                } else {
-                    fetch_stream_url(&client, &track_id, &app_name).await
-                };
+        tokio::spawn(async move {
+            let final_url = if let Some(url) = stream_url {
+                Some(url)
+            } else {
+                fetch_stream_url(&client, &track_id, &app_name).await
+            };
 
-                match final_url {
-                    Some(stream_url) => {
-                        debug!("Audius stream URL: {stream_url}");
-                        let http_track = HttpTrack {
-                            url: stream_url,
-                            local_addr,
-                            proxy: None,
-                        };
-                        let (inner_rx, inner_cmd_tx, inner_err_rx) =
-                            http_track.start_decoding(config.clone());
+            match final_url {
+                Some(stream_url) => {
+                    debug!("Audius stream URL: {stream_url}");
+                    let http_track = HttpTrack {
+                        url: stream_url,
+                        local_addr,
+                        proxy: None,
+                    };
+                    let (inner_rx, inner_cmd_tx, inner_err_rx) =
+                        http_track.start_decoding(config.clone());
 
-                        // Proxy commands
-                        let inner_cmd_tx_clone = inner_cmd_tx.clone();
-                        tokio::spawn(async move {
-                            while let Ok(cmd) = cmd_rx.recv_async().await {
-                                if inner_cmd_tx_clone.send(cmd).is_err() {
-                                    break;
-                                }
-                            }
-                        });
-
-                        // Proxy errors
-                        let err_tx_clone = err_tx.clone();
-                        tokio::spawn(async move {
-                            while let Ok(err) = inner_err_rx.recv_async().await {
-                                let _ = err_tx_clone.send(err);
-                            }
-                        });
-
-                        // Proxy samples
-                        while let Ok(sample) = inner_rx.recv_async().await {
-                            if tx.send(sample).is_err() {
+                    // Proxy commands
+                    let inner_cmd_tx_clone = inner_cmd_tx.clone();
+                    tokio::spawn(async move {
+                        while let Ok(cmd) = cmd_rx.recv_async().await {
+                            if inner_cmd_tx_clone.send(cmd).is_err() {
                                 break;
                             }
                         }
-                    }
-                    None => {
-                        error!("Failed to fetch Audius stream URL for track ID {track_id}");
-                        let _ = err_tx.send("Failed to fetch stream URL".to_owned());
+                    });
+
+                    // Proxy errors
+                    let err_tx_clone = err_tx.clone();
+                    tokio::spawn(async move {
+                        while let Ok(err) = inner_err_rx.recv_async().await {
+                            let _ = err_tx_clone.send(err);
+                        }
+                    });
+
+                    // Proxy samples
+                    while let Ok(sample) = inner_rx.recv_async().await {
+                        if tx.send(sample).is_err() {
+                            break;
+                        }
                     }
                 }
-            });
+                None => {
+                    error!("Failed to fetch Audius stream URL for track ID {track_id}");
+                    let _ = err_tx.send("Failed to fetch stream URL".to_owned());
+                }
+            }
         });
 
         (rx, cmd_tx, err_rx)

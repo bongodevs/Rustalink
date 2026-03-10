@@ -52,13 +52,11 @@ impl PlayableTrack for JioSaavnTrack {
         let local_addr = self.local_addr;
         let proxy = self.proxy.clone();
 
-        let handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
             let reader = match super::reader::JioSaavnReader::new(&url, local_addr, proxy) {
                 Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
                 Err(e) => {
-                    tracing::error!("Failed to create JioSaavnReader: {e}");
+                    tracing::error!("Failed to create JioSaavnReader for {url}: {e}");
                     let _ = err_tx.send(format!("Failed to open stream: {e}"));
                     return;
                 }
@@ -71,12 +69,17 @@ impl PlayableTrack for JioSaavnTrack {
 
             match AudioProcessor::new(reader, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
                 Ok(mut processor) => {
-                    if let Err(e) = processor.run() {
-                        tracing::error!("JioSaavn audio processor error: {e}");
-                    }
+                    std::thread::Builder::new()
+                        .name(format!("jiosaavn-decoder-{}", url))
+                        .spawn(move || {
+                            if let Err(e) = processor.run() {
+                                tracing::error!("JioSaavn audio processor error for {}: {}", url, e);
+                            }
+                        })
+                        .expect("failed to spawn jiosaavn decoder thread");
                 }
                 Err(e) => {
-                    tracing::error!("JioSaavn failed to initialize processor: {e}");
+                    tracing::error!("JioSaavn failed to initialize processor for {}: {}", url, e);
                     let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
                 }
             }

@@ -73,6 +73,7 @@ impl PlayableTrack for SoundCloudTrack {
                         cmd_rx,
                         err_tx,
                         config.clone(),
+                        stream_url,
                     );
                 }
 
@@ -96,6 +97,7 @@ impl PlayableTrack for SoundCloudTrack {
                         cmd_rx,
                         err_tx,
                         config.clone(),
+                        stream_url,
                     );
                 }
 
@@ -120,6 +122,7 @@ impl PlayableTrack for SoundCloudTrack {
                         cmd_rx,
                         err_tx,
                         config.clone(),
+                        stream_url,
                     );
                 }
 
@@ -144,6 +147,7 @@ impl PlayableTrack for SoundCloudTrack {
                         cmd_rx,
                         err_tx,
                         config.clone(),
+                        stream_url.clone(),
                     );
                 }
 
@@ -169,6 +173,7 @@ impl PlayableTrack for SoundCloudTrack {
                         cmd_rx,
                         err_tx,
                         config.clone(),
+                        stream_url,
                     );
                 }
             }
@@ -185,15 +190,21 @@ fn run_processor(
     cmd_rx: flume::Receiver<DecoderCommand>,
     err_tx: flume::Sender<String>,
     config: crate::config::player::PlayerConfig,
+    identifier: String,
 ) {
     match AudioProcessor::new(reader, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
         Ok(mut p) => {
-            if let Err(e) = p.run() {
-                error!("SoundCloud AudioProcessor error: {e}");
-            }
+            std::thread::Builder::new()
+                .name(format!("soundcloud-decoder-{}", identifier))
+                .spawn(move || {
+                    if let Err(e) = p.run() {
+                        error!("SoundCloud AudioProcessor error for {}: {}", identifier, e);
+                    }
+                })
+                .expect("failed to spawn soundcloud decoder thread");
         }
         Err(e) => {
-            error!("SoundCloud: failed to init AudioProcessor (kind={kind:?}): {e}");
+            error!("SoundCloud: failed to init AudioProcessor for {} (kind={:?}): {}", identifier, kind, e);
             let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
         }
     }

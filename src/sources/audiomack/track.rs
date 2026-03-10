@@ -93,10 +93,8 @@ async fn parse_response(resp: reqwest::Response) -> Option<String> {
     }
 
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    if let Some(s) = json.as_str() {
-        if is_stream(s) {
-            return Some(s.to_owned());
-        }
+    if let Some(s) = json.as_str() && is_stream(s) {
+        return Some(s.to_owned());
     }
 
     let results = json.get("results").unwrap_or(&json);
@@ -108,10 +106,8 @@ async fn parse_response(resp: reqwest::Response) -> Option<String> {
         .or_else(|| results.get("url"))
         .and_then(|v| v.as_str());
 
-    if let Some(url) = potential_url {
-        if is_stream(url) {
-            return Some(url.to_owned());
-        }
+    if let Some(url) = potential_url && is_stream(url) {
+        return Some(url.to_owned());
     }
 
     None

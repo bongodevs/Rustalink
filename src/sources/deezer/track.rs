@@ -36,12 +36,10 @@ impl PlayableTrack for DeezerTrack {
         let local_addr = self.local_addr;
         let proxy = self.proxy.clone();
 
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
+        tokio::spawn(async move {
             let track_id_for_log = track_id.clone();
 
-            let playback_url = handle.block_on(async move {
+            let playback_url = async {
                 let mut retry_count = 0;
                 let max_retries = 3;
 
@@ -173,61 +171,73 @@ impl PlayableTrack for DeezerTrack {
                         .and_then(|u| u.as_str());
 
                     if let Some(url) = url_opt {
-                        return Some(format!("deezer_encrypted:{track_id}:{url}"));
+                        break Some(format!("deezer_encrypted:{track_id}:{url}"));
                     } else {
                         token_tracker.invalidate_token(tokens.arl_index).await;
                         retry_count += 1;
                         continue;
                     }
                 }
-            });
+            }.await;
 
             if let Some(url) = playback_url {
-                let custom_reader = if let Some(stripped) = url.strip_prefix("deezer_encrypted:") {
-                    let parts: Vec<&str> = stripped.splitn(2, ':').collect();
-                    if parts.len() == 2 {
-                        let track_id = parts[0];
-                        let media_url = parts[1];
-                        DeezerReader::new(
-                            media_url,
-                            track_id,
-                            &master_key,
-                            local_addr,
-                            proxy.clone(),
-                        )
-                        .ok()
-                        .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
+                let err_tx_for_setup = err_tx.clone();
+                let setup_res = tokio::task::spawn_blocking(move || {
+                    let custom_reader = if let Some(stripped) = url.strip_prefix("deezer_encrypted:") {
+                        let parts: Vec<&str> = stripped.splitn(2, ':').collect();
+                        if parts.len() == 2 {
+                            let track_id = parts[0];
+                            let media_url = parts[1];
+                            DeezerReader::new(
+                                media_url,
+                                track_id,
+                                &master_key,
+                                local_addr,
+                                proxy.clone(),
+                            )
+                            .ok()
+                            .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
+                        } else {
+                            None
+                        }
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
 
-                let reader = custom_reader.unwrap_or_else(|| {
-                    Box::new(
-                        super::reader::remote_reader::DeezerRemoteReader::new(
-                            &url,
-                            local_addr,
-                            proxy.clone(),
-                        )
-                        .unwrap(),
-                    ) as Box<dyn symphonia::core::io::MediaSource>
-                });
+                    let reader = custom_reader.unwrap_or_else(|| {
+                        Box::new(
+                            super::reader::remote_reader::DeezerRemoteReader::new(
+                                &url,
+                                local_addr,
+                                proxy.clone(),
+                            )
+                            .unwrap(),
+                        ) as Box<dyn symphonia::core::io::MediaSource>
+                    });
 
-                let kind = std::path::Path::new(&url)
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(crate::common::types::AudioFormat::from_ext);
+                    let kind = std::path::Path::new(&url)
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(crate::common::types::AudioFormat::from_ext);
 
-                match AudioProcessor::new(reader, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
+                    AudioProcessor::new(reader, kind, tx, cmd_rx, Some(err_tx_for_setup), config)
+                })
+                .await
+                .expect("failed to spawn deezer setup task");
+
+                match setup_res {
                     Ok(mut processor) => {
-                        if let Err(e) = processor.run() {
-                            error!("DeezerTrack audio processor error: {e}");
-                        }
+                        std::thread::Builder::new()
+                            .name(format!("deezer-decoder-{}", track_id_for_log))
+                            .spawn(move || {
+                                if let Err(e) = processor.run() {
+                                    error!("DeezerTrack audio processor error for {}: {}", track_id_for_log, e);
+                                }
+                            })
+                            .expect("failed to spawn deezer decoder thread");
                     }
                     Err(e) => {
-                        error!("DeezerTrack failed to initialize processor: {e}");
+                        error!("DeezerTrack failed to initialize processor for {}: {}", track_id_for_log, e);
                         let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
                     }
                 }

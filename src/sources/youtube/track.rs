@@ -137,22 +137,32 @@ impl PlayableTrack for YoutubeTrack {
                 let err_tx_clone = err_tx.clone();
 
                 let config_for_processor = config.clone();
-                let mut process_task = tokio::task::spawn_blocking(move || {
-                    match crate::audio::processor::AudioProcessor::new(
-                        reader,
-                        Some(kind),
-                        tx_clone,
-                        inner_cmd_rx,
-                        Some(err_tx_clone.clone()),
-                        config_for_processor,
-                    ) {
-                        Ok(mut processor) => processor.run().map_err(|e| e.to_string()),
-                        Err(e) => {
-                            error!("YoutubeTrack: AudioProcessor initialization failed: {}", e);
-                            Err(format!("Failed to initialize processor: {}", e))
-                        }
-                    }
-                });
+                let (done_tx, mut done_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
+                let identifier_for_thread = identifier_async.clone();
+
+                std::thread::Builder::new()
+                    .name(format!("youtube-decoder-{}", identifier_async))
+                    .spawn(move || {
+                        let result = match crate::audio::processor::AudioProcessor::new(
+                            reader,
+                            Some(kind),
+                            tx_clone,
+                            inner_cmd_rx,
+                            Some(err_tx_clone.clone()),
+                            config_for_processor,
+                        ) {
+                            Ok(mut processor) => processor.run().map_err(|e| e.to_string()),
+                            Err(e) => {
+                                error!(
+                                    "YoutubeTrack: AudioProcessor initialization failed for {}: {}",
+                                    identifier_for_thread, e
+                                );
+                                Err(format!("Failed to initialize processor: {}", e))
+                            }
+                        };
+                        let _ = done_tx.send(result);
+                    })
+                    .expect("failed to spawn youtube decoder thread");
 
                 if current_seek_ms > 0 {
                     let _ = inner_cmd_tx.send(DecoderCommand::Seek(current_seek_ms));
@@ -172,7 +182,11 @@ impl PlayableTrack for YoutubeTrack {
                                 }
                             }
                         }
-                        res = &mut process_task => {
+                        res = &mut done_rx => {
+                            let res = match res {
+                                Ok(r) => Ok(r),
+                                Err(_) => Err("decoder thread dropped".to_string()),
+                            };
                             match res {
                                 Ok(Err(e)) => {
                                     warn!(

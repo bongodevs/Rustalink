@@ -30,52 +30,48 @@ impl PlayableTrack for YandexMusicTrack {
         let local_addr = self.local_addr;
         let proxy = self.proxy.clone();
 
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
-            handle.block_on(async move {
-                match fetch_download_url(&client, &track_id).await {
-                    Some(stream_url) => {
-                        debug!("Yandex Music stream URL: {}", stream_url);
-                        let http_track = HttpTrack {
-                            url: stream_url,
-                            local_addr,
-                            proxy,
-                        };
-                        let (inner_rx, inner_cmd_tx, inner_err_rx) =
-                            http_track.start_decoding(config.clone());
+        tokio::spawn(async move {
+            match fetch_download_url(&client, &track_id).await {
+                Some(stream_url) => {
+                    debug!("Yandex Music stream URL: {}", stream_url);
+                    let http_track = HttpTrack {
+                        url: stream_url,
+                        local_addr,
+                        proxy,
+                    };
+                    let (inner_rx, inner_cmd_tx, inner_err_rx) =
+                        http_track.start_decoding(config.clone());
 
-                        let inner_cmd_tx_clone = inner_cmd_tx.clone();
-                        tokio::spawn(async move {
-                            while let Ok(cmd) = cmd_rx.recv_async().await {
-                                if inner_cmd_tx_clone.send(cmd).is_err() {
-                                    break;
-                                }
-                            }
-                        });
-
-                        let err_tx_clone = err_tx.clone();
-                        tokio::spawn(async move {
-                            while let Ok(err) = inner_err_rx.recv_async().await {
-                                let _ = err_tx_clone.send(err);
-                            }
-                        });
-
-                        while let Ok(sample) = inner_rx.recv_async().await {
-                            if tx.send(sample).is_err() {
+                    let inner_cmd_tx_clone = inner_cmd_tx.clone();
+                    tokio::spawn(async move {
+                        while let Ok(cmd) = cmd_rx.recv_async().await {
+                            if inner_cmd_tx_clone.send(cmd).is_err() {
                                 break;
                             }
                         }
-                    }
-                    None => {
-                        error!(
-                            "Failed to fetch Yandex Music stream URL for track ID {}",
-                            track_id
-                        );
-                        let _ = err_tx.send("Failed to fetch stream URL".to_string());
+                    });
+
+                    let err_tx_clone = err_tx.clone();
+                    tokio::spawn(async move {
+                        while let Ok(err) = inner_err_rx.recv_async().await {
+                            let _ = err_tx_clone.send(err);
+                        }
+                    });
+
+                    while let Ok(sample) = inner_rx.recv_async().await {
+                        if tx.send(sample).is_err() {
+                            break;
+                        }
                     }
                 }
-            });
+                None => {
+                    error!(
+                        "Failed to fetch Yandex Music stream URL for track ID {}",
+                        track_id
+                    );
+                    let _ = err_tx.send("Failed to fetch stream URL".to_string());
+                }
+            }
         });
 
         (rx, cmd_tx, err_rx)
