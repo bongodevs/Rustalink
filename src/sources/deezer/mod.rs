@@ -24,12 +24,18 @@ const PRIVATE_API_BASE: &str = "https://www.deezer.com/ajax/gw-light.php";
 
 pub(crate) const REC_ARTIST_PREFIX: &str = "artist=";
 pub(crate) const REC_TRACK_PREFIX: &str = "track=";
-pub(crate) const SHARE_URL_PREFIX: &str = "https://deezer.page.link/";
 
 fn url_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
         Regex::new(r"https?://(?:www\.)?deezer\.com/(?:[a-z]+(?:-[a-z]+)?/)?(?<type>track|album|playlist|artist)/(?<id>\d+)").unwrap()
+    })
+}
+
+fn share_url_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"https?://(?:deezer\.page\.link|link\.deezer\.com)/\S*").unwrap()
     })
 }
 
@@ -60,6 +66,40 @@ impl DeezerSource {
             token_tracker,
         })
     }
+
+    async fn resolve_share_url(&self, identifier: &str) -> Option<String> {
+        let client = reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6094.0 Safari/537.36")
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .ok()?;
+
+        let res = client.get(identifier).send().await.ok()?;
+        if !res.status().is_redirection() {
+            return None;
+        }
+
+        let loc = res.headers().get("location")?.to_str().ok()?;
+        let mut url = loc.to_owned();
+
+        if let Some(pos) = url.find("dest=") {
+            let dest = &url[pos + 5..];
+            let end = dest.find('&').unwrap_or(dest.len());
+            if let Ok(decoded) = urlencoding::decode(&dest[..end]) {
+                url = decoded.into_owned();
+            }
+        }
+
+        if let Some(pos) = url.find('?') {
+            url.truncate(pos);
+        }
+
+        if url.ends_with("/404") {
+            return None;
+        }
+
+        Some(url)
+    }
 }
 
 #[async_trait]
@@ -80,7 +120,7 @@ impl SourcePlugin for DeezerSource {
                 .rec_prefixes()
                 .iter()
                 .any(|p| identifier.starts_with(p))
-            || identifier.starts_with(SHARE_URL_PREFIX)
+            || share_url_regex().is_match(identifier)
             || url_regex().is_match(identifier)
     }
 
@@ -122,18 +162,9 @@ impl SourcePlugin for DeezerSource {
             }
         }
 
-        if identifier.starts_with(SHARE_URL_PREFIX) {
-            let client = reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .unwrap_or_else(|_| (*self.client).clone());
-
-            if let Ok(res) = client.get(identifier).send().await
-                && res.status().is_redirection()
-                && let Some(loc) = res.headers().get("location").and_then(|l| l.to_str().ok())
-                && loc.starts_with("https://www.deezer.com/")
-            {
-                return self.load(loc, routeplanner).await;
+        if share_url_regex().is_match(identifier) {
+            if let Some(resolved) = self.resolve_share_url(identifier).await {
+                return self.load(&resolved, routeplanner).await;
             }
             return LoadResult::Empty {};
         }

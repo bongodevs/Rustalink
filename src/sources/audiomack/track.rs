@@ -78,24 +78,43 @@ async fn parse_response(resp: reqwest::Response) -> Option<String> {
     }
 
     let text = resp.text().await.ok()?;
-    if text.starts_with("http") {
+
+    // Helper to determine if a URL is likely a direct audio stream
+    let is_stream = |url: &str| {
+        url.contains("music.audiomack.com")
+            || url.ends_with(".m4a")
+            || url.ends_with(".mp3")
+            || url.contains(".m4a?")
+            || url.contains(".mp3?")
+    };
+
+    if text.starts_with("http") && is_stream(&text) {
         return Some(text);
     }
 
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
     if let Some(s) = json.as_str() {
-        return Some(s.to_owned());
+        if is_stream(s) {
+            return Some(s.to_owned());
+        }
     }
 
     let results = json.get("results").unwrap_or(&json);
-    results
+    let potential_url = results
         .get("signedUrl")
         .or_else(|| results.get("signed_url"))
-        .or_else(|| results.get("url"))
         .or_else(|| results.get("streamUrl"))
         .or_else(|| results.get("stream_url"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_owned())
+        .or_else(|| results.get("url"))
+        .and_then(|v| v.as_str());
+
+    if let Some(url) = potential_url {
+        if is_stream(url) {
+            return Some(url.to_owned());
+        }
+    }
+
+    None
 }
 
 fn generate_nonce() -> String {
