@@ -79,10 +79,8 @@ impl TapeEffect {
         }
     }
 
-    /// Process a PCM frame. Unlike the previous implementation which worked in-place,
-    /// this uses an internal resampling buffer to handle rate changes correctly.
     pub fn process(&mut self, frame: &mut [i16]) {
-        if frame.is_empty() {
+        if frame.is_empty() || !self.is_active() {
             return;
         }
 
@@ -156,7 +154,8 @@ impl TapeEffect {
 
         if self.read_pos > (self.sample_rate as f64 * channels as f64 * 2.0) {
             let integral = (self.read_pos.floor() as usize / channels) * channels;
-            self.input_buffer.drain(0..integral);
+            self.input_buffer.copy_within(integral.., 0);
+            self.input_buffer.truncate(self.input_buffer.len() - integral);
             self.read_pos -= integral as f64;
         }
     }

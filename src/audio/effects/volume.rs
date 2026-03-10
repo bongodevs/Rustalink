@@ -126,7 +126,6 @@ impl VolumeEffect {
         value.signum() * limited.min(INT16_MAX_F)
     }
 
-    /// Process a stereo interleaved i16 frame **in-place**.
     pub fn process(&mut self, frame: &mut [i16]) {
         let sample_count = frame.len();
         if sample_count == 0 {
@@ -157,6 +156,10 @@ impl VolumeEffect {
             let v = self.target_volume;
             (v, v)
         };
+
+        if !self.fade_active && (gain_start - 1.0).abs() < 0.0001 {
+            return;
+        }
 
         let step = if sample_count > 1 {
             (gain_end - gain_start) / (sample_count - 1) as f32
