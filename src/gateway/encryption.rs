@@ -27,6 +27,7 @@ pub struct DaveHandler {
     pending_transitions: HashMap<u16, u16>,
     external_sender_set: bool,
     pending_proposals: Vec<Vec<u8>>,
+    pending_handshake: Vec<(Vec<u8>, bool)>,
     was_ready: bool,
     recognized_users: HashSet<UserId>,
 }
@@ -43,6 +44,7 @@ impl DaveHandler {
             pending_transitions: HashMap::new(),
             external_sender_set: false,
             pending_proposals: Vec::new(),
+            pending_handshake: Vec::new(),
             was_ready: false,
             recognized_users,
         }
@@ -86,6 +88,7 @@ impl DaveHandler {
         self.protocol_version = version;
         self.external_sender_set = false;
         self.pending_proposals.clear();
+        self.pending_handshake.clear();
         self.was_ready = false;
 
         debug!("DAVE session setup (v{})", version);
@@ -97,6 +100,7 @@ impl DaveHandler {
         self.pending_transitions.clear();
         self.external_sender_set = false;
         self.pending_proposals.clear();
+        self.pending_handshake.clear();
         self.was_ready = false;
         self.session = None;
         info!("DAVE session reset to plaintext");
@@ -154,6 +158,18 @@ impl DaveHandler {
                     }
                 }
             }
+
+            if !self.pending_handshake.is_empty() {
+                debug!(
+                    "DAVE processing {} buffered handshake messages",
+                    self.pending_handshake.len()
+                );
+                for (handshake_data, is_welcome) in std::mem::take(&mut self.pending_handshake) {
+                    if let Err(e) = self.do_process_handshake(&handshake_data, is_welcome) {
+                        warn!("DAVE buffered handshake processing failed: {e}");
+                    }
+                }
+            }
         }
         Ok(responses)
     }
@@ -173,6 +189,24 @@ impl DaveHandler {
         }
 
         let transition_id = u16::from_be_bytes([data[0], data[1]]);
+
+        if !self.external_sender_set {
+            if self.pending_handshake.len() < MAX_PENDING_PROPOSALS {
+                debug!("DAVE buffering {tag} — external sender not set");
+                self.pending_handshake.push((data.to_vec(), is_welcome));
+            } else {
+                warn!("DAVE handshake buffer full, dropping {tag}");
+            }
+            return Ok(transition_id);
+        }
+
+        self.do_process_handshake(data, is_welcome)?;
+
+        Ok(transition_id)
+    }
+
+    fn do_process_handshake(&mut self, data: &[u8], is_welcome: bool) -> AnyResult<()> {
+        let transition_id = u16::from_be_bytes([data[0], data[1]]);
         if let Some(session) = &mut self.session {
             if is_welcome {
                 session.process_welcome(&data[2..]).map_err(map_boxed_err)?;
@@ -184,9 +218,13 @@ impl DaveHandler {
                 self.pending_transitions
                     .insert(transition_id, self.protocol_version);
             }
-            debug!("DAVE {tag} processed (tid {})", transition_id);
+            debug!(
+                "DAVE {} processed (tid {})",
+                if is_welcome { "welcome" } else { "commit" },
+                transition_id
+            );
         }
-        Ok(transition_id)
+        Ok(())
     }
 
     pub fn process_proposals(&mut self, data: &[u8]) -> AnyResult<Option<Vec<u8>>> {
@@ -269,4 +307,41 @@ impl DaveHandler {
 #[inline]
 fn short_payload_err(context: &str) -> AnyError {
     map_boxed_err(format!("Invalid {context} payload: too short"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::types::{ChannelId, UserId};
+
+    #[test]
+    fn test_handshake_buffering_logic() {
+        let mut handler = DaveHandler::new(UserId(1), ChannelId(1));
+        
+        // Buffering should happen if external_sender_set is false
+        let welcome_data = vec![0, 42, 1, 2, 3]; // tid 42
+        let res = handler.process_welcome(&welcome_data);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 42);
+        assert_eq!(handler.pending_handshake.len(), 1);
+
+        let commit_data = vec![0, 43, 4, 5, 6]; // tid 43
+        let res = handler.process_commit(&commit_data);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 43);
+        assert_eq!(handler.pending_handshake.len(), 2);
+
+        // setup_session should clear buffers
+        handler.setup_session(1).unwrap();
+        assert_eq!(handler.pending_handshake.len(), 0);
+        assert!(!handler.external_sender_set);
+
+        // Buffering again after setup
+        handler.process_welcome(&welcome_data).unwrap();
+        assert_eq!(handler.pending_handshake.len(), 1);
+
+        // reset should clear buffers
+        handler.reset();
+        assert_eq!(handler.pending_handshake.len(), 0);
+    }
 }
