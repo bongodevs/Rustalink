@@ -16,7 +16,7 @@ use tracing::{debug, error, trace, warn};
 use crate::{
     audio::{Mixer, filters::FilterChain},
     common::types::{AnyResult, ChannelId, GuildId, SessionId, Shared, UserId},
-    gateway::constants::{RECONNECT_DELAY_FRESH_MS, VOICE_GATEWAY_VERSION, WRITE_TASK_SHUTDOWN_MS},
+    gateway::constants::{VOICE_GATEWAY_VERSION, WRITE_TASK_SHUTDOWN_MS},
     protocol::RustalinkEvent,
 };
 
@@ -133,27 +133,24 @@ impl VoiceGateway {
                 Ok(SessionOutcome::Identify) => {
                     if backoff.is_exhausted() {
                         warn!("[{}] Max re-identify attempts reached", self.guild_id);
-                        self.emit_close_event(1006, "Max re-identify attempts reached".into());
+                        self.emit_close_event(4006, "Max re-identify attempts reached".into());
                         return Ok(());
                     }
                     is_resume = false;
                     seq_ack.store(0, Ordering::Relaxed);
-                    // Clear persistent state on identify to avoid using stale keys/addr
                     {
                         let mut state = persistent_state.lock().await;
-                        state.udp_addr = None;
-                        state.session_key = None;
+                        *state = PersistentSessionState::default();
                     }
                     *self.udp_socket.lock().await = None;
-                    let delay = std::time::Duration::from_millis(RECONNECT_DELAY_FRESH_MS);
-                    debug!(
-                        "[{}] Session invalid; identifying fresh in {:?}",
-                        self.guild_id, delay
+                    let delay = backoff.next();
+                    warn!(
+                        "[{}] Session invalid (4006); re-identifying in {:?} (attempt {})",
+                        self.guild_id,
+                        delay,
+                        backoff.attempt(),
                     );
                     tokio::time::sleep(delay).await;
-                    // Note: Identify backoff is handled differently in reference codes,
-                    // but we'll stick to our backoff logic for now and just increment it.
-                    backoff.next();
                 }
                 Err(e) => {
                     if backoff.is_exhausted() {
