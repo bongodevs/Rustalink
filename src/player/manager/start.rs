@@ -193,9 +193,13 @@ async fn stop_current_track(player: &mut PlayerContext, session: &Session) {
         task.abort();
     }
 
-    if let Some(handle) = &player.track_handle {
+    if let Some(handle) = player.track_handle.take() {
         handle.stop();
     }
+    player.track = None;
+    player.track_info = None;
+    player.position = 0;
+    player.end_time = None;
 
     session.total_sent_historical.fetch_add(
         player.frames_sent.swap(0, Ordering::Relaxed),
