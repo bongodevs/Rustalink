@@ -64,6 +64,10 @@ impl DaveHandler {
         debug!("DAVE removing user: {}", uid);
     }
 
+    pub fn protocol_version(&self) -> u16 {
+        self.protocol_version
+    }
+
     pub fn set_protocol_version(&mut self, version: u16) {
         self.protocol_version = version;
     }
@@ -96,17 +100,17 @@ impl DaveHandler {
         debug!("DAVE session setup (v{})", version);
         let key_package = session.create_key_package().map_err(map_boxed_err)?;
 
-        if let Some(saved) = self.saved_external_sender.clone() {
-            if let Some(sess) = &mut self.session {
-                match sess.set_external_sender(&saved) {
-                    Ok(()) => {
-                        self.external_sender_set = true;
-                        debug!("DAVE re-applied saved external sender after epoch reset");
-                    }
-                    Err(e) => {
-                        warn!("DAVE failed to re-apply saved external sender: {e}");
-                        self.saved_external_sender = None;
-                    }
+        if let Some(saved) = self.saved_external_sender.clone()
+            && let Some(sess) = &mut self.session
+        {
+            match sess.set_external_sender(&saved) {
+                Ok(()) => {
+                    self.external_sender_set = true;
+                    debug!("DAVE re-applied saved external sender after epoch reset");
+                }
+                Err(e) => {
+                    warn!("DAVE failed to re-apply saved external sender: {e}");
+                    self.saved_external_sender = None;
                 }
             }
         }
@@ -322,6 +326,12 @@ impl DaveHandler {
         }
 
         Ok(packet.to_vec())
+    }
+
+    pub fn voice_privacy_code(&self) -> Option<String> {
+        self.session
+            .as_ref()
+            .and_then(|s| s.voice_privacy_code().map(|c| c.to_string()))
     }
 }
 

@@ -55,6 +55,11 @@ pub async fn connect_voice(config: VoiceConnectConfig) -> tokio::task::JoinHandl
         frames_nulled: config.frames_nulled,
     });
 
+    {
+        let mut engine = config.engine.lock().await;
+        engine.dave = Some(gateway.dave.clone());
+    }
+
     tokio::spawn(async move {
         if let Err(e) = gateway.run().await {
             error!("Voice gateway error: {}", e);

@@ -88,7 +88,7 @@ pub async fn update_player(
         };
     }
 
-    let response = player.to_player_response();
+    let response = player.to_player_response().await;
     (StatusCode::OK, Json(response)).into_response()
 }
 

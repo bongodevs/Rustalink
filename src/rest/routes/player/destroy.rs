@@ -33,7 +33,7 @@ pub async fn destroy_player(
         {
             let player = player_arc.read().await;
             if player.track.is_some()
-                && let Some(track_data) = player.to_player_response().track
+                && let Some(track_data) = player.to_player_response().await.track
             {
                 let end_event = protocol::OutgoingMessage::Event {
                     event: Box::new(protocol::RustalinkEvent::TrackEnd {

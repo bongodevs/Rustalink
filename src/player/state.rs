@@ -25,6 +25,14 @@ pub struct Player {
     pub state: PlayerState,
     pub voice: VoiceState,
     pub filters: Filters,
+    pub dave: Option<DaveState>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaveState {
+    pub protocol_version: u16,
+    pub privacy_code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -125,7 +125,7 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
         handle.pause();
     }
 
-    let Some(track_response) = player.to_player_response().track else {
+    let Some(track_response) = player.to_player_response().await.track else {
         error!(
             "Failed to build track response for guild {}",
             player.guild_id
@@ -176,7 +176,7 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
 async fn stop_current_track(player: &mut PlayerContext, session: &Session) {
     if let Some(handle) = &player.track_handle
         && handle.get_state() != PlaybackState::Stopped
-        && let Some(track) = player.to_player_response().track
+        && let Some(track) = player.to_player_response().await.track
     {
         session.send_message(&protocol::OutgoingMessage::Event {
             event: Box::new(RustalinkEvent::TrackEnd {

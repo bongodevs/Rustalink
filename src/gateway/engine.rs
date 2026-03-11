@@ -4,12 +4,14 @@ use crate::{audio::Mixer, common::types::Shared, gateway::constants::DEFAULT_SAM
 
 pub struct VoiceEngine {
     pub mixer: Shared<Mixer>,
+    pub dave: Option<Shared<crate::gateway::DaveHandler>>,
 }
 
 impl VoiceEngine {
     pub fn new() -> Self {
         Self {
             mixer: Shared::new(Mutex::new(Mixer::new(DEFAULT_SAMPLE_RATE))),
+            dave: None,
         }
     }
 }

@@ -9,7 +9,7 @@ use crate::{
 
 /// Emit `TrackException` followed by `TrackEnd: LoadFailed`.
 pub async fn send_load_failed(player: &PlayerContext, session: &Session, message: String) {
-    let Some(track) = player.to_player_response().track else {
+    let Some(track) = player.to_player_response().await.track else {
         return;
     };
     let guild_id = player.guild_id.clone();

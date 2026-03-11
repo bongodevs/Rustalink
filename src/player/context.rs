@@ -149,7 +149,20 @@ impl PlayerContext {
         mixer.stop_all();
     }
 
-    pub fn to_player_response(&self) -> Player {
+    pub async fn to_player_response(&self) -> Player {
+        let dave = {
+            let engine = self.engine.lock().await;
+            if let Some(dave_shared) = &engine.dave {
+                let dave = dave_shared.lock().await;
+                Some(crate::player::state::DaveState {
+                    protocol_version: dave.protocol_version(),
+                    privacy_code: dave.voice_privacy_code(),
+                })
+            } else {
+                None
+            }
+        };
+
         Player {
             guild_id: self.guild_id.clone(),
             track: self.track_info.clone(),
@@ -172,6 +185,7 @@ impl PlayerContext {
                 channel_id: self.voice.channel_id.clone(),
             },
             filters: self.filters.clone(),
+            dave,
         }
     }
 }
