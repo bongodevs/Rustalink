@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use perf_monitor::cpu::ProcessStat;
 use sysinfo::System;
 
 use crate::{
@@ -23,4 +24,5 @@ pub struct AppState {
     pub youtube: Option<Arc<YoutubeStreamContext>>,
     pub system_state: parking_lot::Mutex<System>,
     pub last_system_refresh: parking_lot::Mutex<std::time::Instant>,
+    pub process_stat: parking_lot::Mutex<ProcessStat>,
 }

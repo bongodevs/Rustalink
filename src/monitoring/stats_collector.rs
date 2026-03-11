@@ -1,6 +1,5 @@
 use std::{process, sync::atomic::Ordering};
 
-use perf_monitor::cpu::processor_numbers;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, ProcessRefreshKind, RefreshKind};
 
 use crate::{
@@ -27,24 +26,28 @@ pub fn collect_stats(app_state: &AppState, session: Option<&Session>) -> protoco
     system.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::Some(&[pid]),
         true,
-        ProcessRefreshKind::nothing().with_cpu().with_memory(),
+        ProcessRefreshKind::nothing().with_memory(),
     );
 
     let cores = system.cpus().len() as u32;
-    let logical_cores = processor_numbers().unwrap_or(cores as usize) as u32;
+    let logical_cores = cores.max(1);
 
-    let (lavalink_load, process_used_memory) = if let Some(proc) = system.process(pid) {
-        let load = (proc.cpu_usage() as f64 / 100.0 / logical_cores as f64).clamp(0.0, 1.0);
-        (load, proc.memory())
-    } else {
-        (0.0, 0)
+    let lavalink_load = {
+        let mut stat = app_state.process_stat.lock();
+        stat.cpu()
+            .unwrap_or(0.0)
+            .clamp(0.0, logical_cores as f64)
+            / logical_cores as f64
     };
+
+    let process_used_memory = system.process(pid).map(|p| p.memory()).unwrap_or(0);
 
     let system_load = if system.cpus().is_empty() {
         0.0
     } else {
-        system.global_cpu_usage() as f64 / 100.0
+        (system.global_cpu_usage() as f64 / 100.0).clamp(0.0, 1.0)
     };
+
 
     let mut total_players = 0;
     let mut playing_players = 0;

@@ -58,6 +58,9 @@ async fn main() -> AnyResult<()> {
         youtube: youtube_ctx,
         system_state: parking_lot::Mutex::new(sysinfo::System::new_all()),
         last_system_refresh: parking_lot::Mutex::new(std::time::Instant::now()),
+        process_stat: parking_lot::Mutex::new(
+            perf_monitor::cpu::ProcessStat::cur().expect("failed to init ProcessStat"),
+        ),
     });
 
     monitoring::prometheus::init(shared_state.clone());
