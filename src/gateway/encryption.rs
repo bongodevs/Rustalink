@@ -26,6 +26,7 @@ pub struct DaveHandler {
     protocol_version: u16,
     pending_transitions: HashMap<u16, u16>,
     external_sender_set: bool,
+    saved_external_sender: Option<Vec<u8>>,
     pending_proposals: Vec<Vec<u8>>,
     pending_handshake: Vec<(Vec<u8>, bool)>,
     was_ready: bool,
@@ -43,6 +44,7 @@ impl DaveHandler {
             protocol_version: 0,
             pending_transitions: HashMap::new(),
             external_sender_set: false,
+            saved_external_sender: None,
             pending_proposals: Vec::new(),
             pending_handshake: Vec::new(),
             was_ready: false,
@@ -92,13 +94,31 @@ impl DaveHandler {
         self.was_ready = false;
 
         debug!("DAVE session setup (v{})", version);
-        session.create_key_package().map_err(map_boxed_err)
+        let key_package = session.create_key_package().map_err(map_boxed_err)?;
+
+        if let Some(saved) = self.saved_external_sender.clone() {
+            if let Some(sess) = &mut self.session {
+                match sess.set_external_sender(&saved) {
+                    Ok(()) => {
+                        self.external_sender_set = true;
+                        debug!("DAVE re-applied saved external sender after epoch reset");
+                    }
+                    Err(e) => {
+                        warn!("DAVE failed to re-apply saved external sender: {e}");
+                        self.saved_external_sender = None;
+                    }
+                }
+            }
+        }
+
+        Ok(key_package)
     }
 
     pub fn reset(&mut self) {
         self.protocol_version = 0;
         self.pending_transitions.clear();
         self.external_sender_set = false;
+        self.saved_external_sender = None;
         self.pending_proposals.clear();
         self.pending_handshake.clear();
         self.was_ready = false;
@@ -143,6 +163,7 @@ impl DaveHandler {
         if let Some(session) = &mut self.session {
             session.set_external_sender(data).map_err(map_boxed_err)?;
             self.external_sender_set = true;
+            self.saved_external_sender = Some(data.to_vec());
 
             if !self.pending_proposals.is_empty() {
                 debug!(
