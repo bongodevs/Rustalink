@@ -100,7 +100,6 @@ impl FlowController {
                     Ok(AudioFrame::Pcm(chunk)) if chunk.is_empty() => {
                         self.decoder_done = true;
                         crate::audio::buffer::release_buffer(chunk);
-                        self.pending_pcm.clear();
                     }
                     Ok(AudioFrame::Pcm(chunk)) => {
                         self.pending_pcm.extend_from_slice(&chunk);
@@ -121,6 +120,13 @@ impl FlowController {
         if self.pending_pcm.len() >= FRAME_SIZE_SAMPLES {
             let mut frame = acquire_buffer(FRAME_SIZE_SAMPLES);
             frame.extend(self.pending_pcm.drain(..FRAME_SIZE_SAMPLES));
+            self.process_frame(&mut frame);
+            Ok(Some(frame))
+        } else if self.decoder_done && !self.pending_pcm.is_empty() {
+            // Flush final short frame
+            let mut frame = acquire_buffer(FRAME_SIZE_SAMPLES);
+            frame.extend(self.pending_pcm.drain(..));
+            frame.resize(FRAME_SIZE_SAMPLES, 0); // Pad with silence
             self.process_frame(&mut frame);
             Ok(Some(frame))
         } else if self.decoder_done {

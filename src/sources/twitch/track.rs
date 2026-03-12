@@ -43,7 +43,6 @@ impl LiveHlsReader {
         err_tx: flume::Sender<String>,
     ) -> Self {
         let (chunk_tx, chunk_rx) = flume::bounded::<Vec<u8>>(16);
-        let err_tx_clone = err_tx;
 
         tokio::task::spawn_blocking(move || {
             let _guard = handle.enter();
@@ -67,7 +66,7 @@ impl LiveHlsReader {
                     }
                     Err(e) => {
                         tracing::error!("Twitch live HLS: proxy setup failed for {url}: {e}");
-                        let _ = err_tx_clone.send(format!("Proxy setup failed: {e}"));
+                        let _ = err_tx.send(format!("Proxy setup failed: {e}"));
                         return;
                     }
                 }
@@ -77,6 +76,7 @@ impl LiveHlsReader {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("Twitch live HLS: client build failed: {e}");
+                    let _ = err_tx.send(format!("Client build failed: {e}"));
                     return;
                 }
             };

@@ -27,9 +27,13 @@ fn main() {
 
 /// Configure cargo to rerun the build script if these files or variables change.
 fn setup_rerun_triggers() {
+    println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=.git/HEAD");
     if Path::new(".git/refs/heads").exists() {
         println!("cargo:rerun-if-changed=.git/refs/heads");
+    }
+    if Path::new(".git/refs/tags").exists() {
+        println!("cargo:rerun-if-changed=.git/refs/tags");
     }
     if Path::new(".git/packed-refs").exists() {
         println!("cargo:rerun-if-changed=.git/packed-refs");
@@ -37,6 +41,7 @@ fn setup_rerun_triggers() {
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
     println!("cargo:rerun-if-env-changed=GITHUB_REF_NAME");
     println!("cargo:rerun-if-env-changed=GITHUB_REF");
+    println!("cargo:rerun-if-env-changed=RUSTUP_TOOLCHAIN");
 }
 
 fn emit_env<V: std::fmt::Display>(name: &str, value: V) {
@@ -44,14 +49,15 @@ fn emit_env<V: std::fmt::Display>(name: &str, value: V) {
 }
 
 fn get_rustc_version() -> String {
-    Command::new("rustc")
+    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    Command::new(rustc)
         .arg("--version")
         .output()
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_owned())
-        .unwrap_or_else(|| env::var("RUSTC").unwrap_or_else(|_| "unknown".into()))
+        .unwrap_or_else(|| "unknown".into())
 }
 
 #[derive(Debug, Default)]
@@ -144,25 +150,30 @@ impl GitInfo {
 }
 
 fn detect_pre_release() -> Option<String> {
+    let is_tag = env::var("GITHUB_REF")
+        .map(|r| r.starts_with("refs/tags/"))
+        .unwrap_or(false);
+
     // Priority 1: GITHUB_REF_NAME (tag or branch)
     if let Ok(v) = env::var("GITHUB_REF_NAME") {
-        if let Some(idx) = v.find('-') {
-            if let Some(sanitized) = sanitize_pre_release(&v[idx + 1..]) {
-                return Some(sanitized);
+        if is_tag {
+            if let Some(idx) = v.find('-') {
+                if let Some(sanitized) = sanitize_pre_release(&v[idx + 1..]) {
+                    return Some(sanitized);
+                }
             }
-        }
-        // Use non-main branches as pre-release identifiers
-        if !is_main_branch(&v) && !v.starts_with('v') {
-            if let Some(sanitized) = sanitize_pre_release(&v) {
-                return Some(sanitized);
+        } else {
+            // Use non-main branches as pre-release identifiers
+            if !is_main_branch(&v) && !v.starts_with('v') {
+                if let Some(sanitized) = sanitize_pre_release(&v) {
+                    return Some(sanitized);
+                }
             }
         }
     }
 
     // Priority 2: GITHUB_REF (standard tag format)
-    if let Ok(v) = env::var("GITHUB_REF")
-        && let Some(idx) = v.rfind('-')
-    {
+    if is_tag && let Ok(v) = env::var("GITHUB_REF") && let Some(idx) = v.rfind('-') {
         if let Some(sanitized) = sanitize_pre_release(&v[idx + 1..]) {
             return Some(sanitized);
         }
@@ -251,11 +262,7 @@ fn parse_dot_git_head() -> Option<(String, String)> {
     let head = fs::read_to_string(".git/HEAD").ok()?.trim().to_owned();
 
     if let Some(ref_path) = head.strip_prefix("ref: ") {
-        let branch = ref_path
-            .split('/')
-            .next_back()
-            .unwrap_or("unknown")
-            .to_owned();
+        let branch = ref_path.strip_prefix("refs/heads/").unwrap_or(ref_path).to_owned();
         let commit = fs::read_to_string(format!(".git/{}", ref_path))
             .ok()
             .map(|s| s.trim().to_owned())

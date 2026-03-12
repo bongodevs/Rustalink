@@ -231,12 +231,9 @@ impl PlayableTrack for DeezerTrack {
 
                     let url_for_extension = final_url;
 
-                    let kind = std::path::Path::new(&url_for_extension)
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(crate::common::types::AudioFormat::from_ext);
+                    let kind = crate::common::types::AudioFormat::from_url(&url_for_extension);
 
-                    AudioProcessor::new(reader, kind, tx, cmd_rx, Some(err_tx_for_setup), config)
+                    AudioProcessor::new(reader, Some(kind), tx, cmd_rx, Some(err_tx_for_setup), config)
                 })
                 .await
                 .expect("failed to spawn deezer setup task");
@@ -254,17 +251,25 @@ impl PlayableTrack for DeezerTrack {
                 };
 
                 let mut processor = processor;
-                std::thread::Builder::new()
+                let track_id_for_thread = track_id_for_log.clone();
+                let spawn_res = std::thread::Builder::new()
                     .name(format!("deezer-decoder-{}", track_id_for_log))
                     .spawn(move || {
                         if let Err(e) = processor.run() {
                             error!(
                                 "DeezerTrack audio processor error for {}: {}",
-                                track_id_for_log, e
+                                track_id_for_thread, e
                             );
                         }
-                    })
-                    .expect("failed to spawn deezer decoder thread");
+                    });
+
+                if let Err(e) = spawn_res {
+                    error!(
+                        "DeezerTrack failed to spawn decoder thread for {}: {}",
+                        track_id_for_log, e
+                    );
+                    let _ = err_tx.send(format!("Failed to spawn decoder thread: {e}"));
+                }
             } else {
                 error!("DeezerTrack: Failed to resolve playback URL for {track_id_for_log}");
             }

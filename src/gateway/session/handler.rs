@@ -556,6 +556,13 @@ impl<'a> SessionState<'a> {
             t.abort();
         }
 
+        let speaking_tx = if let Some(tx) = &self.speaking_tx {
+            tx.clone()
+        } else {
+            error!("[{}] speaking_tx is missing, cannot start voice", self.gateway.guild_id);
+            return;
+        };
+
         let config = SpeakConfig {
             mixer: self.gateway.mixer.clone(),
             socket: self.udp_socket.clone(),
@@ -568,7 +575,7 @@ impl<'a> SessionState<'a> {
             frames_sent: self.gateway.frames_sent.clone(),
             frames_nulled: self.gateway.frames_nulled.clone(),
             cancel_token: self.conn_token.clone(),
-            speaking_tx: self.speaking_tx.clone().expect("speaking_tx must be set"),
+            speaking_tx,
             persistent_state: self.persistent_state.clone(),
         };
 

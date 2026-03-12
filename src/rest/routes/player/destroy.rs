@@ -18,7 +18,7 @@ pub async fn destroy_player(
 ) -> impl IntoResponse {
     tracing::info!("DELETE /v4/sessions/{}/players/{}", session_id, guild_id);
 
-    let Some(session) = state.sessions.get(&session_id) else {
+    let Some(session) = state.sessions.get(&session_id).map(|r| r.clone()) else {
         return (
             StatusCode::NOT_FOUND,
             Json(crate::common::RustalinkError::not_found(

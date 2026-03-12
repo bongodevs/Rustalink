@@ -106,20 +106,22 @@ mod tests {
 
     #[test]
     fn test_encoder_output_varies_with_input() {
-        let mut encoder = Encoder::new().unwrap();
+        let mut encoder1 = Encoder::new().unwrap();
         let mut output1 = vec![0u8; 4000];
-        let mut output2 = vec![0u8; 4000];
 
         // Silence
         let silence = vec![0i16; 960 * 2];
-        let size1 = encoder.encode(&silence, &mut output1).unwrap();
+        let size1 = encoder1.encode(&silence, &mut output1).unwrap();
+
+        let mut encoder2 = Encoder::new().unwrap();
+        let mut output2 = vec![0u8; 4000];
 
         // Tone
         let tone = vec![5000i16; 960 * 2];
-        let size2 = encoder.encode(&tone, &mut output2).unwrap();
+        let size2 = encoder2.encode(&tone, &mut output2).unwrap();
 
-        // Sizes might differ between silence and tone
         assert!(size1 > 0);
         assert!(size2 > 0);
+        assert_ne!(&output1[..size1], &output2[..size2], "Encoded silence and tone payloads should differ");
     }
 }
