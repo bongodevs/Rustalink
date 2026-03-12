@@ -69,7 +69,7 @@ playback = ["ANDROID_VR", "TV_CAST", "WEB_EMBEDDED", "TV", "WEB", "IOS"]
 resolve = ["WEB", "IOS", "MUSIC_WEB", "ANDROID", "TVHTML5_SIMPLY"]
 
 [sources.youtube.cipher]
-# url = "http://your-cipher-host/js"
+url = "https://cipher.kikkia.dev/"
 # token = "your-auth-token"
 
 [sources.spotify]
