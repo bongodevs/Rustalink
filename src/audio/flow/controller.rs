@@ -125,7 +125,7 @@ impl FlowController {
         } else if self.decoder_done && !self.pending_pcm.is_empty() {
             // Flush final short frame
             let mut frame = acquire_buffer(FRAME_SIZE_SAMPLES);
-            frame.extend(self.pending_pcm.drain(..));
+            frame.append(&mut self.pending_pcm);
             frame.resize(FRAME_SIZE_SAMPLES, 0); // Pad with silence
             self.process_frame(&mut frame);
             Ok(Some(frame))

@@ -199,18 +199,16 @@ impl VoiceSession {
             if has_input {
                 self.reset_timers();
                 self.set_speaking(true);
+            } else if self.active_silence > 0 {
+                self.active_silence -= 1;
+                pcm.fill(0);
+                self.set_speaking(true);
             } else {
-                if self.active_silence > 0 {
-                    self.active_silence -= 1;
-                    pcm.fill(0);
-                    self.set_speaking(true);
-                } else {
-                    self.set_speaking(false);
-                    if self.last_tx_time.elapsed() >= Duration::from_millis(UDP_KEEPALIVE_GAP_MS) {
-                        return self.send_silence().await;
-                    }
-                    return Ok(());
+                self.set_speaking(false);
+                if self.last_tx_time.elapsed() >= Duration::from_millis(UDP_KEEPALIVE_GAP_MS) {
+                    return self.send_silence().await;
                 }
+                return Ok(());
             }
 
             let has_ts = {

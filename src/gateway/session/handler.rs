@@ -369,12 +369,11 @@ impl<'a> SessionState<'a> {
 
         let mut key = [0u8; 32];
         for (i, v) in ka.iter().enumerate() {
-            if let Some(val) = v.as_u64() {
-                if val <= 255 {
+            if let Some(val) = v.as_u64()
+                && val <= 255 {
                     key[i] = val as u8;
                     continue;
                 }
-            }
             error!("[{}] Invalid secret_key byte at index {i}", self.gateway.guild_id);
             return Some(SessionOutcome::Reconnect);
         }

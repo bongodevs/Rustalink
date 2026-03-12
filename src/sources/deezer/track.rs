@@ -225,7 +225,7 @@ impl PlayableTrack for DeezerTrack {
                     let reader = match reader_res {
                         Ok(r) => r,
                         Err(e) => {
-                            return Err(symphonia::core::errors::Error::IoError(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create reader: {e}"))));
+                            return Err(symphonia::core::errors::Error::IoError(std::io::Error::other(format!("Failed to create reader: {e}"))));
                         }
                     };
 

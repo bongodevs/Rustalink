@@ -157,27 +157,24 @@ fn detect_pre_release() -> Option<String> {
     // Priority 1: GITHUB_REF_NAME (tag or branch)
     if let Ok(v) = env::var("GITHUB_REF_NAME") {
         if is_tag {
-            if let Some(idx) = v.find('-') {
-                if let Some(sanitized) = sanitize_pre_release(&v[idx + 1..]) {
+            if let Some(idx) = v.find('-')
+                && let Some(sanitized) = sanitize_pre_release(&v[idx + 1..]) {
                     return Some(sanitized);
                 }
-            }
         } else {
             // Use non-main branches as pre-release identifiers
-            if !is_main_branch(&v) && !v.starts_with('v') {
-                if let Some(sanitized) = sanitize_pre_release(&v) {
+            if !is_main_branch(&v) && !v.starts_with('v')
+                && let Some(sanitized) = sanitize_pre_release(&v) {
                     return Some(sanitized);
                 }
-            }
         }
     }
 
     // Priority 2: GITHUB_REF (standard tag format)
-    if is_tag && let Ok(v) = env::var("GITHUB_REF") && let Some(idx) = v.rfind('-') {
-        if let Some(sanitized) = sanitize_pre_release(&v[idx + 1..]) {
+    if is_tag && let Ok(v) = env::var("GITHUB_REF") && let Some(idx) = v.rfind('-')
+        && let Some(sanitized) = sanitize_pre_release(&v[idx + 1..]) {
             return Some(sanitized);
         }
-    }
 
     // Priority 3: Git describe
     if let Some(desc) = git_output(&["describe", "--tags", "--always", "--dirty"])
@@ -187,16 +184,14 @@ fn detect_pre_release() -> Option<String> {
         // Handle cases like v1.0.8-beta.1-2-gabc123
         if let Some(next_dash) = part.find('-') {
             let pre = &part[..next_dash];
-            if !is_numeric(pre) {
-                if let Some(sanitized) = sanitize_pre_release(pre) {
+            if !is_numeric(pre)
+                && let Some(sanitized) = sanitize_pre_release(pre) {
                     return Some(sanitized);
                 }
-            }
-        } else if !is_numeric(part) {
-            if let Some(sanitized) = sanitize_pre_release(part) {
+        } else if !is_numeric(part)
+            && let Some(sanitized) = sanitize_pre_release(part) {
                 return Some(sanitized);
             }
-        }
     }
 
     // Priority 4: Local branch name
@@ -204,11 +199,9 @@ fn detect_pre_release() -> Option<String> {
         && !is_main_branch(&branch)
         && branch != "HEAD"
         && !branch.is_empty()
-    {
-        if let Some(sanitized) = sanitize_pre_release(&branch) {
+        && let Some(sanitized) = sanitize_pre_release(&branch) {
             return Some(sanitized);
         }
-    }
 
     None
 }
@@ -221,12 +214,11 @@ fn sanitize_pre_release(s: &str) -> Option<String> {
         if c.is_ascii_alphanumeric() || c == '.' {
             result.push(c);
             last_was_dash = false;
-        } else if c == '/' || c == '-' || c == '_' || c.is_whitespace() {
-            if !last_was_dash && !result.is_empty() {
+        } else if (c == '/' || c == '-' || c == '_' || c.is_whitespace())
+            && !last_was_dash && !result.is_empty() {
                 result.push('-');
                 last_was_dash = true;
             }
-        }
     }
 
     if result.ends_with('-') {
