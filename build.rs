@@ -42,6 +42,7 @@ fn setup_rerun_triggers() {
     println!("cargo:rerun-if-env-changed=GITHUB_REF_NAME");
     println!("cargo:rerun-if-env-changed=GITHUB_REF");
     println!("cargo:rerun-if-env-changed=RUSTUP_TOOLCHAIN");
+    println!("cargo:rerun-if-env-changed=RUSTC");
 }
 
 fn emit_env<V: std::fmt::Display>(name: &str, value: V) {
