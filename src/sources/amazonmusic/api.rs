@@ -4,6 +4,9 @@ use serde_json::{Value, json};
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
+use super::region::DomainConfigCache;
+use super::validators::{is_invalid_album, is_invalid_playlist};
+
 const CONFIG_URL: &str = "https://music.amazon.com/config.json";
 const API_BASE: &str = "https://eu.mesk.skill.music.a2z.com/api";
 
@@ -19,6 +22,7 @@ const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 
 pub struct AmazonMusicClient {
     http: Arc<reqwest::Client>,
     cached_config: RwLock<Option<Value>>,
+    domain_configs: Arc<DomainConfigCache>,
 }
 
 impl AmazonMusicClient {
@@ -26,6 +30,7 @@ impl AmazonMusicClient {
         Self {
             http,
             cached_config: RwLock::new(None),
+            domain_configs: Arc::new(DomainConfigCache::new()),
         }
     }
 
@@ -255,9 +260,45 @@ impl AmazonMusicClient {
         });
         self.post_endpoint(EP_TRACKS_SEARCH, body, &page).await
     }
+
+    pub async fn fetch_album_multi_region(
+        &self,
+        id: &str,
+        domain_hint: Option<&str>,
+    ) -> Option<Value> {
+        super::region::fetch_multi_region(
+            &self.http,
+            id,
+            EP_ALBUM_INFO,
+            "albums",
+            "Album",
+            domain_hint,
+            is_invalid_album,
+            &self.domain_configs,
+        )
+        .await
+    }
+
+    pub async fn fetch_playlist_multi_region(
+        &self,
+        id: &str,
+        domain_hint: Option<&str>,
+    ) -> Option<Value> {
+        super::region::fetch_multi_region(
+            &self.http,
+            id,
+            EP_PLAYLIST_INFO,
+            "playlists",
+            "Playlist",
+            domain_hint,
+            is_invalid_playlist,
+            &self.domain_configs,
+        )
+        .await
+    }
 }
 
-fn gen_request_id() -> String {
+pub fn gen_request_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)

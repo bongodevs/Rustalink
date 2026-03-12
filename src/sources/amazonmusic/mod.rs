@@ -1,6 +1,7 @@
 pub mod api;
 pub mod manager;
 pub mod parsers;
+pub mod region;
 pub mod track;
 pub mod validators;
 

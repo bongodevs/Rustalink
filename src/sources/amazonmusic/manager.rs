@@ -102,7 +102,12 @@ impl AmazonMusicSource {
             None => return LoadResult::Empty {},
         };
 
-        let resp = match self.client.fetch_album(&album_id).await {
+        let domain_hint = super::region::extract_domain(url);
+        let resp = match self
+            .client
+            .fetch_album_multi_region(&album_id, domain_hint.as_deref())
+            .await
+        {
             Some(v) => v,
             None => return LoadResult::Empty {},
         };
@@ -264,7 +269,12 @@ impl AmazonMusicSource {
             None => return LoadResult::Empty {},
         };
 
-        let resp = match self.client.fetch_playlist(&playlist_id).await {
+        let domain_hint = super::region::extract_domain(url);
+        let resp = match self
+            .client
+            .fetch_playlist_multi_region(&playlist_id, domain_hint.as_deref())
+            .await
+        {
             Some(v) => v,
             None => return LoadResult::Empty {},
         };
