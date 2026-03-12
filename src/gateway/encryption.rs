@@ -139,7 +139,7 @@ impl DaveHandler {
         self.pending_handshake.clear();
         self.was_ready = false;
         self.session = None;
-        info!("DAVE session reset to plaintext");
+        debug!("DAVE session reset to plaintext");
     }
 
     pub fn prepare_transition(&mut self, transition_id: u16, protocol_version: u16) -> bool {
@@ -156,7 +156,7 @@ impl DaveHandler {
     pub fn execute_transition(&mut self, transition_id: u16) {
         if let Some(next_version) = self.pending_transitions.remove(&transition_id) {
             self.protocol_version = next_version;
-            info!(
+            debug!(
                 "DAVE transition {} executed (v{})",
                 transition_id, next_version
             );
