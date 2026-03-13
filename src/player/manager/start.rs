@@ -111,7 +111,6 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
             pos.clone(),
             is_buffering,
             player.config.clone(),
-            48000,
         );
     }
 
