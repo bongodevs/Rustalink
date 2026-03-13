@@ -52,6 +52,8 @@ filters = "rustalink=debug" # e.g. "rustalink=debug,davey=off"
 [logging.file]
 path = "./logs/rustalink.log"
 max_lines = 10000
+rotate_daily = false  # when true, creates rustalink-YYYY-MM-DD.log each day
+max_files = 7         # max daily log files to keep (0 = unlimited, only applies when rotate_daily = true)
 
 [route_planner]
 enabled = false

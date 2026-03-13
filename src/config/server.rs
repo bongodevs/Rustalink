@@ -65,6 +65,10 @@ pub struct LoggingConfig {
 pub struct LogFileConfig {
     pub path: String,
     pub max_lines: u32,
+    #[serde(default)]
+    pub max_files: u32,
+    #[serde(default)]
+    pub rotate_daily: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
