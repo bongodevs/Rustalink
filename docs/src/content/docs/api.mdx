@@ -62,6 +62,38 @@ These types are used across various REST and WebSocket payloads.
 | `frameStats` | object | `sent`, `nulled`, `deficit` |
 </details>
 
+<details id="type-player-state">
+<summary><b>Player State Object Fields</b></summary>
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `guildId` | string | The guild ID of the player |
+| `track` | object | The currently playing [Track](#type-track) |
+| `volume` | number | The current player volume (0-1000) |
+| `paused` | boolean | Whether the player is paused |
+| `state` | object | [Inner state details](#type-player-inner-state) |
+| `voice` | object | The current [Voice State](#type-voice-state) |
+| `filters` | object | Applied [Filters](/Rustalink/filters) |
+
+<h5 id="type-player-inner-state" style="margin-top: 1rem">Player Inner State Fields</h5>
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `time` | number | The current server time in ms |
+| `position` | number | The track position in ms |
+| `connected` | boolean | Whether the player is connected to voice |
+| `ping` | number | The player's voice ping in ms |
+
+<h5 id="type-voice-state" style="margin-top: 1rem">Voice State Fields</h5>
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `token` | string | The Discord voice token |
+| `endpoint` | string | The Discord voice endpoint |
+| `sessionId` | string | The Discord voice session ID |
+| `channelId` | string | The Discord voice channel ID |
+</details>
+
 ---
 
 ## Server Operations
