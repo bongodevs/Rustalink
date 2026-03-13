@@ -3,6 +3,32 @@ name: 🚀 Rustalink Release Pipeline
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      run_all:
+        description: 'Run all jobs'
+        type: boolean
+        default: true
+      run_linux:
+        description: 'Run Linux builds'
+        type: boolean
+        default: false
+      run_other:
+        description: 'Run macOS/Windows builds'
+        type: boolean
+        default: false
+      run_docker:
+        description: 'Run Docker build & push'
+        type: boolean
+        default: false
+      run_publish:
+        description: 'Run Attach Assets to Release'
+        type: boolean
+        default: false
+      run_notify:
+        description: 'Run Discord Notification'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -18,6 +44,7 @@ env:
 jobs:
   # Build Linux Binaries
   build-linux:
+    if: github.event_name == 'release' || inputs.run_all || inputs.run_linux
     name: 🐧 Build Linux (${{ matrix.arch }})
     runs-on: ubuntu-22.04
 
@@ -86,6 +113,7 @@ jobs:
 
   # Build macOS + Windows
   build-other:
+    if: github.event_name == 'release' || inputs.run_all || inputs.run_other
     name: 💻 Build ${{ matrix.os_name }}
     runs-on: ${{ matrix.os }}
 
@@ -166,6 +194,7 @@ jobs:
 
   # Build & Push Multi-Arch Docker Image
   docker:
+    if: github.event_name == 'release' || inputs.run_all || inputs.run_docker
     name: 🐳 Build & Push Docker Image
     needs: build-linux
     runs-on: ubuntu-latest
@@ -223,6 +252,7 @@ jobs:
 
   # Publish GitHub Release Assets
   publish:
+    if: github.event_name == 'release' || inputs.run_all || inputs.run_publish
     name: 📦 Publish Release Assets
     needs: [build-linux, build-other]
     runs-on: ubuntu-latest
@@ -242,3 +272,60 @@ jobs:
           tag_name: ${{ github.event.release.tag_name }}
           overwrite_files: true
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Send Discord Notification
+  notify:
+    if: always() && (github.event_name == 'release' || inputs.run_all || inputs.run_notify)
+    name: 🔔 Discord Notification
+    needs: [docker, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📝 Generate Discord Payload
+        run: |
+          # Safely escape the release body for JSON
+          BODY_JSON=$(echo "$BODY" | jq -Rs .)
+          cat <<EOF > discord_payload.json
+          {
+            "username": "${{ github.event.repository.name }} Updates",
+            "avatar_url": "https://github.com/${{ github.repository_owner }}.png",
+            "embeds": [
+              {
+                "author": {
+                  "name": "${{ github.event.repository.name }}",
+                  "url": "https://github.com/${{ github.repository }}",
+                  "icon_url": "https://github.com/${{ github.repository_owner }}.png"
+                },
+                "title": "${{ github.event.repository.name }} version ${{ github.event.release.tag_name }} has been released",
+                "url": "${{ github.event.release.html_url }}",
+                "description": $BODY_JSON,
+                "color": 16747520,
+                "footer": {
+                  "text": "Release by ${{ github.event.release.author.login }}",
+                  "icon_url": "https://github.com/${{ github.event.release.author.login }}.png"
+                },
+                "timestamp": "${{ github.event.release.published_at }}"
+              }
+            ],
+            "components": [
+              {
+                "type": 1,
+                "components": [
+                  {
+                    "type": 2,
+                    "style": 5,
+                    "label": "Release Notes",
+                    "url": "${{ github.event.release.html_url }}"
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+        env:
+          BODY: ${{ github.event.release.body }}
+
+      - name: 🚀 Send Discord Webhook
+        uses: tsickert/discord-webhook@v7
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          raw-data: discord_payload.json
