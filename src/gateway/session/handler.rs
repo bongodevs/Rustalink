@@ -518,7 +518,10 @@ impl<'a> SessionState<'a> {
         );
 
         if self.dave.lock().await.prepare_transition(tid, ver) {
-            debug!("[{}] DAVE Transition Ready (tid={})", self.gateway.guild_id, tid);
+            debug!(
+                "[{}] DAVE Transition Ready (tid={})",
+                self.gateway.guild_id, tid
+            );
             self.send_json(23, serde_json::json!({ "transition_id": tid }));
         }
         None
