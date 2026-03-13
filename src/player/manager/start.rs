@@ -96,7 +96,8 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
     );
 
     let (frame_rx, cmd_tx, err_rx) = playable.start_decoding(player.config.clone());
-    let (handle, audio_state, vol, pos) = TrackHandle::new(cmd_tx, player.tape_stop.clone());
+    let (handle, audio_state, vol, pos, is_buffering) =
+        TrackHandle::new(cmd_tx, player.tape_stop.clone());
 
     handle.set_volume(player.volume as f32 / 100.0);
 
@@ -108,6 +109,7 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
             audio_state.clone(),
             vol,
             pos.clone(),
+            is_buffering,
             player.config.clone(),
             48000,
         );

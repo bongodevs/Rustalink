@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
     },
 };
 
@@ -113,6 +113,7 @@ struct MixerTrack {
     state: Arc<AtomicU8>,
     volume: Arc<AtomicU32>,
     position: Arc<AtomicU64>,
+    is_buffering: Arc<AtomicBool>,
     config: PlayerConfig,
     finished: bool,
 }
@@ -134,6 +135,7 @@ impl Mixer {
         state: Arc<AtomicU8>,
         volume: Arc<AtomicU32>,
         position: Arc<AtomicU64>,
+        is_buffering: Arc<AtomicBool>,
         config: PlayerConfig,
         sample_rate: u32,
     ) {
@@ -148,6 +150,7 @@ impl Mixer {
             state,
             volume,
             position,
+            is_buffering,
             config,
             finished: false,
         });
@@ -278,6 +281,9 @@ impl Mixer {
                 track
                     .position
                     .fetch_add(filled as u64 / MIXER_CHANNELS as u64, Ordering::Relaxed);
+                track.is_buffering.store(false, Ordering::Release);
+            } else if !track.finished {
+                track.is_buffering.store(true, Ordering::Release);
             }
 
             if track.finished && track.pending.is_empty() && !track.flow.tape.is_active() {

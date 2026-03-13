@@ -68,6 +68,8 @@ pub async fn monitor_loop(ctx: MonitorCtx) {
             if cur_pos != last_pos {
                 last_pos_changed_at = std::time::Instant::now();
                 stuck_fired = false;
+            } else if ctx.handle.is_buffering() {
+                last_pos_changed_at = std::time::Instant::now();
             } else if !stuck_fired {
                 stuck_fired = check_stuck(&ctx, cur_pos, last_pos_changed_at).await;
             }
