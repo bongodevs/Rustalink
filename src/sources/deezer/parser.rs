@@ -5,9 +5,11 @@ use crate::protocol::tracks::{Track, TrackInfo};
 
 impl DeezerSource {
     pub(crate) fn parse_track(&self, json: &Value) -> Option<Track> {
-        let id = json
-            .get("id")
-            .and_then(|v| v.as_str().map(|s| s.to_owned()).or_else(|| v.as_i64().map(|n| n.to_string())))?;
+        let id = json.get("id").and_then(|v| {
+            v.as_str()
+                .map(|s| s.to_owned())
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+        })?;
         let title = json.get("title")?.as_str()?.to_owned();
         let artist = json.get("artist")?.get("name")?.as_str()?.to_owned();
         let duration = json.get("duration")?.as_u64()? * 1000;
@@ -50,7 +52,9 @@ impl DeezerSource {
             .map(|s| s.to_owned())
             .or_else(|| {
                 json.get("md5_image").and_then(|v| v.as_str()).map(|id| {
-                    format!("https://cdn-images.dzcdn.net/images/cover/{id}/1000x1000-000000-80-0-0.jpg")
+                    format!(
+                        "https://cdn-images.dzcdn.net/images/cover/{id}/1000x1000-000000-80-0-0.jpg"
+                    )
                 })
             });
         let uri = json
@@ -106,9 +110,11 @@ impl DeezerSource {
     }
 
     pub(crate) fn parse_recommendation_track(&self, json: &Value) -> Option<Track> {
-        let id = json
-            .get("SNG_ID")
-            .and_then(|v| v.as_str().map(|s| s.to_owned()).or_else(|| v.as_i64().map(|n| n.to_string())))?;
+        let id = json.get("SNG_ID").and_then(|v| {
+            v.as_str()
+                .map(|s| s.to_owned())
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+        })?;
         let title = json.get("SNG_TITLE")?.as_str()?.to_owned();
         let artist = json.get("ART_NAME")?.as_str()?.to_owned();
         let duration = json.get("DURATION")?.as_u64()? * 1000;

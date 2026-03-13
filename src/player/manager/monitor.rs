@@ -38,6 +38,7 @@ pub async fn monitor_loop(ctx: MonitorCtx) {
     let mut last_pos = ctx.handle.get_position();
     let mut last_pos_changed_at = std::time::Instant::now();
     let mut stuck_fired = false;
+    let mut buffering_started_at: Option<std::time::Instant> = None;
 
     loop {
         interval.tick().await;
@@ -67,14 +68,23 @@ pub async fn monitor_loop(ctx: MonitorCtx) {
         if state == PlaybackState::Playing {
             if cur_pos != last_pos {
                 last_pos_changed_at = std::time::Instant::now();
+                buffering_started_at = None;
                 stuck_fired = false;
             } else if ctx.handle.is_buffering() {
-                last_pos_changed_at = std::time::Instant::now();
-            } else if !stuck_fired {
-                stuck_fired = check_stuck(&ctx, cur_pos, last_pos_changed_at).await;
+                if buffering_started_at.is_none() {
+                    buffering_started_at = Some(std::time::Instant::now());
+                }
+            } else {
+                buffering_started_at = None;
+            }
+
+            if !stuck_fired {
+                stuck_fired =
+                    check_stuck(&ctx, cur_pos, last_pos_changed_at, buffering_started_at).await;
             }
         } else {
             last_pos_changed_at = std::time::Instant::now();
+            buffering_started_at = None;
         }
 
         last_pos = cur_pos;
@@ -151,11 +161,14 @@ async fn check_stuck(
     ctx: &MonitorCtx,
     cur_pos: u64,
     last_pos_changed_at: std::time::Instant,
+    buffering_started_at: Option<std::time::Instant>,
 ) -> bool {
-    let effective_threshold = ctx.stuck_threshold_ms;
+    let elapsed_ms = match buffering_started_at {
+        Some(started) => started.elapsed().as_millis() as u64,
+        None => last_pos_changed_at.elapsed().as_millis() as u64,
+    };
 
-    let elapsed_ms = last_pos_changed_at.elapsed().as_millis() as u64;
-    if elapsed_ms >= effective_threshold {
+    if elapsed_ms >= ctx.stuck_threshold_ms {
         ctx.session.send_message(&protocol::OutgoingMessage::Event {
             event: Box::new(RustalinkEvent::TrackStuck {
                 guild_id: ctx.guild_id.clone(),
@@ -167,8 +180,16 @@ async fn check_stuck(
         send_player_update(ctx, cur_pos);
 
         warn!(
-            "[{}] Track stuck: position stalled at {}ms for {}ms (threshold {}ms)",
-            ctx.guild_id, cur_pos, elapsed_ms, ctx.stuck_threshold_ms
+            "[{}] Track stuck: {} stalling for {}ms (threshold {}ms). is_buffering: {}",
+            ctx.guild_id,
+            if buffering_started_at.is_some() {
+                "buffering"
+            } else {
+                "position"
+            },
+            elapsed_ms,
+            ctx.stuck_threshold_ms,
+            buffering_started_at.is_some()
         );
         ctx.handle.stop();
         return true;

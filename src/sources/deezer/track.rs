@@ -372,7 +372,10 @@ pub(super) async fn verify_track_resolvable(
     let rights = results.get("RIGHTS");
     if is_rights_empty(rights)
         && let Some(fallback) = results.get("FALLBACK")
-        && !fallback.get("TRACK_TOKEN").map(|v| v.is_null()).unwrap_or(true)
+        && !fallback
+            .get("TRACK_TOKEN")
+            .map(|v| v.is_null())
+            .unwrap_or(true)
     {
         let fallback_id = fallback.get("SNG_ID").and_then(|v| {
             v.as_str()

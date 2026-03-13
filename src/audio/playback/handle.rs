@@ -41,7 +41,13 @@ impl TrackHandle {
     pub fn new(
         command_tx: flume::Sender<DecoderCommand>,
         tape_stop_enabled: Arc<AtomicBool>,
-    ) -> (Self, Arc<AtomicU8>, Arc<AtomicU32>, Arc<AtomicU64>, Arc<AtomicBool>) {
+    ) -> (
+        Self,
+        Arc<AtomicU8>,
+        Arc<AtomicU32>,
+        Arc<AtomicU64>,
+        Arc<AtomicBool>,
+    ) {
         let state = Arc::new(AtomicU8::new(PlaybackState::Playing as u8));
         let volume = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let position = Arc::new(AtomicU64::new(0));
