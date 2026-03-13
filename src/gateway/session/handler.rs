@@ -451,8 +451,18 @@ impl<'a> SessionState<'a> {
                     self.selected_mode = m;
                 }
 
-                self.start_voice(addr, key).await;
-                
+                if self.speak_task.is_some() {
+                    debug!(
+                        "[{}] Keeping existing voice loop alive across resume",
+                        self.gateway.guild_id
+                    );
+                } else {
+                    debug!(
+                        "[{}] Starting voice loop after resume",
+                        self.gateway.guild_id
+                    );
+                    self.start_voice(addr, key).await;
+                }
             }
             _ => {
                 warn!(
