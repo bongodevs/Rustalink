@@ -382,6 +382,12 @@ pub(super) async fn verify_track_resolvable(
 
         if fallback_id.is_some() {
             results = fallback.clone();
+        } else {
+            tracing::warn!(
+                "DeezerTrack: Track {} has no RIGHTS, but FALLBACK object has unexpected SNG_ID format: {:?}",
+                track_id,
+                fallback.get("SNG_ID")
+            );
         }
     }
 
