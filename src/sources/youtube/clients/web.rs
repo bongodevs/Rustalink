@@ -266,13 +266,7 @@ impl YouTubeClient for WebClient {
         // Web client requires cipher resolution (signatureTimestamp / n-param).
         let signature_timestamp = cipher_manager.get_signature_timestamp().await.ok();
         let body = self
-            .player_request(
-                track_id,
-                visitor_data,
-                signature_timestamp,
-                &oauth,
-                None,
-            )
+            .player_request(track_id, visitor_data, signature_timestamp, &oauth, None)
             .await?;
 
         let playability = body
