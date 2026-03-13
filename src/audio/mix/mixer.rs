@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering},
     },
 };
 
@@ -13,7 +13,7 @@ use crate::{
     audio::{
         AudioFrame,
         buffer::PooledBuffer,
-        constants::{MAX_LAYERS, MIXER_CHANNELS},
+        constants::{MAX_LAYERS, MIXER_CHANNELS, TARGET_SAMPLE_RATE},
         flow::FlowController,
         playback::handle::PlaybackState,
     },
@@ -113,6 +113,7 @@ struct MixerTrack {
     state: Arc<AtomicU8>,
     volume: Arc<AtomicU32>,
     position: Arc<AtomicU64>,
+    is_buffering: Arc<AtomicBool>,
     config: PlayerConfig,
     finished: bool,
 }
@@ -134,11 +135,11 @@ impl Mixer {
         state: Arc<AtomicU8>,
         volume: Arc<AtomicU32>,
         position: Arc<AtomicU64>,
+        is_buffering: Arc<AtomicBool>,
         config: PlayerConfig,
-        sample_rate: u32,
     ) {
         let vol_raw = f32::from_bits(volume.load(Ordering::Acquire));
-        let mut flow = FlowController::for_mixer(rx, sample_rate, MIXER_CHANNELS, vol_raw);
+        let mut flow = FlowController::for_mixer(rx, TARGET_SAMPLE_RATE, MIXER_CHANNELS, vol_raw);
         flow.volume.set_volume_instant(vol_raw);
 
         self.tracks.push(MixerTrack {
@@ -148,6 +149,7 @@ impl Mixer {
             state,
             volume,
             position,
+            is_buffering,
             config,
             finished: false,
         });
@@ -278,6 +280,9 @@ impl Mixer {
                 track
                     .position
                     .fetch_add(filled as u64 / MIXER_CHANNELS as u64, Ordering::Relaxed);
+                track.is_buffering.store(false, Ordering::Release);
+            } else if !track.finished {
+                track.is_buffering.store(true, Ordering::Release);
             }
 
             if track.finished && track.pending.is_empty() && !track.flow.tape.is_active() {

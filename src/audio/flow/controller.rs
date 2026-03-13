@@ -67,24 +67,22 @@ impl FlowController {
             match frame_data {
                 AudioFrame::Pcm(pooled) => {
                     if pooled.is_empty() {
-                        self.decoder_done = true;
-                        crate::audio::buffer::release_buffer(pooled);
-                        break;
+                        self.pending_pcm.clear();
+                        continue;
                     }
+
                     self.pending_pcm.extend_from_slice(&pooled);
-                    crate::audio::buffer::release_buffer(pooled);
 
                     while self.pending_pcm.len() >= FRAME_SIZE_SAMPLES {
                         let mut frame = acquire_buffer(FRAME_SIZE_SAMPLES);
                         frame.extend(self.pending_pcm.drain(..FRAME_SIZE_SAMPLES));
                         self.process_frame(&mut frame);
 
-                        if let Some(tx) = &self.frame_tx
-                            && let Err(e) = tx.send(AudioFrame::Pcm(frame))
+                        if self
+                            .frame_tx
+                            .as_ref()
+                            .is_some_and(|tx| tx.send(AudioFrame::Pcm(frame)).is_err())
                         {
-                            if let AudioFrame::Pcm(buf) = e.0 {
-                                crate::audio::buffer::release_buffer(buf);
-                            }
                             return;
                         }
                     }
@@ -98,25 +96,6 @@ impl FlowController {
                 }
             }
         }
-
-        self.decoder_done = true;
-
-        if !self.pending_pcm.is_empty() {
-            let mut frame = acquire_buffer(FRAME_SIZE_SAMPLES);
-            frame.append(&mut self.pending_pcm);
-            frame.resize(FRAME_SIZE_SAMPLES, 0); // Pad with silence
-            self.process_frame(&mut frame);
-
-            if let Some(tx) = &self.frame_tx {
-                if let Err(e) = tx.send(AudioFrame::Pcm(frame))
-                    && let AudioFrame::Pcm(buf) = e.0
-                {
-                    crate::audio::buffer::release_buffer(buf);
-                }
-            } else {
-                crate::audio::buffer::release_buffer(frame);
-            }
-        }
     }
 
     pub fn try_pop_frame(&mut self) -> Result<Option<PooledBuffer>, AudioError> {
@@ -124,8 +103,8 @@ impl FlowController {
             while self.pending_pcm.len() < FRAME_SIZE_SAMPLES {
                 match self.frame_rx.try_recv() {
                     Ok(AudioFrame::Pcm(chunk)) if chunk.is_empty() => {
-                        self.decoder_done = true;
-                        crate::audio::buffer::release_buffer(chunk);
+                        self.pending_pcm.clear();
+                        self.decoder_done = false;
                     }
                     Ok(AudioFrame::Pcm(chunk)) => {
                         self.pending_pcm.extend_from_slice(&chunk);
@@ -146,13 +125,6 @@ impl FlowController {
         if self.pending_pcm.len() >= FRAME_SIZE_SAMPLES {
             let mut frame = acquire_buffer(FRAME_SIZE_SAMPLES);
             frame.extend(self.pending_pcm.drain(..FRAME_SIZE_SAMPLES));
-            self.process_frame(&mut frame);
-            Ok(Some(frame))
-        } else if self.decoder_done && !self.pending_pcm.is_empty() {
-            // Flush final short frame
-            let mut frame = acquire_buffer(FRAME_SIZE_SAMPLES);
-            frame.append(&mut self.pending_pcm);
-            frame.resize(FRAME_SIZE_SAMPLES, 0); // Pad with silence
             self.process_frame(&mut frame);
             Ok(Some(frame))
         } else if self.decoder_done {

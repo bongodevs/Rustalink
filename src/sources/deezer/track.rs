@@ -103,11 +103,44 @@ impl PlayableTrack for DeezerTrack {
                         continue;
                     }
 
-                    let track_token = match json
-                        .get("results")
-                        .and_then(|r| r.get("TRACK_TOKEN"))
-                        .and_then(|v| v.as_str())
+                    let mut results = match json.get("results") {
+                        Some(r) => r.clone(),
+                        None => {
+                            token_tracker.invalidate_token(tokens.arl_index).await;
+                            retry_count += 1;
+                            continue;
+                        }
+                    };
+
+                    let rights = results.get("RIGHTS");
+                    let mut effective_track_id = track_id.clone();
+                    if is_rights_empty(rights)
+                        && let Some(fallback) = results.get("FALLBACK")
+                        && !fallback.get("TRACK_TOKEN").map(|v| v.is_null()).unwrap_or(true)
                     {
+                        let fallback_id = fallback.get("SNG_ID").and_then(|v| {
+                            v.as_str()
+                                .map(|s| s.to_owned())
+                                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                        });
+
+                        if let Some(id) = fallback_id {
+                            debug!(
+                                "DeezerTrack: Track {} has no RIGHTS, using FALLBACK {}",
+                                track_id, id
+                            );
+                            effective_track_id = id;
+                            results = fallback.clone();
+                        } else {
+                            tracing::warn!(
+                                "DeezerTrack: Track {} has no RIGHTS, but FALLBACK object has unexpected SNG_ID format: {:?}",
+                                track_id,
+                                fallback.get("SNG_ID")
+                            );
+                        }
+                    }
+
+                    let track_token = match results.get("TRACK_TOKEN").and_then(|v| v.as_str()) {
                         Some(t) => t,
                         None => {
                             token_tracker.invalidate_token(tokens.arl_index).await;
@@ -171,7 +204,7 @@ impl PlayableTrack for DeezerTrack {
                         .and_then(|u| u.as_str());
 
                     if let Some(url) = url_opt {
-                        break Some(format!("deezer_encrypted:{track_id}:{url}"));
+                        break Some(format!("deezer_encrypted:{effective_track_id}:{url}"));
                     } else {
                         token_tracker.invalidate_token(tokens.arl_index).await;
                         retry_count += 1;
@@ -327,9 +360,42 @@ pub(super) async fn verify_track_resolvable(
         return None;
     }
 
-    let track_token = json
-        .get("results")
-        .and_then(|r| r.get("TRACK_TOKEN"))
+    let mut results = match json.get("results") {
+        Some(r) => r.clone(),
+        None => {
+            token_tracker.invalidate_token(tokens.arl_index).await;
+            return None;
+        }
+    };
+
+    // If main track has no RIGHTS, use FALLBACK track if available
+    let rights = results.get("RIGHTS");
+    if is_rights_empty(rights)
+        && let Some(fallback) = results.get("FALLBACK")
+        && !fallback
+            .get("TRACK_TOKEN")
+            .map(|v| v.is_null())
+            .unwrap_or(true)
+    {
+        let fallback_id = fallback.get("SNG_ID").and_then(|v| {
+            v.as_str()
+                .map(|s| s.to_owned())
+                .or_else(|| v.as_i64().map(|n| n.to_string()))
+        });
+
+        if fallback_id.is_some() {
+            results = fallback.clone();
+        } else {
+            tracing::warn!(
+                "DeezerTrack: Track {} has no RIGHTS, but FALLBACK object has unexpected SNG_ID format: {:?}",
+                track_id,
+                fallback.get("SNG_ID")
+            );
+        }
+    }
+
+    let track_token = results
+        .get("TRACK_TOKEN")
         .and_then(|v| v.as_str())?
         .to_owned();
 
@@ -375,4 +441,15 @@ pub(super) async fn verify_track_resolvable(
         .and_then(|s| s.get("url"))
         .and_then(|u| u.as_str())
         .map(|s| s.to_owned())
+}
+
+fn is_rights_empty(rights: Option<&serde_json::Value>) -> bool {
+    rights
+        .map(|v| {
+            v.as_array()
+                .map(|a| a.is_empty())
+                .or_else(|| v.as_object().map(|o| o.is_empty()))
+                .unwrap_or(true)
+        })
+        .unwrap_or(true)
 }

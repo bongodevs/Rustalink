@@ -63,7 +63,12 @@ pub fn init(config: &LoggingConfig) {
             let _ = fs::create_dir_all(parent);
         }
 
-        let writer = CircularFileWriter::new(file_config.path.clone(), file_config.max_lines);
+        let writer = CircularFileWriter::new(
+            file_config.path.clone(),
+            file_config.max_lines,
+            file_config.max_files,
+            file_config.rotate_daily,
+        );
         let _ = GLOBAL_FILE_WRITER.set(writer.clone());
 
         fmt::layer()

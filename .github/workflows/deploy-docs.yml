@@ -1,4 +1,4 @@
-name: Deploy VitePress site to Pages
+name: Deploy Astro site to Pages
 
 on:
   push:
@@ -26,23 +26,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - name: Install, build, and upload your site
+        uses: withastro/action@v5
         with:
-          bun-version: latest
-
-      - name: Install dependencies
-        working-directory: docs
-        run: bun install
-
-      - name: Build with VitePress
-        working-directory: docs
-        run: bun run docs:build
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs/.vitepress/dist
+          path: ./docs
+          package-manager: bun
+          node-version: 22
 
   deploy:
     environment:

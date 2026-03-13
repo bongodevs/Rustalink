@@ -34,16 +34,24 @@ pub struct TrackHandle {
     position: Arc<AtomicU64>, // position in samples
     command_tx: flume::Sender<DecoderCommand>,
     tape_stop_enabled: Arc<AtomicBool>,
+    is_buffering: Arc<AtomicBool>,
 }
 
 impl TrackHandle {
     pub fn new(
         command_tx: flume::Sender<DecoderCommand>,
         tape_stop_enabled: Arc<AtomicBool>,
-    ) -> (Self, Arc<AtomicU8>, Arc<AtomicU32>, Arc<AtomicU64>) {
+    ) -> (
+        Self,
+        Arc<AtomicU8>,
+        Arc<AtomicU32>,
+        Arc<AtomicU64>,
+        Arc<AtomicBool>,
+    ) {
         let state = Arc::new(AtomicU8::new(PlaybackState::Playing as u8));
         let volume = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let position = Arc::new(AtomicU64::new(0));
+        let is_buffering = Arc::new(AtomicBool::new(false));
 
         (
             Self {
@@ -52,10 +60,12 @@ impl TrackHandle {
                 position: position.clone(),
                 command_tx,
                 tape_stop_enabled,
+                is_buffering: is_buffering.clone(),
             },
             state,
             volume,
             position,
+            is_buffering,
         )
     }
 
@@ -102,6 +112,10 @@ impl TrackHandle {
     pub fn get_position(&self) -> u64 {
         let samples = self.position.load(Ordering::Acquire);
         (samples * 1000) / OPUS_SAMPLE_RATE
+    }
+
+    pub fn is_buffering(&self) -> bool {
+        self.is_buffering.load(Ordering::Acquire)
     }
 
     pub fn seek(&self, position_ms: u64) {

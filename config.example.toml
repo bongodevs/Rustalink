@@ -2,7 +2,7 @@
 address = "0.0.0.0"
 port = 2333
 authorization = "youshallnotpass"
-player_update_interval = 100      # ms
+player_update_interval = 5        # seconds
 stats_interval = 30               # seconds
 websocket_ping_interval = 20      # seconds
 max_event_queue_size = 100
@@ -52,6 +52,8 @@ filters = "rustalink=debug" # e.g. "rustalink=debug,davey=off"
 [logging.file]
 path = "./logs/rustalink.log"
 max_lines = 10000
+rotate_daily = false  # when true, creates rustalink-YYYY-MM-DD.log each day
+max_files = 7         # max daily log files to keep (0 = unlimited, only applies when rotate_daily = true)
 
 [route_planner]
 enabled = false
