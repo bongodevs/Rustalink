@@ -89,7 +89,8 @@ impl JioSaavnSource {
                 ("pids", &pids_str),
             ];
 
-            if let Some(details_json) = get_json(&self.client, &self.api_url, &details_params).await {
+            if let Some(details_json) = get_json(&self.client, &self.api_url, &details_params).await
+            {
                 for track in &mut tracks {
                     if let Some(detail) = details_json.get(&track.info.identifier) {
                         if let Some(duration) = detail

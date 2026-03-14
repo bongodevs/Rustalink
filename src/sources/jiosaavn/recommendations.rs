@@ -31,11 +31,13 @@ impl JioSaavnSource {
             ("entity_type", "queue"),
         ];
 
-        let station_id = get_json(&self.client, &self.api_url, &params).await.and_then(|json| {
-            json.get("stationid")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_owned())
-        });
+        let station_id = get_json(&self.client, &self.api_url, &params)
+            .await
+            .and_then(|json| {
+                json.get("stationid")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_owned())
+            });
 
         if let Some(sid) = station_id {
             let k_limit = self.recommendations_limit.to_string();

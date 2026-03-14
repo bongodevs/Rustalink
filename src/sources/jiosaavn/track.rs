@@ -66,26 +66,37 @@ impl PlayableTrack for JioSaavnTrack {
 
             loop {
                 attempt += 1;
-                
-                let reader = match super::reader::JioSaavnReader::new(&url, local_addr, proxy.clone()) {
-                    Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                    Err(e) => {
-                        error!("Failed to create JioSaavnReader for {url}: {e}");
-                        let _ = err_tx.send(format!("Failed to open stream: {e}"));
-                        return;
-                    }
-                };
 
-                match AudioProcessor::new(reader, kind, tx.clone(), cmd_rx.clone(), Some(err_tx.clone()), config.clone()) {
+                let reader =
+                    match super::reader::JioSaavnReader::new(&url, local_addr, proxy.clone()) {
+                        Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
+                        Err(e) => {
+                            error!("Failed to create JioSaavnReader for {url}: {e}");
+                            let _ = err_tx.send(format!("Failed to open stream: {e}"));
+                            return;
+                        }
+                    };
+
+                match AudioProcessor::new(
+                    reader,
+                    kind,
+                    tx.clone(),
+                    cmd_rx.clone(),
+                    Some(err_tx.clone()),
+                    config.clone(),
+                ) {
                     Ok(mut processor) => {
                         let thread_url = url.clone();
                         if let Err(e) = std::thread::Builder::new()
                             .name(format!("jiosaavn-decoder-{}", url))
                             .spawn(move || {
                                 if let Err(e) = processor.run() {
-                                    error!("JioSaavn audio processor error for {}: {}", thread_url, e);
+                                    error!(
+                                        "JioSaavn audio processor error for {}: {}",
+                                        thread_url, e
+                                    );
                                 }
-                            }) 
+                            })
                         {
                             error!("JioSaavn: failed to spawn decoder thread: {e}");
                             let _ = err_tx.send(format!("Failed to spawn decoder thread: {e}"));
@@ -93,7 +104,10 @@ impl PlayableTrack for JioSaavnTrack {
                         return;
                     }
                     Err(e) if attempt < MAX_ATTEMPTS => {
-                        warn!("JioSaavn: processor init failed for {} (attempt {}): {} — retrying without format hint", url, attempt, e);
+                        warn!(
+                            "JioSaavn: processor init failed for {} (attempt {}): {} — retrying without format hint",
+                            url, attempt, e
+                        );
                         kind = None;
                         continue;
                     }

@@ -159,7 +159,6 @@ impl PlayableTrack for DeezerTrack {
     }
 }
 
-
 async fn resolve_cdn_url(
     client: &Arc<reqwest::Client>,
     token_tracker: &Arc<DeezerTokenTracker>,
@@ -177,7 +176,10 @@ async fn resolve_cdn_url(
         .post(&song_url)
         .header(
             "Cookie",
-            format!("sid={}; dzr_uniq_id={}", tokens.session_id, tokens.dzr_uniq_id),
+            format!(
+                "sid={}; dzr_uniq_id={}",
+                tokens.session_id, tokens.dzr_uniq_id
+            ),
         )
         .json(&serde_json::json!({ "sng_id": track_id }))
         .send()
@@ -213,7 +215,10 @@ async fn resolve_cdn_url(
     let rights = results.get("RIGHTS");
     if is_rights_empty(rights)
         && let Some(fallback) = results.get("FALLBACK")
-        && !fallback.get("TRACK_TOKEN").map(|v| v.is_null()).unwrap_or(true)
+        && !fallback
+            .get("TRACK_TOKEN")
+            .map(|v| v.is_null())
+            .unwrap_or(true)
     {
         let fallback_id = fallback.get("SNG_ID").and_then(|v| {
             v.as_str()
@@ -232,7 +237,15 @@ async fn resolve_cdn_url(
     }
 
     let track_token = results.get("TRACK_TOKEN").and_then(|v| v.as_str())?;
-    fetch_media_url(client, token_tracker, &tokens, track_token, track_id, arl_index).await
+    fetch_media_url(
+        client,
+        token_tracker,
+        &tokens,
+        track_token,
+        track_id,
+        arl_index,
+    )
+    .await
 }
 
 async fn fetch_media_url(
@@ -317,7 +330,10 @@ pub(super) async fn verify_track_resolvable(
         .post(&song_url)
         .header(
             "Cookie",
-            format!("sid={}; dzr_uniq_id={}", tokens.session_id, tokens.dzr_uniq_id),
+            format!(
+                "sid={}; dzr_uniq_id={}",
+                tokens.session_id, tokens.dzr_uniq_id
+            ),
         )
         .json(&serde_json::json!({ "sng_id": track_id }))
         .send()

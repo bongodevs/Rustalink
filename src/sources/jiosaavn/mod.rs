@@ -59,10 +59,20 @@ impl JioSaavnSource {
                 c.album_load_limit,
                 c.artist_load_limit,
                 c.proxy,
-                c.api_url.unwrap_or_else(|| "https://www.jiosaavn.com/api.php".to_owned()),
+                c.api_url
+                    .unwrap_or_else(|| "https://www.jiosaavn.com/api.php".to_owned()),
             )
         } else {
-            ("38346591".to_owned(), 10, 10, 50, 50, 20, None, "https://www.jiosaavn.com/api.php".to_owned())
+            (
+                "38346591".to_owned(),
+                10,
+                10,
+                50,
+                50,
+                20,
+                None,
+                "https://www.jiosaavn.com/api.php".to_owned(),
+            )
         };
 
         Ok(Self {

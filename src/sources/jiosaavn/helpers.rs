@@ -1,10 +1,13 @@
 use serde_json::Value;
 use tracing::warn;
 
-
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36";
 
-pub async fn get_json(client: &reqwest::Client, api_url: &str, params: &[(&str, &str)]) -> Option<Value> {
+pub async fn get_json(
+    client: &reqwest::Client,
+    api_url: &str,
+    params: &[(&str, &str)],
+) -> Option<Value> {
     let resp = match client
         .get(api_url)
         .header("User-Agent", USER_AGENT)

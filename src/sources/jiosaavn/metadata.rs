@@ -18,12 +18,14 @@ impl JioSaavnSource {
             ("token", id),
             ("type", "song"),
         ];
-        get_json(&self.client, &self.api_url, &params).await.and_then(|json| {
-            json.get("songs")
-                .and_then(|s| s.get(0))
-                .cloned()
-                .or_else(|| (json.get("id").is_some()).then_some(json))
-        })
+        get_json(&self.client, &self.api_url, &params)
+            .await
+            .and_then(|json| {
+                json.get("songs")
+                    .and_then(|s| s.get(0))
+                    .cloned()
+                    .or_else(|| (json.get("id").is_some()).then_some(json))
+            })
     }
 
     pub async fn resolve_list(&self, type_: &str, id: &str) -> LoadResult {
