@@ -11,6 +11,9 @@ pub mod yt_ua {
          AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
     pub const WEB_EMBEDDED: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
          (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
+    pub const TVHTML5_SIMPLY: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+         (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
+    pub const TVHTML5_UNPLUGGED: &str = "Mozilla/5.0 (Linux armeabi-v7a; Android 7.1.2; Fire OS 6.0) Cobalt/22.lts.3.306369-gold (unlike Gecko) v8/8.8.278.8-jit gles Starboard/13, Amazon_ATV_mediatek8695_2019/NS6294 (Amazon, AFTMM, Wireless) com.amazon.firetv.youtube/22.3.r2.v66.0";
 }
 
 pub fn get_youtube_ua(url: &str) -> Option<&'static str> {
@@ -25,6 +28,8 @@ pub fn get_youtube_ua(url: &str) -> Option<&'static str> {
         "TVHTML5" => Some(yt_ua::TVHTML5),
         "MWEB" => Some(yt_ua::MWEB),
         "WEB_EMBEDDED_PLAYER" => Some(yt_ua::WEB_EMBEDDED),
+        "TVHTML5_SIMPLY" => Some(yt_ua::TVHTML5_SIMPLY),
+        "TVHTML5_UNPLUGGED" => Some(yt_ua::TVHTML5_UNPLUGGED),
         _ => None,
     })
 }

@@ -114,14 +114,24 @@ async fn handle_playback_stopped(ctx: &MonitorCtx) {
     let reason = match ctx.err_rx.try_recv() {
         Ok(err) => {
             warn!("[{}] mid-playback decoder error: {}", ctx.guild_id, err);
+
+            let message = if err.contains("This video ") || err.contains("This is a private video")
+            {
+                err.clone()
+            } else {
+                "Something went wrong when decoding the track.".to_string()
+            };
+
+            let short_cause = crate::common::utils::shorten_error_cause(&err);
+
             ctx.session.send_message(&protocol::OutgoingMessage::Event {
                 event: Box::new(RustalinkEvent::TrackException {
                     guild_id: ctx.guild_id.clone(),
                     track: ctx.track.clone(),
                     exception: TrackException {
-                        message: Some(err.clone()),
+                        message: Some(message),
                         severity: crate::common::Severity::Fault,
-                        cause: err.clone(),
+                        cause: short_cause,
                         cause_stack_trace: Some(err),
                     },
                 }),

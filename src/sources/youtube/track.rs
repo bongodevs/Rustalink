@@ -49,6 +49,7 @@ impl PlayableTrack for YoutubeTrack {
             'playback_loop: loop {
                 // Resolve a playback URL using any available client.
                 let mut resolved_url: Option<(String, String)> = None;
+                let mut last_playability_error: Option<String> = None;
 
                 for (idx, client) in clients_async.iter().enumerate().skip(current_client_index) {
                     current_client_index = idx;
@@ -86,6 +87,13 @@ impl PlayableTrack for YoutubeTrack {
                                 "YoutubeTrack: client {} failed to resolve {}: {}",
                                 client_name, identifier_async, e
                             );
+                            let err_str = e.to_string();
+                            if err_str.contains("This video ")
+                                || err_str.contains("This is a private video")
+                                || err_str.contains("This trailer cannot be loaded")
+                            {
+                                last_playability_error = Some(err_str);
+                            }
                         }
                     }
                 }
@@ -93,10 +101,14 @@ impl PlayableTrack for YoutubeTrack {
                 let (url, client_name) = match resolved_url {
                     Some(r) => r,
                     None => {
-                        let msg = format!(
-                            "YoutubeTrack: All clients failed to resolve '{}'",
-                            identifier_async
-                        );
+                        let msg = if let Some(playability_err) = last_playability_error {
+                            playability_err
+                        } else {
+                            format!(
+                                "YoutubeTrack: All clients failed to resolve '{}'",
+                                identifier_async
+                            )
+                        };
                         error!("{}", msg);
                         let _ = err_tx.send(msg);
                         return;

@@ -66,9 +66,9 @@ enabled = true
 get_oauth_token = false
 
 [sources.youtube.clients]
-search = ["MUSIC_ANDROID", "MUSIC_WEB", "ANDROID", "WEB"]
+search = ["TVHTML5_SIMPLY", "MUSIC_ANDROID", "MUSIC_WEB", "ANDROID", "WEB"]
 playback = ["ANDROID_VR", "TV_CAST", "WEB_EMBEDDED", "TV", "WEB", "IOS"]
-resolve = ["WEB", "IOS", "MUSIC_WEB", "ANDROID", "TVHTML5_SIMPLY"]
+resolve = ["TVHTML5_SIMPLY", "TVHTML5_UNPLUGGED", "WEB", "IOS", "MUSIC_WEB", "ANDROID"]
 
 [sources.youtube.cipher]
 url = "https://cipher.kikkia.dev/"
