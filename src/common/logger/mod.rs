@@ -45,6 +45,8 @@ pub fn append_to_file_raw(msg: &str) {
 
 /// Initializes the global logger with the provided configuration.
 pub fn init(config: &LoggingConfig) {
+    let _ = tracing_log::LogTracer::init();
+
     let log_level = config.level.as_deref().unwrap_or("info");
     let filter_str = match config.filters.as_deref() {
         Some(f) if !f.is_empty() => format!("{log_level},{f}"),
@@ -77,9 +79,9 @@ pub fn init(config: &LoggingConfig) {
             .with_ansi(false)
     });
 
-    tracing_subscriber::registry()
+    let _ = tracing_subscriber::registry()
         .with(env_filter)
         .with(stdout_layer)
         .with(file_layer)
-        .init();
+        .try_init();
 }

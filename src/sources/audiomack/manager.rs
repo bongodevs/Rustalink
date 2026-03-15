@@ -12,7 +12,7 @@ use tracing::{error, warn};
 use super::{track::AudiomackTrack, utils::build_auth_header};
 use crate::{
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::plugin::{PlayableTrack, SourcePlugin},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 const API_BASE: &str = "https://api.audiomack.com/v1";
@@ -526,7 +526,7 @@ impl SourcePlugin for AudiomackSource {
         &self,
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<Box<dyn PlayableTrack>> {
+    ) -> Option<BoxedTrack> {
         let mut track_id = identifier.to_owned();
 
         if SONG_REGEX
@@ -552,7 +552,7 @@ impl SourcePlugin for AudiomackSource {
             return None;
         }
 
-        Some(Box::new(AudiomackTrack {
+        Some(Arc::new(AudiomackTrack {
             stream_url: stream_url.unwrap(),
             local_addr,
         }))

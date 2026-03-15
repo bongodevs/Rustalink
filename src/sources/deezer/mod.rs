@@ -16,7 +16,7 @@ use track::DeezerTrack;
 
 use crate::{
     protocol::tracks::LoadResult,
-    sources::{SourcePlugin, plugin::PlayableTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 const PUBLIC_API_BASE: &str = "https://api.deezer.com";
@@ -210,7 +210,7 @@ impl SourcePlugin for DeezerSource {
         &self,
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<Box<dyn PlayableTrack>> {
+    ) -> Option<BoxedTrack> {
         let track_id = if let Some(caps) = url_regex().captures(identifier) {
             caps.name("id").map(|m| m.as_str())?.to_owned()
         } else {
@@ -225,7 +225,7 @@ impl SourcePlugin for DeezerSource {
             return None;
         }
 
-        Some(Box::new(DeezerTrack {
+        Some(Arc::new(DeezerTrack {
             client: self.client.clone(),
             track_id,
             token_tracker: self.token_tracker.clone(),

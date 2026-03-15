@@ -3,15 +3,13 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use async_trait::async_trait;
 use regex::Regex;
-use tracing::{debug, error};
+use tracing::debug;
 
-use crate::{
-    audio::{AudioFrame, processor::DecoderCommand},
-    sources::{
-        http::HttpTrack,
-        plugin::{DecoderOutput, PlayableTrack},
-    },
+use crate::sources::{
+    http::HttpTrack,
+    playable_track::{PlayableTrack, ResolvedTrack},
 };
 
 pub struct BandcampTrack {
@@ -23,68 +21,26 @@ pub struct BandcampTrack {
 
 pub static STREAM_PATTERN: OnceLock<Regex> = OnceLock::new();
 
+#[async_trait]
 impl PlayableTrack for BandcampTrack {
-    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
-        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
-        let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
-        let (err_tx, err_rx) = flume::bounded::<String>(1);
+    async fn resolve(&self) -> Result<ResolvedTrack, String> {
+        let url = if let Some(url) = self.stream_url.clone() {
+            url
+        } else {
+            fetch_stream_url(&self.client, &self.uri)
+                .await
+                .ok_or_else(|| format!("Failed to fetch Bandcamp stream URL for {}", self.uri))?
+        };
 
-        let uri = self.uri.clone();
-        let client = self.client.clone();
-        let stream_url = self.stream_url.clone();
-        let local_addr = self.local_addr;
+        debug!("Bandcamp stream URL: {url}");
 
-        tokio::spawn(async move {
-            let final_stream_url = if let Some(url) = stream_url {
-                Some(url)
-            } else {
-                fetch_stream_url(&client, &uri).await
-            };
-
-            match final_stream_url {
-                Some(url) => {
-                    debug!("Bandcamp stream URL: {url}");
-                    let http_track = HttpTrack {
-                        url,
-                        local_addr,
-                        proxy: None,
-                    };
-                    let (inner_rx, inner_cmd_tx, inner_err_rx) =
-                        http_track.start_decoding(config.clone());
-
-                    // Proxy commands
-                    let inner_cmd_tx_clone = inner_cmd_tx.clone();
-                    tokio::spawn(async move {
-                        while let Ok(cmd) = cmd_rx.recv_async().await {
-                            if inner_cmd_tx_clone.send(cmd).is_err() {
-                                break;
-                            }
-                        }
-                    });
-
-                    // Proxy errors
-                    let err_tx_clone = err_tx.clone();
-                    tokio::spawn(async move {
-                        while let Ok(err) = inner_err_rx.recv_async().await {
-                            let _ = err_tx_clone.send(err);
-                        }
-                    });
-
-                    // Proxy samples
-                    while let Ok(sample) = inner_rx.recv_async().await {
-                        if tx.send(sample).is_err() {
-                            break;
-                        }
-                    }
-                }
-                None => {
-                    error!("Failed to fetch Bandcamp stream URL for {uri}");
-                    let _ = err_tx.send("Failed to fetch stream URL".to_owned());
-                }
-            }
-        });
-
-        (rx, cmd_tx, err_rx)
+        HttpTrack {
+            url,
+            local_addr: self.local_addr,
+            proxy: None,
+        }
+        .resolve()
+        .await
     }
 }
 

@@ -1,9 +1,10 @@
 // Core management and traits
 pub mod manager;
 pub mod plugin;
+pub mod playable_track;
 
 pub use manager::SourceManager;
-pub use plugin::{BoxedSource, BoxedTrack, SourcePlugin};
+pub use plugin::{SourcePlugin};
 
 // Individual source implementations
 pub mod amazonmusic;

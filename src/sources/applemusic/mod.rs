@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use token::AppleMusicTokenTracker;
 
-use crate::{protocol::tracks::LoadResult, sources::SourcePlugin};
+use crate::{protocol::tracks::LoadResult, sources::{SourcePlugin, playable_track::BoxedTrack}};
 
 const API_BASE: &str = "https://api.music.apple.com/v1";
 
@@ -140,7 +140,7 @@ impl SourcePlugin for AppleMusicSource {
         &self,
         _identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<crate::sources::plugin::BoxedTrack> {
+    ) -> Option<BoxedTrack> {
         None
     }
 }

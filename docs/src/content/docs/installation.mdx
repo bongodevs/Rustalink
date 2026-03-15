@@ -1,0 +1,154 @@
+---
+title: Installation
+description: Install Rustalink on Linux, macOS, or Windows with all required build dependencies.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Install Rustalink from source using the commands for your operating system.
+
+## System Setup
+
+<Tabs>
+	<TabItem label="Linux (Ubuntu/Debian)">
+		```bash
+		# System dependencies used in CI builds
+		sudo apt-get update
+		sudo apt-get install -y \
+			cmake \
+			pkg-config \
+			libclang-dev \
+			clang \
+			git \
+			build-essential \
+			perl
+
+		# Install Rust stable toolchain
+		curl https://sh.rustup.rs -sSf | sh -s -- -y
+		source "$HOME/.cargo/env"
+
+		# Build Rustalink
+		cargo build --release --locked
+		```
+
+		Optional cross-compile dependencies for Linux ARM64:
+
+		```bash
+		sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+		rustup target add aarch64-unknown-linux-gnu
+		export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+		cargo build --release --locked --target aarch64-unknown-linux-gnu
+		```
+	</TabItem>
+
+	<TabItem label="macOS">
+		```bash
+		# Apple command-line tools
+		xcode-select --install
+
+		# Dependencies used in CI builds
+		brew install cmake pkg-config
+
+		# Install Rust stable toolchain
+		curl https://sh.rustup.rs -sSf | sh -s -- -y
+		source "$HOME/.cargo/env"
+
+		# Build Rustalink
+		cargo build --release --locked
+		```
+
+		Optional target setup for Apple Silicon / Intel cross-target builds:
+
+		```bash
+		rustup target add x86_64-apple-darwin aarch64-apple-darwin
+		```
+	</TabItem>
+
+	<TabItem label="Windows">
+		### 1. Install required tools
+
+		Install dependencies using `winget`:
+
+		```powershell
+		winget install --id Git.Git --exact
+		winget install --id Kitware.CMake --exact
+		winget install --id Rustlang.Rustup --exact
+		winget install --id Microsoft.VisualStudio.2022.BuildTools --exact
+		```
+
+		### 2. Install C++ build tools (required for Rust MSVC)
+
+		Rust on Windows uses the MSVC toolchain, which requires the Microsoft C++ compiler and linker (`link.exe`).
+
+		Open Visual Studio Installer from the Start Menu.
+
+		Locate **Build Tools for Visual Studio 2022**.
+
+		Click **Modify**.
+
+		Select the workload:
+
+		Desktop development with C++
+
+		Ensure the following components are checked:
+
+		- MSVC v143 - VS 2022 C++ x64/x86 build tools
+		- Windows 10/11 SDK
+
+		These provide:
+
+		- `cl.exe` (MSVC compiler)
+		- `link.exe` (required by Rust)
+		- Windows headers and libraries
+
+		Without these components, builds will fail with:
+
+		```text
+		error: linker `link.exe` not found
+		```
+
+		### 3. Fix CMake policy compatibility (CMake 4.x)
+
+		Recent versions of CMake 4.x removed compatibility with very old policy versions used by some crates.
+
+		Set this environment variable once to avoid build failures from dependencies such as `audiopus_sys`:
+
+		```powershell
+		setx CMAKE_POLICY_VERSION_MINIMUM 3.5
+		```
+
+		Restart your terminal after running this command.
+
+		### 4. Install Rust toolchain
+
+		```powershell
+		rustup default stable-x86_64-pc-windows-msvc
+		```
+
+		Verify installation:
+
+		```powershell
+		rustc --version
+		cargo --version
+		```
+
+		### 5. Build Rustalink
+
+		```powershell
+		cargo build --release --locked
+		```
+
+		Optional Windows ARM64 target:
+
+		```powershell
+		rustup target add aarch64-pc-windows-msvc
+		cargo build --release --locked --target aarch64-pc-windows-msvc
+		```
+	</TabItem>
+</Tabs>
+
+## Next Steps
+
+1. Copy the sample config and adjust values for your environment.
+2. Start Rustalink with your preferred runtime method.
+3. See Docker and Pterodactyl pages if you prefer containerized deployment.

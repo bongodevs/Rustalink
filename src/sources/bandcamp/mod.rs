@@ -7,7 +7,7 @@ use tracing::error;
 
 use crate::{
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::{SourcePlugin, plugin::BoxedTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 pub mod track;
@@ -313,7 +313,7 @@ impl SourcePlugin for BandcampSource {
         let (_, stream_url_opt) = self.fetch_track_data(&url).await?;
         let stream_url = stream_url_opt?;
 
-        Some(Box::new(track::BandcampTrack {
+        Some(Arc::new(track::BandcampTrack {
             client: self.client.clone(),
             uri: url,
             stream_url: Some(stream_url),

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use tracing::error;
+
 use crate::{
-    audio::{
-        AudioFrame,
-        processor::{AudioProcessor, DecoderCommand},
-    },
-    sources::plugin::{DecoderOutput, PlayableTrack},
+    common::types::AudioFormat,
+    sources::playable_track::{PlayableTrack, ResolvedTrack},
 };
 
 pub struct MixcloudTrack {
@@ -16,97 +16,55 @@ pub struct MixcloudTrack {
     pub local_addr: Option<std::net::IpAddr>,
 }
 
+#[async_trait]
 impl PlayableTrack for MixcloudTrack {
-    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
-        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
-        let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
-        let (err_tx, err_rx) = flume::bounded::<String>(1);
+    async fn resolve(&self) -> Result<ResolvedTrack, String> {
+        let (hls_url, stream_url) = if self.hls_url.is_some() || self.stream_url.is_some() {
+            (self.hls_url.clone(), self.stream_url.clone())
+        } else {
+            let (enc_hls, enc_url) = super::fetch_track_stream_info(&self.client, &self.uri)
+                .await
+                .unwrap_or((None, None));
+            (
+                enc_hls.map(|s| super::decrypt(&s)),
+                enc_url.map(|s| super::decrypt(&s)),
+            )
+        };
 
-        let uri = self.uri.clone();
-        let client = self.client.clone();
-        let hls_url_opt = self.hls_url.clone();
-        let stream_url_opt = self.stream_url.clone();
         let local_addr = self.local_addr;
+        let uri        = self.uri.clone();
 
-        tokio::spawn(async move {
-            let (hls_url, stream_url) = if hls_url_opt.is_some() || stream_url_opt.is_some() {
-                (hls_url_opt, stream_url_opt)
-            } else {
-                let (enc_hls, enc_url) = super::fetch_track_stream_info(&client, &uri)
-                    .await
-                    .unwrap_or((None, None));
-                (
-                    enc_hls.map(|s| super::decrypt(&s)),
-                    enc_url.map(|s| super::decrypt(&s)),
-                )
-            };
+        if let Some(url) = hls_url {
+            crate::sources::youtube::hls::HlsReader::new(&url, local_addr, None, None, None)
+                .await
+                .map(|r| ResolvedTrack::new(
+                    Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
+                    Some(AudioFormat::Aac),
+                ))
+                .map_err(|e| {
+                    error!("Mixcloud HlsReader failed to initialize: {e}");
+                    format!("Failed to init HLS reader: {e}")
+                })
+        } else if let Some(url) = stream_url {
+            let hint = std::path::Path::new(&url)
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(AudioFormat::from_ext)
+                .or(Some(AudioFormat::Mp4));
 
-            let err_tx_for_setup = err_tx.clone();
-            let setup_res = tokio::task::spawn_blocking(move || {
-                let (reader, kind) = if let Some(url) = hls_url {
-                    match crate::sources::youtube::hls::HlsReader::new(
-                        &url, local_addr, None, None, None,
-                    ) {
-                        Ok(r) => (
-                            Some(Box::new(r) as Box<dyn symphonia::core::io::MediaSource>),
-                            Some(crate::common::types::AudioFormat::Aac),
-                        ),
-                        Err(e) => {
-                            tracing::error!("Mixcloud HlsReader failed to initialize: {e}");
-                            (None, None)
-                        }
-                    }
-                } else if let Some(url) = stream_url {
-                    match super::reader::MixcloudReader::new(&url, local_addr) {
-                        Ok(r) => (
-                            Some(Box::new(r) as Box<dyn symphonia::core::io::MediaSource>),
-                            std::path::Path::new(&url)
-                                .extension()
-                                .and_then(|s| s.to_str())
-                                .map(crate::common::types::AudioFormat::from_ext)
-                                .or(Some(crate::common::types::AudioFormat::Mp4)),
-                        ),
-                        Err(e) => {
-                            tracing::error!("MixcloudReader failed to initialize: {e}");
-                            (None, None)
-                        }
-                    }
-                } else {
-                    (None, None)
-                };
-
-                if let Some(r) = reader {
-                    AudioProcessor::new(r, kind, tx, cmd_rx, Some(err_tx_for_setup), config)
-                        .map_err(|e| e.to_string())
-                } else {
-                    Err("Mixcloud: failed to create reader".to_string())
-                }
-            })
-            .await
-            .expect("failed to spawn mixcloud setup task");
-
-            match setup_res {
-                Ok(mut processor) => {
-                    std::thread::Builder::new()
-                        .name(format!("mixcloud-decoder-{}", uri))
-                        .spawn(move || {
-                            if let Err(e) = processor.run() {
-                                tracing::error!(
-                                    "Mixcloud audio processor error for {}: {}",
-                                    uri,
-                                    e
-                                );
-                            }
-                        })
-                        .expect("failed to spawn mixcloud decoder thread");
-                }
-                Err(e) => {
-                    tracing::error!("Mixcloud failed to initialize processor for {}: {}", uri, e);
-                    let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
-                }
-            }
-        });
-
-        (rx, cmd_tx, err_rx)
+            super::reader::MixcloudReader::new(&url, local_addr)
+                .await
+                .map(|r| ResolvedTrack::new(
+                    Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
+                    hint,
+                ))
+                .map_err(|e| {
+                    error!("MixcloudReader failed to initialize: {e}");
+                    format!("Failed to init reader: {e}")
+                })
+        } else {
+            error!("Mixcloud: no stream URL available for {uri}");
+            Err(format!("No stream URL available for {uri}"))
+        }
     }
 }

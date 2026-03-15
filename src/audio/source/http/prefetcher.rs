@@ -97,14 +97,13 @@ fn interruptible_sleep(shared: &Arc<(Mutex<SharedState>, Condvar)>, total_ms: u6
     false
 }
 
-pub fn prefetch_loop(
+pub async fn prefetch_loop(
     shared: Arc<(Mutex<SharedState>, Condvar)>,
     client: reqwest::Client,
     url: String,
     mut current_pos: u64,
     mut response: Option<reqwest::Response>,
     total_len: Option<u64>,
-    handle: tokio::runtime::Handle,
 ) {
     let mut retry_count: u32 = 0;
 
@@ -141,7 +140,7 @@ pub fn prefetch_loop(
                 let mut leftover: Option<Bytes> = None;
                 let res = response.take().unwrap();
 
-                let skip_result = handle.block_on(async {
+                let skip_result = async {
                     let mut res = res;
                     let mut remaining = forward;
                     while remaining > 0 {
@@ -158,7 +157,7 @@ pub fn prefetch_loop(
                         }
                     }
                     Ok(res)
-                });
+                }.await;
 
                 match skip_result {
                     Ok(r) => {
@@ -185,7 +184,7 @@ pub fn prefetch_loop(
         }
 
         if response.is_none() {
-            match handle.block_on(HttpSource::fetch_stream(&client, &url, current_pos, None)) {
+            match HttpSource::fetch_stream(&client, &url, current_pos, None).await {
                 Ok(r) => {
                     response = Some(r);
                     retry_count = 0;
@@ -246,7 +245,7 @@ pub fn prefetch_loop(
         }
 
         let res = response.as_mut().unwrap();
-        match handle.block_on(res.chunk()) {
+        match res.chunk().await {
             Ok(Some(chunk)) => {
                 let n = chunk.len();
                 let (lock, cvar) = &*shared;

@@ -25,6 +25,7 @@ pub struct MonitorCtx {
     pub stop_signal: Arc<std::sync::atomic::AtomicBool>,
     pub ping: Arc<std::sync::atomic::AtomicI64>,
     pub stuck_threshold_ms: u64,
+    pub stuck_initial_threshold_ms: u64,
     pub update_every_n: u64,
     pub lyrics_subscribed: Arc<std::sync::atomic::AtomicBool>,
     pub lyrics_data: Arc<tokio::sync::Mutex<Option<LyricsData>>>,
@@ -114,14 +115,24 @@ async fn handle_playback_stopped(ctx: &MonitorCtx) {
     let reason = match ctx.err_rx.try_recv() {
         Ok(err) => {
             warn!("[{}] mid-playback decoder error: {}", ctx.guild_id, err);
+
+            let message = if err.contains("This video ") || err.contains("This is a private video")
+            {
+                err.clone()
+            } else {
+                "Something went wrong when decoding the track.".to_string()
+            };
+
+            let short_cause = crate::common::utils::shorten_error_cause(&err);
+
             ctx.session.send_message(&protocol::OutgoingMessage::Event {
                 event: Box::new(RustalinkEvent::TrackException {
                     guild_id: ctx.guild_id.clone(),
                     track: ctx.track.clone(),
                     exception: TrackException {
-                        message: Some(err.clone()),
+                        message: Some(message),
                         severity: crate::common::Severity::Fault,
-                        cause: err.clone(),
+                        cause: short_cause,
                         cause_stack_trace: Some(err),
                     },
                 }),
@@ -168,12 +179,18 @@ async fn check_stuck(
         None => last_pos_changed_at.elapsed().as_millis() as u64,
     };
 
-    if elapsed_ms >= ctx.stuck_threshold_ms {
+    let threshold = if cur_pos == 0 {
+        ctx.stuck_threshold_ms.max(ctx.stuck_initial_threshold_ms)
+    } else {
+        ctx.stuck_threshold_ms
+    };
+
+    if elapsed_ms >= threshold {
         ctx.session.send_message(&protocol::OutgoingMessage::Event {
             event: Box::new(RustalinkEvent::TrackStuck {
                 guild_id: ctx.guild_id.clone(),
                 track: ctx.track.clone(),
-                threshold_ms: ctx.stuck_threshold_ms,
+                threshold_ms: threshold,
             }),
         });
 
@@ -188,7 +205,7 @@ async fn check_stuck(
                 "position"
             },
             elapsed_ms,
-            ctx.stuck_threshold_ms,
+            threshold,
             buffering_started_at.is_some()
         );
         ctx.handle.stop();

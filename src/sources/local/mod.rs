@@ -1,8 +1,8 @@
-use std::{
-    io::{Read, Seek, SeekFrom},
-    path::Path,
-    sync::Arc,
-};
+pub mod track;
+
+use std::{path::Path, sync::Arc};
+
+pub use track::LocalTrack;
 
 use async_trait::async_trait;
 use symphonia::core::{
@@ -15,15 +15,11 @@ use symphonia::core::{
 use tracing::{debug, error, warn};
 
 use crate::{
-    audio::{
-        AudioFrame,
-        processor::{AudioProcessor, DecoderCommand},
-    },
     common::Severity,
     protocol::tracks::{LoadError, LoadResult, Track, TrackInfo},
     sources::{
         SourcePlugin,
-        plugin::{DecoderOutput, PlayableTrack},
+        playable_track::BoxedTrack,
     },
 };
 
@@ -179,7 +175,7 @@ impl SourcePlugin for LocalSource {
         &self,
         identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<Box<dyn PlayableTrack>> {
+    ) -> Option<BoxedTrack> {
         let path = identifier
             .strip_prefix("file://")
             .unwrap_or(identifier)
@@ -189,91 +185,7 @@ impl SourcePlugin for LocalSource {
             return None;
         }
 
-        Some(Box::new(LocalTrack { path }))
+        Some(Arc::new(LocalTrack { path }))
     }
 }
 
-pub struct LocalTrack {
-    pub path: String,
-}
-
-struct LocalFileSource {
-    file: std::fs::File,
-    len: u64,
-}
-
-impl LocalFileSource {
-    fn open(path: &str) -> std::io::Result<Self> {
-        let file = std::fs::File::open(path)?;
-        let len = file.metadata()?.len();
-        Ok(Self { file, len })
-    }
-}
-
-impl Read for LocalFileSource {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.file.read(buf)
-    }
-}
-
-impl Seek for LocalFileSource {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.file.seek(pos)
-    }
-}
-
-impl symphonia::core::io::MediaSource for LocalFileSource {
-    fn is_seekable(&self) -> bool {
-        true
-    }
-    fn byte_len(&self) -> Option<u64> {
-        Some(self.len)
-    }
-}
-
-impl PlayableTrack for LocalTrack {
-    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
-        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
-        let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
-        let (err_tx, err_rx) = flume::bounded::<String>(1);
-
-        let path = self.path.clone();
-
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
-            let source = match LocalFileSource::open(&path) {
-                Ok(s) => Box::new(s) as Box<dyn symphonia::core::io::MediaSource>,
-                Err(e) => {
-                    error!("LocalTrack: failed to open '{path}': {e}");
-                    let _ = err_tx.send(format!("Failed to open file: {e}"));
-                    return;
-                }
-            };
-
-            let kind = Path::new(&path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(crate::common::types::AudioFormat::from_ext);
-
-            match AudioProcessor::new(source, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
-                Ok(mut processor) => {
-                    std::thread::Builder::new()
-                        .name(format!("local-decoder-{}", path))
-                        .spawn(move || {
-                            if let Err(e) = processor.run() {
-                                error!("LocalTrack audio processor error: {e}");
-                            }
-                        })
-                        .expect("failed to spawn local decoder thread");
-                }
-                Err(e) => {
-                    error!("LocalTrack failed to initialize processor: {e}");
-                    let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
-                }
-            }
-        });
-
-        (rx, cmd_tx, err_rx)
-    }
-}

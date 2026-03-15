@@ -4,17 +4,14 @@ use std::{
     net::IpAddr,
 };
 
+use async_trait::async_trait;
 use symphonia::core::io::MediaSource;
 
 use crate::{
-    audio::{
-        AudioFrame,
-        processor::{AudioProcessor, DecoderCommand},
-    },
     common::types::AudioFormat,
     config::HttpProxyConfig,
     sources::{
-        plugin::{DecoderOutput, PlayableTrack},
+        playable_track::{PlayableTrack, ResolvedTrack},
         youtube::hls::{
             fetcher::fetch_segment_into, resolver::fetch_text, ts_demux::extract_adts_from_ts,
             types::Resource, utils::resolve_url,
@@ -28,6 +25,25 @@ pub struct TwitchTrack {
     pub proxy: Option<HttpProxyConfig>,
 }
 
+#[async_trait]
+impl PlayableTrack for TwitchTrack {
+    async fn resolve(&self) -> Result<ResolvedTrack, String> {
+        let handle = tokio::runtime::Handle::current();
+
+        let (err_tx, _err_rx) = flume::bounded::<String>(1);
+
+        let reader = Box::new(LiveHlsReader::new(
+            self.stream_url.clone(),
+            self.local_addr,
+            self.proxy.clone(),
+            handle,
+            err_tx,
+        ).await) as Box<dyn MediaSource>;
+
+        Ok(ResolvedTrack::new(reader, Some(AudioFormat::Aac)))
+    }
+}
+
 struct LiveHlsReader {
     chunk_rx: flume::Receiver<Vec<u8>>,
     current: Vec<u8>,
@@ -35,18 +51,16 @@ struct LiveHlsReader {
 }
 
 impl LiveHlsReader {
-    fn new(
+    pub async fn new(
         manifest_url: String,
         local_addr: Option<IpAddr>,
         proxy: Option<HttpProxyConfig>,
-        handle: tokio::runtime::Handle,
+        _handle: tokio::runtime::Handle,
         err_tx: flume::Sender<String>,
     ) -> Self {
         let (chunk_tx, chunk_rx) = flume::bounded::<Vec<u8>>(16);
 
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
-
+        tokio::spawn(async move {
             let mut builder =
                 reqwest::Client::builder().timeout(std::time::Duration::from_secs(15));
 
@@ -86,11 +100,11 @@ impl LiveHlsReader {
                 std::collections::VecDeque::with_capacity(50);
 
             loop {
-                let text = match handle.block_on(fetch_text(&client, &manifest_url)) {
+                let text = match fetch_text(&client, &manifest_url).await {
                     Ok(t) => t,
                     Err(e) => {
                         tracing::warn!("Twitch: live playlist refresh failed: {e}");
-                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         continue;
                     }
                 };
@@ -103,7 +117,7 @@ impl LiveHlsReader {
                     }
 
                     let mut raw = Vec::new();
-                    if let Err(e) = handle.block_on(fetch_segment_into(&client, &seg, &mut raw)) {
+                    if let Err(e) = fetch_segment_into(&client, &seg, &mut raw).await {
                         tracing::warn!("Twitch: segment fetch error: {e}");
                         continue;
                     }
@@ -123,7 +137,6 @@ impl LiveHlsReader {
                         return;
                     }
 
-                    // Mark as seen only after successful fetch and send
                     if seen.insert(seg.url.clone()) {
                         seen_history.push_back(seg.url);
                         if seen_history.len() > 50
@@ -135,7 +148,7 @@ impl LiveHlsReader {
                 }
 
                 let wait = (target_duration / 2.0).max(1.0);
-                std::thread::sleep(std::time::Duration::from_secs_f64(wait));
+                tokio::time::sleep(std::time::Duration::from_secs_f64(wait)).await;
             }
         });
 
@@ -198,10 +211,7 @@ impl Read for LiveHlsReader {
                 return Ok(n);
             }
 
-            match self
-                .chunk_rx
-                .recv_timeout(std::time::Duration::from_millis(500))
-            {
+            match self.chunk_rx.recv_timeout(std::time::Duration::from_millis(500)) {
                 Ok(chunk) => {
                     self.current = chunk;
                     self.pos = 0;
@@ -226,64 +236,8 @@ impl MediaSource for LiveHlsReader {
     fn is_seekable(&self) -> bool {
         false
     }
+
     fn byte_len(&self) -> Option<u64> {
         None
-    }
-}
-
-impl PlayableTrack for TwitchTrack {
-    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
-        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
-        let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
-        let (err_tx, err_rx) = flume::bounded::<String>(1);
-
-        let url = self.stream_url.clone();
-        let local_addr = self.local_addr;
-        let proxy = self.proxy.clone();
-        let handle = tokio::runtime::Handle::current();
-
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
-            let url_for_reader = url.clone();
-            let url_for_name = url.clone();
-            let reader = Box::new(LiveHlsReader::new(
-                url_for_reader,
-                local_addr,
-                proxy,
-                handle.clone(),
-                err_tx.clone(),
-            )) as Box<dyn MediaSource>;
-
-            match AudioProcessor::new(
-                reader,
-                Some(AudioFormat::Aac),
-                tx,
-                cmd_rx,
-                Some(err_tx.clone()),
-                config,
-            ) {
-                Ok(mut processor) => {
-                    let url_for_log = url_for_name.clone();
-                    std::thread::Builder::new()
-                        .name(format!("twitch-decoder-{}", url_for_name))
-                        .spawn(move || {
-                            if let Err(e) = processor.run() {
-                                tracing::error!(
-                                    "Twitch HLS processor error for {}: {}",
-                                    url_for_log,
-                                    e
-                                );
-                            }
-                        })
-                        .expect("failed to spawn twitch decoder thread");
-                }
-                Err(e) => {
-                    tracing::error!("Twitch HLS processor init failed for {}: {}", url, e);
-                    let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
-                }
-            }
-        });
-
-        (rx, cmd_tx, err_rx)
     }
 }

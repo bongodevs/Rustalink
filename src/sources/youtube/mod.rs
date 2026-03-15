@@ -10,7 +10,7 @@ use crate::{
     common::types::SharedRw,
     config::sources::YouTubeConfig,
     protocol::tracks::*,
-    sources::{SourcePlugin, plugin::BoxedTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 pub mod cipher;
@@ -28,8 +28,9 @@ use cipher::YouTubeCipherManager;
 use clients::{
     YouTubeClient, android::AndroidClient, android_vr::AndroidVrClient, ios::IosClient,
     music_android::MusicAndroidClient, tv::TvClient, tv_cast::TvCastClient,
-    tv_embedded::TvEmbeddedClient, web::WebClient, web_embedded::WebEmbeddedClient,
-    web_parent_tools::WebParentToolsClient, web_remix::WebRemixClient,
+    tv_embedded::TvEmbeddedClient, tv_simply::TvSimplyClient, tv_unplugged::TvUnpluggedClient,
+    web::WebClient, web_embedded::WebEmbeddedClient, web_parent_tools::WebParentToolsClient,
+    web_remix::WebRemixClient,
 };
 use oauth::YouTubeOAuth;
 
@@ -114,9 +115,17 @@ impl YouTubeSource {
                 "IOS" => Some(Arc::new(IosClient::new(http.clone()))),
                 "TV" | "TVHTML5" => Some(Arc::new(TvClient::new(http.clone()))),
                 "TV_CAST" | "TVHTML5_CAST" => Some(Arc::new(TvCastClient::new(http.clone()))),
-                "TVHTML5_SIMPLY" | "TVHTML5_SIMPLY_EMBEDDED_PLAYER" | "TV_EMBEDDED" => {
+                "TVHTML5_SIMPLY_EMBEDDED_PLAYER" | "TV_EMBEDDED" => {
                     Some(Arc::new(TvEmbeddedClient::new(http.clone())))
                 }
+                "TVHTML5_SIMPLY" | "TV_SIMPLY" => Some(Arc::new(TvSimplyClient::new(
+                    http.clone(),
+                    cipher_manager.clone(),
+                ))),
+                "TVHTML5_UNPLUGGED" | "TV_UNPLUGGED" => Some(Arc::new(TvUnpluggedClient::new(
+                    http.clone(),
+                    cipher_manager.clone(),
+                ))),
                 "MUSIC" | "MUSIC_ANDROID" | "ANDROID_MUSIC" => {
                     Some(Arc::new(MusicAndroidClient::new(http.clone())))
                 }
@@ -463,7 +472,7 @@ impl SourcePlugin for YouTubeSource {
         let clients_to_try = self.prioritize_clients(&self.playback_clients, is_music_url);
         let clients = clients_to_try.into_iter().cloned().collect();
 
-        Some(Box::new(track::YoutubeTrack {
+        Some(Arc::new(track::YoutubeTrack {
             identifier: id,
             clients,
             oauth: self.oauth.clone(),
@@ -505,6 +514,9 @@ impl YouTubeSource {
             }
 
             for client in &music_clients {
+                if !client.can_handle_request(identifier) {
+                    continue;
+                }
                 tracing::debug!("Searching '{}' with {}", query, client.name());
                 match client.search(query, context, self.oauth.clone()).await {
                     Ok(tracks) if !tracks.is_empty() => return LoadResult::Search(tracks),
@@ -525,6 +537,9 @@ impl YouTubeSource {
             .filter(|c| !is_music(c))
             .collect();
         for client in &primary {
+            if !client.can_handle_request(identifier) {
+                continue;
+            }
             tracing::debug!("Searching '{}' with {}", query, client.name());
             match client.search(query, context, self.oauth.clone()).await {
                 Ok(tracks) if !tracks.is_empty() => return LoadResult::Search(tracks),
@@ -541,6 +556,9 @@ impl YouTubeSource {
             );
         }
         for client in fallback {
+            if !client.can_handle_request(identifier) {
+                continue;
+            }
             tracing::debug!("Fallback search '{}' with {}", query, client.name());
             match client.search(query, context, self.oauth.clone()).await {
                 Ok(tracks) if !tracks.is_empty() => return LoadResult::Search(tracks),
@@ -563,6 +581,9 @@ impl YouTubeSource {
 
         let clients = self.prioritize_clients(&self.resolve_clients, true);
         for client in clients {
+            if !client.can_handle_request(&playlist_id) {
+                continue;
+            }
             match client
                 .get_playlist(&playlist_id, context, self.oauth.clone())
                 .await
@@ -597,9 +618,6 @@ impl YouTubeSource {
         if let Some(playlist_id) = self.extract_playlist_id(identifier) {
             // Prioritize resolve clients; prefer Android first for reliability.
             let mut playlist_clients: Vec<&Arc<dyn YouTubeClient>> = Vec::new();
-            if let Some(android) = self.resolve_clients.iter().find(|c| c.name() == "Android") {
-                playlist_clients.push(android);
-            }
             for c in self.prioritize_clients(&self.resolve_clients, is_music_url) {
                 if !playlist_clients.iter().any(|x| x.name() == c.name()) {
                     playlist_clients.push(c);
@@ -613,6 +631,9 @@ impl YouTubeSource {
             }
 
             for client in &playlist_clients {
+                if !client.can_handle_request(identifier) {
+                    continue;
+                }
                 tracing::debug!("Fetching playlist '{}' with {}", playlist_id, client.name());
                 match client
                     .get_playlist(&playlist_id, context, self.oauth.clone())
@@ -642,6 +663,9 @@ impl YouTubeSource {
         let resolve_clients: Vec<&Arc<dyn YouTubeClient>> = self.resolve_clients.iter().collect();
 
         for client in &resolve_clients {
+            if !client.can_handle_request(identifier) {
+                continue;
+            }
             tracing::debug!("Resolving track '{}' with {}", id, client.name());
             match client
                 .get_track_info(&id, context, self.oauth.clone())
@@ -668,6 +692,9 @@ impl YouTubeSource {
             );
         }
         for client in fallback {
+            if !client.can_handle_request(identifier) {
+                continue;
+            }
             tracing::debug!("Fallback resolve '{}' with {}", id, client.name());
             if let Ok(Some(mut track)) = client
                 .get_track_info(&id, context, self.oauth.clone())

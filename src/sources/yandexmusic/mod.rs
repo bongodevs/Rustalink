@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::{
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::{SourcePlugin, plugin::BoxedTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 pub mod track;
@@ -546,7 +546,7 @@ impl SourcePlugin for YandexMusicSource {
             return None;
         }
 
-        Some(Box::new(track::YandexMusicTrack {
+        Some(Arc::new(track::YandexMusicTrack {
             client: self.client.clone(),
             track_id,
             local_addr: routeplanner.and_then(|rp| rp.get_address()),

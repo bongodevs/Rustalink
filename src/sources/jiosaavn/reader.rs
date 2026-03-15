@@ -14,13 +14,13 @@ pub struct JioSaavnReader {
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36";
 
 impl JioSaavnReader {
-    pub fn new(
+    pub async fn new(
         url: &str,
         local_addr: Option<std::net::IpAddr>,
         proxy: Option<crate::config::HttpProxyConfig>,
     ) -> AnyResult<Self> {
         let client = create_client(USER_AGENT.to_owned(), local_addr, proxy, None)?;
-        let inner = HttpSource::new(client, url)?;
+        let inner = HttpSource::new(client, url).await?;
 
         Ok(Self { inner })
     }

@@ -22,7 +22,7 @@ pub struct DeezerReader {
 }
 
 impl DeezerReader {
-    pub fn new(
+    pub async fn new(
         url: &str,
         track_id: &str,
         master_key: &str,
@@ -31,7 +31,7 @@ impl DeezerReader {
     ) -> AnyResult<Self> {
         debug!("Initializing DeezerReader for track {}", track_id);
 
-        let source = DeezerRemoteReader::new(url, local_addr, proxy)?;
+        let source = DeezerRemoteReader::new(url, local_addr, proxy).await?;
         let crypt = DeezerCrypt::new(track_id, master_key);
 
         Ok(Self {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::stream::{FuturesOrdered, FuturesUnordered, StreamExt};
 
-use crate::sources::{manager::SourceManager, plugin::BoxedTrack};
+use crate::sources::{manager::SourceManager, playable_track::BoxedTrack};
 
 pub struct MirrorResult {
     pub track: BoxedTrack,

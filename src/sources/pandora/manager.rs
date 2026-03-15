@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 use super::token::PandoraTokenTracker;
 use crate::{
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, SearchResult, Track, TrackInfo},
-    sources::SourcePlugin,
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 const BASE_URL: &str = "https://www.pandora.com";
@@ -894,7 +894,7 @@ impl SourcePlugin for PandoraSource {
         &self,
         _identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<crate::sources::plugin::BoxedTrack> {
+    ) -> Option<BoxedTrack> {
         None
     }
 }

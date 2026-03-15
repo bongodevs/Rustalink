@@ -6,6 +6,7 @@
 
 # AGENTS
 .agents/
+.junie/
 
 # LOGS
 logs/*
@@ -21,4 +22,5 @@ local.config.toml
 docs/node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
 

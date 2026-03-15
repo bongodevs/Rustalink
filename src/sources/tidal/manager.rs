@@ -29,7 +29,7 @@ use super::{
 use crate::{
     common::types::AudioFormat,
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::SourcePlugin,
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 fn url_regex() -> &'static Regex {
@@ -481,7 +481,7 @@ impl SourcePlugin for TidalSource {
         &self,
         identifier: &str,
         _: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<crate::sources::plugin::BoxedTrack> {
+    ) -> Option<BoxedTrack> {
         let id = if let Some(caps) = url_regex().captures(identifier) {
             let type_str = caps.get(1).map_or("", |m| m.as_str());
             let id = caps.get(2).map_or("", |m| m.as_str());
@@ -575,7 +575,7 @@ impl SourcePlugin for TidalSource {
             }
         }
 
-        Some(Box::new(TidalTrack {
+        Some(Arc::new(TidalTrack {
             identifier: id,
             stream_url,
             kind,

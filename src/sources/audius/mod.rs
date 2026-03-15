@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::{
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::{SourcePlugin, plugin::BoxedTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 pub mod track;
@@ -353,7 +353,7 @@ impl SourcePlugin for AudiusSource {
 
         let stream_url = track::fetch_stream_url(&self.client, &track_id, &self.app_name).await?;
 
-        Some(Box::new(track::AudiusTrack {
+        Some(Arc::new(track::AudiusTrack {
             client: self.client.clone(),
             track_id,
             stream_url: Some(stream_url),

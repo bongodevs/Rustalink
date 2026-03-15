@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::{SourcePlugin, plugin::PlayableTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 const BASE_URL: &str = "https://api-v2.soundcloud.com";
@@ -339,7 +339,7 @@ impl SoundCloudSource {
         url: &str,
         client_id: &str,
         local_addr: Option<std::net::IpAddr>,
-    ) -> Option<Box<dyn PlayableTrack>> {
+    ) -> Option<BoxedTrack> {
         let json = self.api_resolve(url, client_id).await?;
 
         if json.get("kind").and_then(|v| v.as_str()) != Some("track") {
@@ -369,7 +369,7 @@ impl SoundCloudSource {
             return None;
         }
 
-        Some(Box::new(SoundCloudTrack {
+        Some(Arc::new(SoundCloudTrack {
             stream_url,
             kind,
             bitrate_bps: 128_000,
@@ -895,7 +895,7 @@ impl SourcePlugin for SoundCloudSource {
         &self,
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<Box<dyn PlayableTrack>> {
+    ) -> Option<BoxedTrack> {
         // Resolve identifier to a URL if needed
         let url = if mobile_url_re().is_match(identifier) {
             self.resolve_mobile_url(identifier).await?

@@ -100,3 +100,27 @@ pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) 
 pub fn default_user_agent() -> String {
     DEFAULT_USER_AGENT.to_string()
 }
+
+/// Shortens verbose HTTP errors to remove sensitive URLs and query parameters for clean `cause` fields.
+pub fn shorten_error_cause(err: &str) -> String {
+    let mut scrubbed = err;
+    if let Some(idx) = scrubbed.find(" for https://") {
+        scrubbed = &scrubbed[..idx];
+    } else if let Some(idx) = scrubbed.find(" for http://") {
+        scrubbed = &scrubbed[..idx];
+    } else if let Some(idx) = scrubbed.find(" (https://") {
+        scrubbed = &scrubbed[..idx];
+    } else if let Some(idx) = scrubbed.find(" (http://") {
+        scrubbed = &scrubbed[..idx];
+    } else if scrubbed.contains("error sending request for url") {
+        return "error sending request for url".to_string();
+    }
+
+    if let Some(line) = scrubbed.lines().next() {
+        if line.len() > 100 {
+            return format!("{}...", &line[..97]);
+        }
+        return line.to_string();
+    }
+    scrubbed.to_string()
+}

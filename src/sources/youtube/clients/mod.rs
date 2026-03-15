@@ -17,6 +17,8 @@ pub mod music_android;
 pub mod tv;
 pub mod tv_cast;
 pub mod tv_embedded;
+pub mod tv_simply;
+pub mod tv_unplugged;
 pub mod web;
 pub mod web_embedded;
 pub mod web_parent_tools;
@@ -28,6 +30,9 @@ pub trait YouTubeClient: Send + Sync {
     fn client_name(&self) -> &str;
     fn client_version(&self) -> &str;
     fn user_agent(&self) -> &str;
+    fn can_handle_request(&self, _identifier: &str) -> bool {
+        true
+    }
 
     async fn search(
         &self,

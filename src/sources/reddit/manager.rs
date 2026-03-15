@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::track::RedditTrack;
 use crate::{
     protocol::tracks::{LoadResult, Track, TrackInfo},
-    sources::plugin::{BoxedTrack, SourcePlugin},
+    sources::{playable_track::BoxedTrack, plugin::SourcePlugin},
 };
 
 static PATH_EXTRACTOR: OnceLock<Regex> = OnceLock::new();
@@ -238,7 +238,7 @@ impl SourcePlugin for RedditSource {
     ) -> Option<BoxedTrack> {
         let (meta, audio_stream) = self.acquire_metadata_packet(identifier).await?;
 
-        Some(Box::new(RedditTrack {
+        Some(Arc::new(RedditTrack {
             client: self.http.clone(),
             uri: meta.uri.unwrap_or_else(|| identifier.to_owned()),
             audio_url: audio_stream,

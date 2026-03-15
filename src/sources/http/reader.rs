@@ -12,7 +12,7 @@ pub struct HttpReader {
 }
 
 impl HttpReader {
-    pub fn new(
+    pub async fn new(
         url: &str,
         local_addr: Option<std::net::IpAddr>,
         proxy: Option<crate::config::HttpProxyConfig>,
@@ -20,7 +20,7 @@ impl HttpReader {
         let user_agent = crate::common::utils::default_user_agent();
 
         let client = create_client(user_agent, local_addr, proxy, None)?;
-        let inner = HttpSource::new(client, url)?;
+        let inner = HttpSource::new(client, url).await?;
 
         Ok(Self { inner })
     }

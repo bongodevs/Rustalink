@@ -80,7 +80,7 @@ pub async fn fetch_text(client: &reqwest::Client, url: &str) -> AnyResult<String
     Ok(text)
 }
 
-pub fn resolve_url_string(
+pub async fn resolve_url_string(
     url: &str,
     cipher_manager: &Option<Arc<YouTubeCipherManager>>,
     player_url: &Option<String>,
@@ -101,17 +101,14 @@ pub fn resolve_url_string(
     };
 
     if let Some(n) = n_token {
-        let handle = tokio::runtime::Handle::current();
         let cipher = cipher.clone();
         let url_str = url.to_string();
         let p_url_str = p_url.clone();
         let n_str = n.to_string();
 
-        Ok(handle.block_on(async move {
-            cipher
-                .resolve_url(&url_str, &p_url_str, Some(&n_str), None)
-                .await
-        })?)
+        Ok(cipher
+            .resolve_url(&url_str, &p_url_str, Some(&n_str), None)
+            .await?)
     } else {
         Ok(url.to_string())
     }

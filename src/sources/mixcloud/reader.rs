@@ -14,9 +14,9 @@ pub struct MixcloudReader {
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 impl MixcloudReader {
-    pub fn new(url: &str, local_addr: Option<std::net::IpAddr>) -> AnyResult<Self> {
+    pub async fn new(url: &str, local_addr: Option<std::net::IpAddr>) -> AnyResult<Self> {
         let client = create_client(USER_AGENT.to_owned(), local_addr, None, None)?;
-        let inner = HttpSource::new(client, url)?;
+        let inner = HttpSource::new(client, url).await?;
 
         Ok(Self { inner })
     }

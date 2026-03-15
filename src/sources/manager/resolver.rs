@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::sources::{manager::SourceManager, plugin::BoxedTrack};
+use crate::sources::{manager::SourceManager, playable_track::BoxedTrack};
 
 /// Fallback mechanism to resolve a track using mirrors (ISRC or search queries).
 pub async fn resolve_with_mirrors(

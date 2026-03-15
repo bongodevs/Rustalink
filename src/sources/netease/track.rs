@@ -1,10 +1,13 @@
 use std::net::IpAddr;
 
+use async_trait::async_trait;
+use tracing::debug;
+
 use crate::{
     config::HttpProxyConfig,
     sources::{
         http::HttpTrack,
-        plugin::{DecoderOutput, PlayableTrack},
+        playable_track::{PlayableTrack, ResolvedTrack},
     },
 };
 
@@ -13,14 +16,20 @@ pub struct NeteaseTrack {
     pub local_addr: Option<IpAddr>,
     pub proxy: Option<HttpProxyConfig>,
 }
-
+#[async_trait]
 impl PlayableTrack for NeteaseTrack {
-    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+
+    async fn resolve(&self) -> Result<ResolvedTrack, String> {
+        let url = self.stream_url.clone();
+
+        debug!("Netease playback URL: {url}");
+
         HttpTrack {
-            url: self.stream_url.clone(),
+            url,
             local_addr: self.local_addr,
-            proxy: self.proxy.clone(),
+            proxy: None,
         }
-        .start_decoding(config)
+        .resolve()
+        .await
     }
 }

@@ -10,7 +10,7 @@ use crate::{
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
     sources::{
         SourcePlugin,
-        plugin::BoxedTrack,
+        playable_track::BoxedTrack,
         qobuz::{token::QobuzTokenTracker, track::QobuzTrack},
     },
 };
@@ -612,7 +612,7 @@ impl SourcePlugin for QobuzSource {
             .api_request("track/get", vec![("track_id", id.to_owned())])
             .await
         {
-            Ok(json) => Some(Box::new(self.parse_qobuz_track(&json))),
+            Ok(json) => Some(Arc::new(self.parse_qobuz_track(&json))),
             Err(_) => None,
         }
     }

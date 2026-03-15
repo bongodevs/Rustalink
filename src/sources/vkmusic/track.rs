@@ -1,23 +1,30 @@
 use std::net::IpAddr;
 
-use crate::sources::{
-    http::HttpTrack,
-    plugin::{DecoderOutput, PlayableTrack},
+use async_trait::async_trait;
+
+use crate::{
+    config::HttpProxyConfig,
+    sources::{
+        http::HttpTrack,
+        playable_track::{PlayableTrack, ResolvedTrack},
+    },
 };
 
 pub struct VkMusicTrack {
     pub stream_url: String,
     pub local_addr: Option<IpAddr>,
-    pub proxy: Option<crate::config::HttpProxyConfig>,
+    pub proxy: Option<HttpProxyConfig>,
 }
 
+#[async_trait]
 impl PlayableTrack for VkMusicTrack {
-    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
+    async fn resolve(&self) -> Result<ResolvedTrack, String> {
         HttpTrack {
             url: self.stream_url.clone(),
             local_addr: self.local_addr,
             proxy: self.proxy.clone(),
         }
-        .start_decoding(config)
+        .resolve()
+        .await
     }
 }

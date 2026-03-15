@@ -40,6 +40,7 @@ thiserror = "2.0.18"
 sysinfo = "0.38.3"
 perf_monitor = "0.2.1"
 prometheus = "0.13"
+tracing-log = "0.2"
 
 tracing-subscriber = { version = "^0.3.20", features = [
     "env-filter",

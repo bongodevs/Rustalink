@@ -5,7 +5,7 @@ use regex::Regex;
 
 use crate::{
     protocol::tracks::{LoadResult, Track},
-    sources::{SourcePlugin, spotify::token::SpotifyTokenTracker},
+    sources::{SourcePlugin, playable_track::BoxedTrack, spotify::token::SpotifyTokenTracker},
 };
 
 pub mod helpers;
@@ -279,7 +279,7 @@ impl SourcePlugin for SpotifySource {
         &self,
         _identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<crate::sources::plugin::BoxedTrack> {
+    ) -> Option<BoxedTrack> {
         None
     }
 }

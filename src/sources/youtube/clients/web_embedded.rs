@@ -88,6 +88,7 @@ impl WebEmbeddedClient {
                 origin: None,
                 po_token: None,
                 encrypted_host_flags,
+                attestation_request: None,
                 serialized_third_party_embed_config: true,
             },
         )
@@ -108,6 +109,10 @@ impl YouTubeClient for WebEmbeddedClient {
     }
     fn user_agent(&self) -> &str {
         USER_AGENT
+    }
+
+    fn can_handle_request(&self, identifier: &str) -> bool {
+        !identifier.contains("list=")
     }
 
     async fn search(
@@ -233,6 +238,16 @@ impl YouTubeClient for WebEmbeddedClient {
                 encrypted_host_flags,
             )
             .await?;
+
+        if let Err(e) = crate::sources::youtube::utils::parse_playability_status(&body) {
+            tracing::warn!(
+                "{} player: video {} not playable: {}",
+                self.name(),
+                track_id,
+                e
+            );
+            return Err(e.into());
+        }
 
         let playability = body
             .get("playabilityStatus")

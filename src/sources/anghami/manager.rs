@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::{
     config::AppConfig,
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::{BoxedTrack, SourcePlugin},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 const BASE_URL: &str = "https://api.anghami.com/gateway.php";

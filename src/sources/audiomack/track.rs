@@ -1,11 +1,11 @@
 use std::{collections::BTreeMap, net::IpAddr, sync::Arc};
 
+use async_trait::async_trait;
 use rand::{Rng, distributions::Alphanumeric, thread_rng};
+use tracing::debug;
 
 use crate::sources::{
-    audiomack::utils::build_auth_header,
-    http::HttpTrack,
-    plugin::{DecoderOutput, PlayableTrack},
+    audiomack::utils::build_auth_header, http::HttpTrack, playable_track::{PlayableTrack, ResolvedTrack}
 };
 
 pub struct AudiomackTrack {
@@ -13,14 +13,20 @@ pub struct AudiomackTrack {
     pub local_addr: Option<IpAddr>,
 }
 
+#[async_trait]
 impl PlayableTrack for AudiomackTrack {
-    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
-        let http_track = HttpTrack {
-            url: self.stream_url.clone(),
+    async fn resolve(&self) -> Result<ResolvedTrack, String> {
+        let url = self.stream_url.clone();
+
+        debug!("Reddit playback URL: {url}");
+
+        HttpTrack {
+            url,
             local_addr: self.local_addr,
             proxy: None,
-        };
-        http_track.start_decoding(config)
+        }
+        .resolve()
+        .await
     }
 }
 

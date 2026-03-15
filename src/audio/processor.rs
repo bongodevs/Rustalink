@@ -93,21 +93,7 @@ impl AudioProcessor {
             sample_rate, channels
         );
 
-        let resampler = if sample_rate == TARGET_SAMPLE_RATE {
-            Resampler::linear(sample_rate, TARGET_SAMPLE_RATE, MIXER_CHANNELS)
-        } else {
-            match config.resampling_quality {
-                ResamplingQuality::Low => {
-                    Resampler::linear(sample_rate, TARGET_SAMPLE_RATE, MIXER_CHANNELS)
-                }
-                ResamplingQuality::Medium => {
-                    Resampler::hermite(sample_rate, TARGET_SAMPLE_RATE, MIXER_CHANNELS)
-                }
-                ResamplingQuality::High => {
-                    Resampler::sinc(sample_rate, TARGET_SAMPLE_RATE, MIXER_CHANNELS)
-                }
-            }
-        };
+        let resampler = Self::make_resampler(sample_rate, &config);
 
         Ok(Self {
             format,
@@ -125,20 +111,36 @@ impl AudioProcessor {
             downmix_buf: Vec::with_capacity(1920),
         })
     }
+}
 
+impl AudioProcessor {
     pub fn run(&mut self) -> Result<(), Error> {
+        self.run_inner(false)
+    }
+
+    pub fn run_with_seek(&mut self) -> Result<(), Error> {
+        self.run_inner(true)
+    }
+}
+
+impl AudioProcessor {
+    fn run_inner(&mut self, seek_enabled: bool) -> Result<(), Error> {
         let _span = span!(Level::DEBUG, "audio_processor").entered();
 
         debug!(
-            "Starting transcode loop: {}Hz {}ch -> {}Hz",
-            self.source_rate, self.channels, TARGET_SAMPLE_RATE
+            "Starting transcode loop (seek={}): {}Hz {}ch -> {}Hz",
+            seek_enabled, self.source_rate, self.channels, TARGET_SAMPLE_RATE
         );
 
         let mut packet_count = 0u64;
+
         loop {
             packet_count += 1;
-            if self.check_commands() == CommandOutcome::Stop {
-                break;
+
+            match self.check_commands() {
+                CommandOutcome::Stop => break,
+                CommandOutcome::Seeked | CommandOutcome::SeekFailed if seek_enabled => continue,
+                _ => {}
             }
 
             let packet = match self.format.next_packet() {
@@ -167,7 +169,7 @@ impl AudioProcessor {
 
                     if !samples.is_empty() {
                         let frame_channels = spec.channels.count();
-                        let frame_rate = spec.rate;
+                        let frame_rate     = spec.rate;
 
                         if frame_rate != self.source_rate {
                             debug!(
@@ -175,79 +177,20 @@ impl AudioProcessor {
                                 frame_rate, self.source_rate
                             );
                             self.source_rate = frame_rate;
-                            self.resampler = if self.source_rate == TARGET_SAMPLE_RATE {
-                                Resampler::linear(
-                                    self.source_rate,
-                                    TARGET_SAMPLE_RATE,
-                                    MIXER_CHANNELS,
-                                )
-                            } else {
-                                match self.config.resampling_quality {
-                                    ResamplingQuality::Low => Resampler::linear(
-                                        self.source_rate,
-                                        TARGET_SAMPLE_RATE,
-                                        MIXER_CHANNELS,
-                                    ),
-                                    ResamplingQuality::Medium => Resampler::hermite(
-                                        self.source_rate,
-                                        TARGET_SAMPLE_RATE,
-                                        MIXER_CHANNELS,
-                                    ),
-                                    ResamplingQuality::High => Resampler::sinc(
-                                        self.source_rate,
-                                        TARGET_SAMPLE_RATE,
-                                        MIXER_CHANNELS,
-                                    ),
-                                }
-                            };
+                            self.resampler   = Self::make_resampler(self.source_rate, &self.config);
                         }
 
+                        let source_rate = self.source_rate;
                         let pcm_data = if frame_channels == MIXER_CHANNELS {
                             samples
                         } else {
-                            if packet_count.is_multiple_of(100) {
-                                debug!(
-                                    "AudioProcessor: Downmixing {}ch -> {}ch (samples: {})",
-                                    frame_channels,
-                                    MIXER_CHANNELS,
-                                    samples.len()
-                                );
-                            }
-                            let num_frames = samples.len() / frame_channels;
-                            self.downmix_buf.clear();
-                            self.downmix_buf.reserve(num_frames * MIXER_CHANNELS);
-
-                            for i in 0..num_frames {
-                                let frame = &samples[i * frame_channels..(i + 1) * frame_channels];
-                                let mut l = 0i32;
-                                let mut r = 0i32;
-
-                                for (ch, &sample) in frame.iter().enumerate() {
-                                    if ch % 2 == 0 {
-                                        l += sample as i32;
-                                    } else {
-                                        r += sample as i32;
-                                    }
-                                }
-
-                                let left_count = frame_channels.div_ceil(2);
-                                let right_count = frame_channels / 2;
-
-                                self.downmix_buf.push((l / left_count as i32) as i16);
-                                if right_count > 0 {
-                                    self.downmix_buf.push((r / right_count as i32) as i16);
-                                } else {
-                                    // Upmix mono to stereo
-                                    self.downmix_buf.push((l / left_count as i32) as i16);
-                                }
-                            }
-                            &self.downmix_buf[..]
+                            Self::downmix_internal(&mut self.downmix_buf, samples, frame_channels, packet_count)
                         };
 
                         let capacity = (pcm_data.len() as f64 * TARGET_SAMPLE_RATE as f64
-                            / self.source_rate as f64)
-                            .ceil() as usize
-                            + 32;
+                            / source_rate as f64)
+                            .ceil() as usize + 32;
+
                         let mut resampled = crate::audio::buffer::acquire_buffer(capacity);
                         if self.resampler.is_passthrough() {
                             resampled.extend_from_slice(pcm_data);
@@ -255,25 +198,42 @@ impl AudioProcessor {
                             self.resampler.process(pcm_data, &mut resampled);
                         }
 
-                        if !resampled.is_empty() && !self.engine.push(AudioFrame::Pcm(resampled)) {
-                            return Ok(());
+                        if !resampled.is_empty() {
+                            if packet_count == 1 {
+                                debug!("AudioProcessor: Sending first frame to engine (capacity={})", resampled.capacity());
+                            }
+                            if !self.engine.push(AudioFrame::Pcm(resampled)) {
+                                return Ok(());
+                            }
                         }
                     }
 
                     self.sample_buf = Some(buf);
                 }
+
                 Err(Error::IoError(e)) if e.kind() == ErrorKind::UnexpectedEof => break,
-                Err(Error::DecodeError(e)) => {
+
+                Err(Error::DecodeError(e)) | Err(Error::Unsupported(e)) => {
                     self.recoverable_errors += 1;
+
+                    if e.contains("main_data_begin") {
+                        continue;
+                    }
+
                     if self.recoverable_errors == 1 {
                         warn!("Decode error (recoverable): {e}");
                     } else if self.recoverable_errors.is_multiple_of(100) {
-                        warn!(
-                            "Decode error (recoverable, x{}): {e}",
-                            self.recoverable_errors
-                        );
+                        warn!("Decode error (recoverable, x{}): {e}", self.recoverable_errors);
                     }
                 }
+
+                Err(Error::ResetRequired) => {
+                    self.decoder.reset();
+                    self.resampler.reset();
+                    self.sample_buf = None;
+                    warn!("Decoder reset required — resetting state and continuing");
+                }
+
                 Err(e) => {
                     self.send_error(format!("Decode error: {e}"));
                     return Err(e);
@@ -284,7 +244,9 @@ impl AudioProcessor {
         debug!("Transcode loop finished");
         Ok(())
     }
+}
 
+impl AudioProcessor {
     fn check_commands(&mut self) -> CommandOutcome {
         match self.cmd_rx.try_recv() {
             Ok(DecoderCommand::Seek(ms)) => {
@@ -292,7 +254,7 @@ impl AudioProcessor {
                 if self
                     .format
                     .seek(
-                        SeekMode::Coarse,
+                        SeekMode::Accurate,
                         SeekTo::Time {
                             time,
                             track_id: Some(self.track_id),
@@ -321,5 +283,57 @@ impl AudioProcessor {
         if let Some(tx) = &self.error_tx {
             let _ = tx.send(msg);
         }
+    }
+
+    fn make_resampler(sample_rate: u32, config: &PlayerConfig) -> Resampler {
+        if sample_rate == TARGET_SAMPLE_RATE {
+            return Resampler::linear(sample_rate, TARGET_SAMPLE_RATE, MIXER_CHANNELS);
+        }
+        match config.resampling_quality {
+            ResamplingQuality::Low    => Resampler::linear(sample_rate, TARGET_SAMPLE_RATE, MIXER_CHANNELS),
+            ResamplingQuality::Medium => Resampler::hermite(sample_rate, TARGET_SAMPLE_RATE, MIXER_CHANNELS),
+            ResamplingQuality::High   => Resampler::sinc(sample_rate, TARGET_SAMPLE_RATE, MIXER_CHANNELS),
+        }
+    }
+
+    fn downmix_internal<'a>(
+        downmix_buf: &'a mut Vec<i16>,
+        samples: &[i16],
+        frame_channels: usize,
+        packet_count: u64,
+    ) -> &'a [i16] {
+        if packet_count.is_multiple_of(100) {
+            debug!(
+                "AudioProcessor: Downmixing {}ch -> {}ch (samples: {})",
+                frame_channels, MIXER_CHANNELS, samples.len()
+            );
+        }
+
+        let num_frames = samples.len() / frame_channels;
+        downmix_buf.clear();
+        downmix_buf.reserve(num_frames * MIXER_CHANNELS);
+
+        for i in 0..num_frames {
+            let frame = &samples[i * frame_channels..(i + 1) * frame_channels];
+            let mut l = 0i32;
+            let mut r = 0i32;
+
+            for (ch, &sample) in frame.iter().enumerate() {
+                if ch % 2 == 0 { l += sample as i32; }
+                else            { r += sample as i32; }
+            }
+
+            let left_count  = frame_channels.div_ceil(2);
+            let right_count = frame_channels / 2;
+
+            downmix_buf.push((l / left_count as i32) as i16);
+            if right_count > 0 {
+                downmix_buf.push((r / right_count as i32) as i16);
+            } else {
+                downmix_buf.push((l / left_count as i32) as i16);
+            }
+        }
+
+        &downmix_buf[..]
     }
 }

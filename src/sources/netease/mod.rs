@@ -7,7 +7,7 @@ use tracing::debug;
 
 use crate::{
     protocol::tracks::{LoadResult, SearchResult},
-    sources::{SourcePlugin, plugin::BoxedTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 pub mod api;
@@ -285,7 +285,7 @@ impl SourcePlugin for NeteaseSource {
         }
 
         stream_url.map(|url| {
-            Box::new(track::NeteaseTrack {
+            Arc::new(track::NeteaseTrack {
                 stream_url: url,
                 proxy: self.proxy.clone(),
                 local_addr: routeplanner.and_then(|rp| rp.get_address()),

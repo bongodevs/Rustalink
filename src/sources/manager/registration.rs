@@ -20,7 +20,7 @@ use crate::{
         mixcloud::MixcloudSource,
         netease::NeteaseSource,
         pandora::PandoraSource,
-        plugin::BoxedSource,
+        playable_track::BoxedSource,
         qobuz::QobuzSource,
         reddit::RedditSource,
         shazam::ShazamSource,

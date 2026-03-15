@@ -8,7 +8,7 @@ use tracing::error;
 
 use crate::{
     protocol::tracks::{LoadResult, Track, TrackInfo},
-    sources::SourcePlugin,
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 const SEARCH_URL: &str = "https://www.shazam.com/services/amapi/v1/catalog/US/search";
@@ -471,7 +471,7 @@ impl SourcePlugin for ShazamSource {
         &self,
         _identifier: &str,
         _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<crate::sources::plugin::BoxedTrack> {
+    ) -> Option<BoxedTrack> {
         None
     }
 }

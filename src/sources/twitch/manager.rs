@@ -8,7 +8,7 @@ use super::{api::TwitchGqlClient, track::TwitchTrack};
 use crate::{
     config::TwitchConfig,
     protocol::tracks::{LoadError, LoadResult, Track, TrackInfo},
-    sources::{SourcePlugin, plugin::BoxedTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 const STREAM_NAME_REGEX: &str = r"(?i)^https?://(?:www\.|go\.|m\.)?twitch\.tv/([^/]+)$";
@@ -198,7 +198,7 @@ impl SourcePlugin for TwitchSource {
             }
         };
 
-        Some(Box::new(TwitchTrack {
+        Some(Arc::new(TwitchTrack {
             stream_url,
             local_addr,
             proxy: self.proxy.clone(),

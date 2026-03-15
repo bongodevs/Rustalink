@@ -24,6 +24,7 @@ pub struct ClientConfig<'a> {
     pub gl: &'a str,
     pub utc_offset_minutes: Option<i32>,
     pub third_party_embed_url: Option<&'a str>,
+    pub attestation_request: Option<Value>,
 }
 
 impl<'a> Default for ClientConfig<'a> {
@@ -43,6 +44,7 @@ impl<'a> Default for ClientConfig<'a> {
             gl: "US",
             utc_offset_minutes: None,
             third_party_embed_url: None,
+            attestation_request: None,
         }
     }
 }
@@ -94,6 +96,12 @@ impl<'a> ClientConfig<'a> {
             && let Some(obj) = context.as_object_mut()
         {
             obj.insert("thirdParty".to_string(), json!({ "embedUrl": url }));
+        }
+
+        if let Some(att) = self.attestation_request.clone()
+            && let Some(obj) = context.as_object_mut()
+        {
+            obj.insert("attestationRequest".to_string(), att);
         }
 
         context
@@ -297,6 +305,7 @@ pub struct PlayerRequestOptions<'a> {
     pub origin: Option<&'a str>,
     pub po_token: Option<&'a str>,
     pub encrypted_host_flags: Option<String>,
+    pub attestation_request: Option<Value>,
     pub serialized_third_party_embed_config: bool,
 }
 
@@ -360,6 +369,12 @@ pub async fn make_player_request(opts: PlayerRequestOptions<'_>) -> AnyResult<Va
             .as_object_mut()
             .unwrap()
             .insert("encryptedHostFlags".to_string(), flags.into());
+    }
+
+    if let Some(att) = opts.attestation_request
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert("attestationRequest".to_string(), att);
     }
 
     let url = format!("{}/youtubei/v1/player?prettyPrint=false", INNERTUBE_API);

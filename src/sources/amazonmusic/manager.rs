@@ -32,7 +32,7 @@ use super::{
 use crate::{
     config::AmazonMusicConfig,
     protocol::tracks::{LoadError, LoadResult, PlaylistData, PlaylistInfo, Track},
-    sources::{SourcePlugin, plugin::BoxedTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 const TRACK_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/tracks/([A-Z0-9]{10,20})";

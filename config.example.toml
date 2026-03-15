@@ -9,6 +9,7 @@ max_event_queue_size = 100
 
 [player]
 stuck_threshold_ms = 10000
+stuck_initial_threshold_ms = 45000
 buffer_duration_ms = 400
 frame_buffer_duration_ms = 5000
 resampling_quality = "medium"                                                  # low | medium | high
@@ -47,7 +48,9 @@ duration_tolerance_ms = 3000
 
 [logging]
 level = "info"              # trace | debug | info | warn | error | off
-filters = "rustalink=debug" # e.g. "rustalink=debug,davey=off"
+# Filter logs from specific modules. Use "module=level" separated by commas.
+# Example: "rustalink=debug,mpa=off" (to suppress MP3 decoder warnings)
+filters = "rustalink=info,mpa=off"
 
 [logging.file]
 path = "./logs/rustalink.log"
@@ -66,9 +69,9 @@ enabled = true
 get_oauth_token = false
 
 [sources.youtube.clients]
-search = ["MUSIC_ANDROID", "MUSIC_WEB", "ANDROID", "WEB"]
+search = ["TVHTML5_SIMPLY", "MUSIC_ANDROID", "MUSIC_WEB", "ANDROID", "WEB"]
 playback = ["ANDROID_VR", "TV_CAST", "WEB_EMBEDDED", "TV", "WEB", "IOS"]
-resolve = ["WEB", "IOS", "MUSIC_WEB", "ANDROID", "TVHTML5_SIMPLY"]
+resolve = ["TVHTML5_SIMPLY", "TVHTML5_UNPLUGGED", "WEB", "IOS", "MUSIC_WEB", "ANDROID"]
 
 [sources.youtube.cipher]
 url = "https://cipher.kikkia.dev/"
@@ -92,8 +95,9 @@ recommendations_limit = 10
 playlist_load_limit = 50
 album_load_limit = 50
 artist_load_limit = 20
+# apiUrl = "http://localhost:3000/" # Custom API URL (see https://github.com/bongodevs/jiosaavn-proxy-api), removes additional proxy requirement
 # decryption = { secretKey = "your-secret-key" }
-# proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+# proxy = { url = "http://proxy:8080", username = "user", password = "pass" } # If you're using custom API URL, you don't need to configure this
 
 [sources.applemusic]
 enabled = true

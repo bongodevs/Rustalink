@@ -23,6 +23,9 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/bongodevs/Rustalink' },
         { icon: 'discord', label: 'Discord', href: 'https://discord.gg/vzjqrUpWxJ' }
       ],
+      components: {
+        SocialIcons: './src/components/CustomSocialIcons.astro',
+      },
       editLink: {
         baseUrl: 'https://github.com/bongodevs/Rustalink/edit/main/docs/',
       },
@@ -31,6 +34,7 @@ export default defineConfig({
           label: 'Getting Started',
           items: [
             { label: 'Introduction', slug: 'introduction' },
+            { label: 'Installation', slug: 'installation' },
             { label: 'Configuration', slug: 'configuration' },
             { label: 'Docker', slug: 'docker' },
             { label: 'Pterodactyl', slug: 'pterodactyl' },

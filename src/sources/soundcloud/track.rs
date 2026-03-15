@@ -1,35 +1,23 @@
 use std::net::IpAddr;
 
-use tracing::error;
+use async_trait::async_trait;
 
 use crate::{
-    audio::{
-        AudioFrame,
-        processor::{AudioProcessor, DecoderCommand},
-    },
+    common::types::AudioFormat,
     config::HttpProxyConfig,
-    sources::plugin::{DecoderOutput, PlayableTrack},
+    sources::playable_track::{PlayableTrack, ResolvedTrack},
 };
 
-/// What kind of SoundCloud stream this track uses.
 #[derive(Debug, Clone)]
 pub enum SoundCloudStreamKind {
-    /// Direct progressive MP3 stream (single HTTP URL)
     ProgressiveMp3,
-    /// Direct progressive AAC stream (single HTTP URL)
     ProgressiveAac,
-    /// HLS playlist with Opus/OGG segments
     HlsOpus,
-    /// HLS playlist with MP3 segments
     HlsMp3,
-    /// HLS playlist with AAC/TS segments
     HlsAac,
 }
 
 pub struct SoundCloudTrack {
-    /// The resolved stream URL.
-    /// - Progressive: direct audio URL (MP3 or AAC)
-    /// - HLS: M3U8 manifest URL
     pub stream_url: String,
     pub kind: SoundCloudStreamKind,
     pub bitrate_bps: u64,
@@ -37,178 +25,74 @@ pub struct SoundCloudTrack {
     pub proxy: Option<HttpProxyConfig>,
 }
 
+#[async_trait]
 impl PlayableTrack for SoundCloudTrack {
-    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
-        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
-        let (cmd_tx, cmd_rx) = flume::unbounded::<DecoderCommand>();
-        let (err_tx, err_rx) = flume::bounded::<String>(1);
+    async fn resolve(&self) -> Result<ResolvedTrack, String> {
+        let (reader, hint) = match self.kind {
+            SoundCloudStreamKind::ProgressiveMp3 => (
+                super::reader::SoundCloudReader::new(
+                    &self.stream_url,
+                    self.local_addr,
+                    self.proxy.clone(),
+                )
+                .await
+                .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
+                .map_err(|e| format!("Failed to open stream: {e}"))?,
+                AudioFormat::Mp3,
+            ),
 
-        let stream_url = self.stream_url.clone();
-        let kind = self.kind.clone();
-        let bitrate_bps = self.bitrate_bps;
-        let local_addr = self.local_addr;
-        let proxy = self.proxy.clone();
+            SoundCloudStreamKind::ProgressiveAac => (
+                super::reader::SoundCloudReader::new(
+                    &self.stream_url,
+                    self.local_addr,
+                    self.proxy.clone(),
+                )
+                .await
+                .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
+                .map_err(|e| format!("Failed to open stream: {e}"))?,
+                AudioFormat::Mp4,
+            ),
 
-        let handle = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || {
-            let _guard = handle.enter();
-            match kind {
-                SoundCloudStreamKind::ProgressiveMp3 => {
-                    let reader = match super::reader::SoundCloudReader::new(
-                        &stream_url,
-                        local_addr,
-                        proxy,
-                    ) {
-                        Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                        Err(e) => {
-                            error!("SoundCloud progressive MP3: failed to open stream: {e}");
-                            let _ = err_tx.send(format!("Failed to open stream: {e}"));
-                            return;
-                        }
-                    };
-                    run_processor(
-                        reader,
-                        Some(crate::common::types::AudioFormat::Mp3),
-                        tx,
-                        cmd_rx,
-                        err_tx,
-                        config.clone(),
-                        stream_url,
-                    );
-                }
+            SoundCloudStreamKind::HlsOpus => (
+                super::reader::SoundCloudHlsReader::new(
+                    &self.stream_url,
+                    self.bitrate_bps,
+                    self.local_addr,
+                    self.proxy.clone(),
+                )
+                .await
+                .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
+                .map_err(|e| format!("Failed to init HLS reader: {e}"))?,
+                AudioFormat::Opus,
+            ),
 
-                SoundCloudStreamKind::ProgressiveAac => {
-                    let reader = match super::reader::SoundCloudReader::new(
-                        &stream_url,
-                        local_addr,
-                        proxy,
-                    ) {
-                        Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                        Err(e) => {
-                            error!("SoundCloud progressive AAC: failed to open stream: {e}");
-                            let _ = err_tx.send(format!("Failed to open stream: {e}"));
-                            return;
-                        }
-                    };
-                    run_processor(
-                        reader,
-                        Some(crate::common::types::AudioFormat::Mp4),
-                        tx,
-                        cmd_rx,
-                        err_tx,
-                        config.clone(),
-                        stream_url,
-                    );
-                }
+            SoundCloudStreamKind::HlsMp3 => (
+                super::reader::SoundCloudHlsReader::new(
+                    &self.stream_url,
+                    self.bitrate_bps,
+                    self.local_addr,
+                    self.proxy.clone(),
+                )
+                .await
+                .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
+                .map_err(|e| format!("Failed to init HLS reader: {e}"))?,
+                AudioFormat::Mp3,
+            ),
 
-                SoundCloudStreamKind::HlsOpus => {
-                    let reader = match super::reader::SoundCloudHlsReader::new(
-                        &stream_url,
-                        bitrate_bps,
-                        local_addr,
-                        proxy,
-                    ) {
-                        Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                        Err(e) => {
-                            error!("SoundCloud HLS Opus: failed to init SoundCloudHlsReader: {e}");
-                            let _ = err_tx.send(format!("Failed to init HLS reader: {e}"));
-                            return;
-                        }
-                    };
-                    run_processor(
-                        reader,
-                        Some(crate::common::types::AudioFormat::Opus),
-                        tx,
-                        cmd_rx,
-                        err_tx,
-                        config.clone(),
-                        stream_url,
-                    );
-                }
+            SoundCloudStreamKind::HlsAac => (
+                super::reader::SoundCloudHlsReader::new(
+                    &self.stream_url,
+                    self.bitrate_bps,
+                    self.local_addr,
+                    self.proxy.clone(),
+                )
+                .await
+                .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
+                .map_err(|e| format!("Failed to init HLS reader: {e}"))?,
+                AudioFormat::Aac,
+            ),
+        };
 
-                SoundCloudStreamKind::HlsMp3 => {
-                    let reader = match super::reader::SoundCloudHlsReader::new(
-                        &stream_url,
-                        bitrate_bps,
-                        local_addr,
-                        proxy,
-                    ) {
-                        Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                        Err(e) => {
-                            error!("SoundCloud HLS MP3: failed to init SoundCloudHlsReader: {e}");
-                            let _ = err_tx.send(format!("Failed to init HLS reader: {e}"));
-                            return;
-                        }
-                    };
-                    run_processor(
-                        reader,
-                        Some(crate::common::types::AudioFormat::Mp3),
-                        tx,
-                        cmd_rx,
-                        err_tx,
-                        config.clone(),
-                        stream_url.clone(),
-                    );
-                }
-
-                SoundCloudStreamKind::HlsAac => {
-                    let reader = match super::reader::SoundCloudHlsReader::new(
-                        &stream_url,
-                        bitrate_bps,
-                        local_addr,
-                        proxy,
-                    ) {
-                        Ok(r) => Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                        Err(e) => {
-                            error!("SoundCloud HLS AAC: failed to init SoundCloudHlsReader: {e}");
-                            let _ = err_tx.send(format!("Failed to init HLS reader: {e}"));
-                            return;
-                        }
-                    };
-                    // Hint as "aac" so symphonia knows what to expect from ADTS stream.
-                    run_processor(
-                        reader,
-                        Some(crate::common::types::AudioFormat::Aac),
-                        tx,
-                        cmd_rx,
-                        err_tx,
-                        config.clone(),
-                        stream_url,
-                    );
-                }
-            }
-        });
-
-        (rx, cmd_tx, err_rx)
-    }
-}
-
-fn run_processor(
-    reader: Box<dyn symphonia::core::io::MediaSource>,
-    kind: Option<crate::common::types::AudioFormat>,
-    tx: flume::Sender<AudioFrame>,
-    cmd_rx: flume::Receiver<DecoderCommand>,
-    err_tx: flume::Sender<String>,
-    config: crate::config::player::PlayerConfig,
-    identifier: String,
-) {
-    match AudioProcessor::new(reader, kind, tx, cmd_rx, Some(err_tx.clone()), config) {
-        Ok(mut p) => {
-            std::thread::Builder::new()
-                .name(format!("soundcloud-decoder-{}", identifier))
-                .spawn(move || {
-                    if let Err(e) = p.run() {
-                        error!("SoundCloud AudioProcessor error for {}: {}", identifier, e);
-                    }
-                })
-                .expect("failed to spawn soundcloud decoder thread");
-        }
-        Err(e) => {
-            error!(
-                "SoundCloud: failed to init AudioProcessor for {} (kind={:?}): {}",
-                identifier, kind, e
-            );
-            let _ = err_tx.send(format!("Failed to initialize processor: {e}"));
-        }
+        Ok(ResolvedTrack::new(reader, Some(hint)))
     }
 }

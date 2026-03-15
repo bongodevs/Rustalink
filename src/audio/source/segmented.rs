@@ -42,17 +42,14 @@ pub struct SegmentedSource {
 }
 
 impl SegmentedSource {
-    pub fn new(client: reqwest::Client, url: &str) -> AnyResult<Self> {
-        let handle = tokio::runtime::Handle::current();
-
-        let probe = handle.block_on(
-            client
-                .get(url)
-                .header("Range", "bytes=0-0")
-                .header("Connection", "close")
-                .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
-                .send(),
-        )?;
+    pub async fn new(client: reqwest::Client, url: &str) -> AnyResult<Self> {
+        let probe = client
+            .get(url)
+            .header("Range", "bytes=0-0")
+            .header("Connection", "close")
+            .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
+            .send()
+            .await?;
 
         let len = probe
             .headers()

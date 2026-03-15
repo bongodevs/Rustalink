@@ -12,7 +12,7 @@ use super::{
 use crate::{
     config::VkMusicConfig,
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::{SourcePlugin, plugin::BoxedTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 pub struct VkMusicSource {
@@ -539,7 +539,7 @@ impl SourcePlugin for VkMusicSource {
 
         let stream_url = self.resolve_stream_url(&audio_id, None).await?;
 
-        Some(Box::new(VkMusicTrack {
+        Some(Arc::new(VkMusicTrack {
             stream_url,
             proxy: self.proxy.clone(),
             local_addr: routeplanner.and_then(|rp| rp.get_address()),

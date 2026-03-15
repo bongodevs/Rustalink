@@ -1,12 +1,12 @@
 use std::{net::IpAddr, sync::Arc};
 
+use async_trait::async_trait;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    audio::{AudioFrame, processor::DecoderCommand},
     config::HttpProxyConfig,
     sources::{
-        plugin::{DecoderOutput, PlayableTrack},
+        playable_track::{PlayableTrack, ResolvedTrack},
         youtube::{
             cipher::YouTubeCipherManager,
             clients::YouTubeClient,
@@ -26,204 +26,73 @@ pub struct YoutubeTrack {
     pub proxy: Option<HttpProxyConfig>,
 }
 
+#[async_trait]
 impl PlayableTrack for YoutubeTrack {
-    fn start_decoding(&self, config: crate::config::player::PlayerConfig) -> DecoderOutput {
-        let (tx, rx) = flume::bounded::<AudioFrame>((config.buffer_duration_ms / 20) as usize);
-        let (cmd_tx, cmd_rx) = flume::bounded(8);
-        let (err_tx, err_rx) = flume::bounded(1);
+    fn supports_seek(&self) -> bool {
+        true
+    }
 
-        let identifier_async = self.identifier.clone();
-        let cipher_manager_async = self.cipher_manager.clone();
-        let oauth_async = self.oauth.clone();
-        let clients_async = self.clients.clone();
-        let visitor_data_for_task = self.visitor_data.clone();
-        let proxy_bg = self.proxy.clone();
-        let local_addr_bg = self.local_addr;
+    async fn resolve(&self) -> Result<ResolvedTrack, String> {
+        let context    = serde_json::json!({ "visitorData": self.visitor_data });
+        let mut last_error = String::from("No clients available");
 
-        tokio::spawn(async move {
-            let context = serde_json::json!({ "visitorData": visitor_data_for_task });
+        for client in &self.clients {
+            let name = client.name().to_string();
 
-            let mut current_seek_ms = 0u64;
-            let mut current_client_index = 0;
-
-            'playback_loop: loop {
-                // Resolve a playback URL using any available client.
-                let mut resolved_url: Option<(String, String)> = None;
-
-                for (idx, client) in clients_async.iter().enumerate().skip(current_client_index) {
-                    current_client_index = idx;
-                    let client_name = client.name().to_string();
-
-                    debug!(
-                        "YoutubeTrack: Resolving '{}' using {}",
-                        identifier_async, client_name
-                    );
-                    match client
-                        .get_track_url(
-                            &identifier_async,
-                            &context,
-                            cipher_manager_async.clone(),
-                            oauth_async.clone(),
-                        )
-                        .await
-                    {
-                        Ok(Some(url)) => {
-                            info!(
-                                "YoutubeTrack: resolved track URL for '{}' using client '{}'",
-                                identifier_async, client_name
-                            );
-                            resolved_url = Some((url, client_name));
-                            break;
-                        }
-                        Ok(None) => {
-                            debug!(
-                                "YoutubeTrack: client {} returned no URL for {}",
-                                client_name, identifier_async
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                "YoutubeTrack: client {} failed to resolve {}: {}",
-                                client_name, identifier_async, e
-                            );
-                        }
-                    }
-                }
-
-                let (url, client_name) = match resolved_url {
-                    Some(r) => r,
-                    None => {
-                        let msg = format!(
-                            "YoutubeTrack: All clients failed to resolve '{}'",
-                            identifier_async
-                        );
-                        error!("{}", msg);
-                        let _ = err_tx.send(msg);
-                        return;
-                    }
-                };
-
-                let is_hls = url.contains(".m3u8") || url.contains("/playlist");
-                let url_clone = url.clone();
-                let cipher_clone = cipher_manager_async.clone();
-                let proxy_clone = proxy_bg.clone();
-                let client_name_inner = client_name.clone();
-
-                let reader_res = tokio::task::spawn_blocking(move || {
-                    create_reader(
-                        &url_clone,
-                        &client_name_inner,
-                        local_addr_bg,
-                        proxy_clone,
-                        cipher_clone,
-                    )
-                })
+            let url = match client
+                .get_track_url(
+                    &self.identifier,
+                    &context,
+                    self.cipher_manager.clone(),
+                    self.oauth.clone(),
+                )
                 .await
-                .expect("YoutubeTrack: reader spawn_blocking failed");
-
-                let reader = match reader_res {
-                    Ok(r) => r,
-                    Err(e) => {
-                        error!("YoutubeTrack: Reader initialization failed: {}", e);
-                        let _ = err_tx.send(e.to_string());
-                        return;
-                    }
-                };
-
-                let kind = detect_audio_kind(&url, is_hls);
-
-                let (inner_cmd_tx, inner_cmd_rx) = flume::bounded(8);
-                let tx_clone = tx.clone();
-                let err_tx_clone = err_tx.clone();
-
-                let config_for_processor = config.clone();
-                let (done_tx, mut done_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
-                let identifier_for_thread = identifier_async.clone();
-
-                std::thread::Builder::new()
-                    .name(format!("youtube-decoder-{}", identifier_async))
-                    .spawn(move || {
-                        let result = match crate::audio::processor::AudioProcessor::new(
-                            reader,
-                            Some(kind),
-                            tx_clone,
-                            inner_cmd_rx,
-                            Some(err_tx_clone.clone()),
-                            config_for_processor,
-                        ) {
-                            Ok(mut processor) => processor.run().map_err(|e| e.to_string()),
-                            Err(e) => {
-                                error!(
-                                    "YoutubeTrack: AudioProcessor initialization failed for {}: {}",
-                                    identifier_for_thread, e
-                                );
-                                Err(format!("Failed to initialize processor: {}", e))
-                            }
-                        };
-                        let _ = done_tx.send(result);
-                    })
-                    .expect("failed to spawn youtube decoder thread");
-
-                if current_seek_ms > 0 {
-                    let _ = inner_cmd_tx.send(DecoderCommand::Seek(current_seek_ms));
+            {
+                Ok(Some(url)) => {
+                    info!("YoutubeTrack: resolved '{}' using '{name}'", self.identifier);
+                    url
                 }
-
-                loop {
-                    tokio::select! {
-                        cmd_res = cmd_rx.recv_async() => {
-                            match cmd_res {
-                                Ok(DecoderCommand::Seek(ms)) => {
-                                    current_seek_ms = ms;
-                                    let _ = inner_cmd_tx.send(DecoderCommand::Seek(ms));
-                                }
-                                Ok(DecoderCommand::Stop) | Err(_) => {
-                                    let _ = inner_cmd_tx.send(DecoderCommand::Stop);
-                                    return;
-                                }
-                            }
-                        }
-                        res = &mut done_rx => {
-                            let res = match res {
-                                Ok(r) => Ok(r),
-                                Err(_) => Err("decoder thread dropped".to_string()),
-                            };
-                            match res {
-                                Ok(Err(e)) => {
-                                    warn!(
-                                        "YoutubeTrack: Playback failed for '{}' with client {}: {}. Attempting fallback...",
-                                        identifier_async, clients_async[current_client_index].name(), e
-                                    );
-                                    current_client_index += 1;
-                                    if current_client_index < clients_async.len() {
-                                        continue 'playback_loop;
-                                    } else {
-                                        error!(
-                                            "YoutubeTrack: All clients failed for '{}'",
-                                            identifier_async
-                                        );
-                                        let _ = err_tx.send(format!("All clients failed: {}", e));
-                                    }
-                                }
-                                Ok(Ok(())) => {
-                                    debug!(
-                                        "YoutubeTrack: Playback finished for '{}'",
-                                        identifier_async
-                                    );
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "YoutubeTrack: Join error for '{}': {}",
-                                        identifier_async, e
-                                    );
-                                }
-                            }
-                            return;
-                        }
+                Ok(None) => {
+                    debug!("YoutubeTrack: client '{name}' returned no URL for '{}'", self.identifier);
+                    continue;
+                }
+                Err(e) => {
+                    warn!("YoutubeTrack: client '{name}' failed for '{}': {e}", self.identifier);
+                    last_error = e.to_string();
+                    if is_playability_error(&last_error) {
+                        return Err(last_error);
                     }
+                    continue;
+                }
+            };
+
+            // URL mil gaya — hint nikalo, reader banao
+            let is_hls     = url.contains(".m3u8") || url.contains("/playlist");
+            let hint       = Some(detect_audio_kind(&url, is_hls));
+            let proxy      = self.proxy.clone();
+            let local_addr = self.local_addr;
+            let cipher     = self.cipher_manager.clone();
+            let url_clone  = url.clone();
+            let name_clone = name.clone();
+
+            match create_reader(&url_clone, &name_clone, local_addr, proxy, cipher).await {
+                Ok(reader) => return Ok(ResolvedTrack::new(reader, hint)),
+                Err(e) => {
+                    warn!("YoutubeTrack: reader failed for '{name}': {e} — trying next client");
+                    last_error = e.to_string();
+                    continue;
                 }
             }
-        });
+        }
 
-        (rx, cmd_tx, err_rx)
+        error!("YoutubeTrack: all clients failed for '{}': {last_error}", self.identifier);
+        Err(format!("All clients failed: {last_error}"))
     }
+}
+
+
+fn is_playability_error(msg: &str) -> bool {
+    msg.contains("This video ")
+        || msg.contains("This is a private video")
+        || msg.contains("This trailer cannot be loaded")
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     common::HttpClientPool,
-    sources::plugin::{BoxedSource, BoxedTrack},
+    sources::playable_track::{BoxedSource, BoxedTrack},
 };
 
 mod best_match;

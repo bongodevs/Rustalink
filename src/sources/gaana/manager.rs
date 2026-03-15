@@ -8,7 +8,7 @@ use tracing::warn;
 use super::track::GaanaTrack;
 use crate::{
     protocol::tracks::{LoadError, LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::{SourcePlugin, plugin::PlayableTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 const API_URL: &str = "https://gaana.com/apiv2";
@@ -560,7 +560,7 @@ impl SourcePlugin for GaanaSource {
         &self,
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<Box<dyn PlayableTrack>> {
+    ) -> Option<BoxedTrack> {
         let track_id = if let Some(caps) = url_regex().captures(identifier) {
             if caps.name("type").map(|m| m.as_str()) != Some("song") {
                 return None;
@@ -588,7 +588,7 @@ impl SourcePlugin for GaanaSource {
             return None;
         }
 
-        Some(Box::new(GaanaTrack {
+        Some(Arc::new(GaanaTrack {
             client: self.client.clone(),
             track_id,
             stream_quality: self.stream_quality.clone(),

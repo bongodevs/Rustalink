@@ -1,9 +1,8 @@
-name: 🚀 Rustalink Release Pipeline
+name: Rustalink Release Pipeline
 
 on:
   release:
     types: [published]
-
 permissions:
   contents: write
   packages: write
@@ -18,7 +17,7 @@ env:
 jobs:
   # Build Linux Binaries
   build-linux:
-    name: 🐧 Build Linux (${{ matrix.arch }})
+    name: Build Linux (${{ matrix.arch }})
     runs-on: ubuntu-22.04
 
     strategy:
@@ -31,15 +30,15 @@ jobs:
             arch: arm64
 
     steps:
-      - name: 📥 Checkout source
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: 🦀 Install Rust
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: 📦 Cache cargo registry
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
@@ -47,13 +46,13 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: 🎯 Cache target directory
+      - name: Cache target directory
         uses: actions/cache@v4
         with:
           path: target
           key: ${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
 
-      - name: 🔧 Install build dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -70,15 +69,15 @@ jobs:
             echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           fi
 
-      - name: 🏗 Build release binary
+      - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: 📦 Rename binary
+      - name: Rename binary
         run: |
           mv target/${{ matrix.target }}/release/rustalink \
              target/${{ matrix.target }}/release/rustalink-linux-${{ matrix.arch }}
 
-      - name: 📤 Upload artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: rustalink-linux-${{ matrix.arch }}
@@ -86,7 +85,7 @@ jobs:
 
   # Build macOS + Windows
   build-other:
-    name: 💻 Build ${{ matrix.os_name }}
+    name: Build ${{ matrix.os_name }}
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -114,15 +113,15 @@ jobs:
             output: rustalink-windows-arm64.exe
 
     steps:
-      - name: 📥 Checkout source
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: 🦀 Install Rust
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: 📦 Cache cargo registry
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
@@ -130,35 +129,35 @@ jobs:
             ~/.cargo/git
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: 🎯 Cache target directory
+      - name: Cache target directory
         uses: actions/cache@v4
         with:
           path: target
           key: ${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
 
-      - name: 🔧 Install macOS dependencies
+      - name: Install macOS dependencies
         if: startsWith(matrix.os, 'macos')
         run: brew install cmake pkg-config
 
-      - name: 🏗 Build release binary
+      - name: Build release binary
         env:
           CMAKE_POLICY_VERSION_MINIMUM: 3.5
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: 📦 Rename binary (Unix)
+      - name: Rename binary (Unix)
         if: "!startsWith(matrix.os, 'windows')"
         run: |
           mv target/${{ matrix.target }}/release/rustalink \
              target/${{ matrix.target }}/release/${{ matrix.output }}
 
-      - name: 📦 Rename binary (Windows)
+      - name: Rename binary (Windows)
         if: startsWith(matrix.os, 'windows')
         shell: bash
         run: |
           mv target/${{ matrix.target }}/release/rustalink.exe \
              target/${{ matrix.target }}/release/${{ matrix.output }}
 
-      - name: 📤 Upload artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.output }}
@@ -166,38 +165,38 @@ jobs:
 
   # Build & Push Multi-Arch Docker Image
   docker:
-    name: 🐳 Build & Push Docker Image
+    name: Build & Push Docker Image
     needs: build-linux
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout source
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: 📥 Download Linux binaries
+      - name: Download Linux binaries
         uses: actions/download-artifact@v4
         with:
           path: bin
           pattern: rustalink-linux-*
 
-      - name: 📂 Organize binaries
+      - name: Organize binaries
         run: |
           mkdir -p bin/linux/amd64 bin/linux/arm64
           mv bin/rustalink-linux-amd64/rustalink-linux-amd64 bin/linux/amd64/rustalink
           mv bin/rustalink-linux-arm64/rustalink-linux-arm64 bin/linux/arm64/rustalink
           chmod +x bin/linux/amd64/rustalink bin/linux/arm64/rustalink
 
-      - name: 🔧 Setup Docker Buildx
+      - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 🔐 Login to GHCR
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 🏷 Generate Docker metadata
+      - name: Generate Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -207,7 +206,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - name: 🚀 Build & Push Image
+      - name: Build & Push Image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -223,18 +222,18 @@ jobs:
 
   # Publish GitHub Release Assets
   publish:
-    name: 📦 Publish Release Assets
+    name: Publish Release Assets
     needs: [build-linux, build-other]
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Download all artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: rustalink-*
 
-      - name: 🚀 Attach binaries to GitHub Release
+      - name: Attach binaries to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
@@ -242,3 +241,60 @@ jobs:
           tag_name: ${{ github.event.release.tag_name }}
           overwrite_files: true
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Send Discord Notification
+  notify:
+    if: always()
+    name: Discord Notification
+    needs: [docker, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Discord Payload
+        run: |
+          # Safely escape the release body for JSON
+          BODY_JSON=$(echo "$BODY" | jq -Rs .)
+          cat <<EOF > discord_payload.json
+          {
+            "username": "${{ github.event.repository.name }}",
+            "avatar_url": "https://github.com/${{ github.repository_owner }}.png",
+            "embeds": [
+              {
+                "author": {
+                  "name": "${{ github.event.repository.name }}",
+                  "url": "https://github.com/${{ github.repository }}",
+                  "icon_url": "https://github.com/${{ github.repository_owner }}.png"
+                },
+                "title": "${{ github.event.repository.name }} version ${{ github.event.release.tag_name }} has been released",
+                "url": "${{ github.event.release.html_url }}",
+                "description": $BODY_JSON,
+                "color": 16747520,
+                "footer": {
+                  "text": "Release by ${{ github.event.release.author.login }}",
+                  "icon_url": "https://github.com/${{ github.event.release.author.login }}.png"
+                },
+                "timestamp": "${{ github.event.release.published_at }}"
+              }
+            ],
+            "components": [
+              {
+                "type": 1,
+                "components": [
+                  {
+                    "type": 2,
+                    "style": 5,
+                    "label": "Release Notes",
+                    "url": "${{ github.event.release.html_url }}"
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+        env:
+          BODY: ${{ github.event.release.body }}
+
+      - name: Send Discord Webhook
+        uses: tsickert/discord-webhook@v7
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          raw-data: discord_payload.json

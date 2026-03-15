@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use regex::Regex;
 
 use self::track::JioSaavnTrack;
-use crate::{protocol::tracks::LoadResult, sources::plugin::PlayableTrack};
+use crate::{protocol::tracks::LoadResult, sources::playable_track::BoxedTrack};
 
 pub mod helpers;
 pub mod metadata;
@@ -25,6 +25,7 @@ pub struct JioSaavnSource {
     pub(crate) client: Arc<reqwest::Client>,
     pub(crate) secret_key: Vec<u8>,
     pub(crate) proxy: Option<crate::config::HttpProxyConfig>,
+    pub(crate) api_url: String,
     // Limits
     pub(crate) search_limit: usize,
     pub(crate) recommendations_limit: usize,
@@ -46,6 +47,7 @@ impl JioSaavnSource {
             album_load_limit,
             artist_load_limit,
             proxy,
+            api_url,
         ) = if let Some(c) = config {
             (
                 c.decryption
@@ -57,9 +59,20 @@ impl JioSaavnSource {
                 c.album_load_limit,
                 c.artist_load_limit,
                 c.proxy,
+                c.api_url
+                    .unwrap_or_else(|| "https://www.jiosaavn.com/api.php".to_owned()),
             )
         } else {
-            ("38346591".to_owned(), 10, 10, 50, 50, 20, None)
+            (
+                "38346591".to_owned(),
+                10,
+                10,
+                50,
+                50,
+                20,
+                None,
+                "https://www.jiosaavn.com/api.php".to_owned(),
+            )
         };
 
         Ok(Self {
@@ -71,6 +84,7 @@ impl JioSaavnSource {
             playlist_load_limit,
             album_load_limit,
             artist_load_limit,
+            api_url,
         })
     }
 }
@@ -151,7 +165,7 @@ impl crate::sources::plugin::SourcePlugin for JioSaavnSource {
         &self,
         identifier: &str,
         routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
-    ) -> Option<Box<dyn PlayableTrack>> {
+    ) -> Option<BoxedTrack> {
         let id = if let Some(caps) = url_regex().captures(identifier) {
             caps.name("id").map(|m| m.as_str()).unwrap_or(identifier)
         } else {
@@ -173,7 +187,7 @@ impl crate::sources::plugin::SourcePlugin for JioSaavnSource {
 
         let local_addr = routeplanner.and_then(|rp| rp.get_address());
 
-        Some(Box::new(JioSaavnTrack {
+        Some(Arc::new(JioSaavnTrack {
             encrypted_url,
             secret_key: self.secret_key.clone(),
             is_320,

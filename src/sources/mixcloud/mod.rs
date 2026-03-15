@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::{
     protocol::tracks::{LoadResult, PlaylistData, PlaylistInfo, Track, TrackInfo},
-    sources::{SourcePlugin, plugin::BoxedTrack},
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 pub mod reader;
@@ -509,7 +509,7 @@ impl SourcePlugin for MixcloudSource {
             return None;
         }
 
-        Some(Box::new(track::MixcloudTrack {
+        Some(Arc::new(track::MixcloudTrack {
             client: self.client.clone(),
             hls_url,
             stream_url,
