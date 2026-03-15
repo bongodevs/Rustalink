@@ -65,17 +65,76 @@ Install Rustalink from source using the commands for your operating system.
 	</TabItem>
 
 	<TabItem label="Windows">
+		### 1. Install required tools
+
+		Install dependencies using `winget`:
+
 		```powershell
-		# Install build tools and dependencies
-		winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-		winget install --id Kitware.CMake --exact
 		winget install --id Git.Git --exact
-
-		# Install Rust stable (MSVC)
+		winget install --id Kitware.CMake --exact
 		winget install --id Rustlang.Rustup --exact
-		rustup default stable-x86_64-pc-windows-msvc
+		winget install --id Microsoft.VisualStudio.2022.BuildTools --exact
+		```
 
-		# Build Rustalink
+		### 2. Install C++ build tools (required for Rust MSVC)
+
+		Rust on Windows uses the MSVC toolchain, which requires the Microsoft C++ compiler and linker (`link.exe`).
+
+		Open Visual Studio Installer from the Start Menu.
+
+		Locate **Build Tools for Visual Studio 2022**.
+
+		Click **Modify**.
+
+		Select the workload:
+
+		Desktop development with C++
+
+		Ensure the following components are checked:
+
+		- MSVC v143 - VS 2022 C++ x64/x86 build tools
+		- Windows 10/11 SDK
+
+		These provide:
+
+		- `cl.exe` (MSVC compiler)
+		- `link.exe` (required by Rust)
+		- Windows headers and libraries
+
+		Without these components, builds will fail with:
+
+		```text
+		error: linker `link.exe` not found
+		```
+
+		### 3. Fix CMake policy compatibility (CMake 4.x)
+
+		Recent versions of CMake 4.x removed compatibility with very old policy versions used by some crates.
+
+		Set this environment variable once to avoid build failures from dependencies such as `audiopus_sys`:
+
+		```powershell
+		setx CMAKE_POLICY_VERSION_MINIMUM 3.5
+		```
+
+		Restart your terminal after running this command.
+
+		### 4. Install Rust toolchain
+
+		```powershell
+		rustup default stable-x86_64-pc-windows-msvc
+		```
+
+		Verify installation:
+
+		```powershell
+		rustc --version
+		cargo --version
+		```
+
+		### 5. Build Rustalink
+
+		```powershell
 		cargo build --release --locked
 		```
 
