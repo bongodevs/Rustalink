@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct PlayerConfig {
     #[serde(default = "default_stuck_threshold_ms")]
     pub stuck_threshold_ms: u64,
+    #[serde(default = "default_stuck_initial_threshold_ms")]
+    pub stuck_initial_threshold_ms: u64,
     #[serde(default = "default_buffer_duration_ms")]
     pub buffer_duration_ms: u64,
     #[serde(default = "default_frame_buffer_duration_ms")]
@@ -60,6 +62,7 @@ impl Default for PlayerConfig {
     fn default() -> Self {
         Self {
             stuck_threshold_ms: default_stuck_threshold_ms(),
+            stuck_initial_threshold_ms: default_stuck_initial_threshold_ms(),
             buffer_duration_ms: default_buffer_duration_ms(),
             frame_buffer_duration_ms: default_frame_buffer_duration_ms(),
             resampling_quality: ResamplingQuality::default(),
@@ -82,6 +85,9 @@ impl Default for TapeConfig {
 
 fn default_stuck_threshold_ms() -> u64 {
     10000
+}
+fn default_stuck_initial_threshold_ms() -> u64 {
+    45000
 }
 fn default_buffer_duration_ms() -> u64 {
     400

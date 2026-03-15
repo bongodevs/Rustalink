@@ -161,6 +161,7 @@ pub async fn start_playback(player: &mut PlayerContext, config: PlaybackStartCon
         stop_signal: player.stop_signal.clone(),
         ping: player.ping.clone(),
         stuck_threshold_ms: player.config.stuck_threshold_ms,
+        stuck_initial_threshold_ms: player.config.stuck_initial_threshold_ms,
         update_every_n: (config.update_interval_secs * 2).max(1),
         lyrics_subscribed: player.lyrics_subscribed.clone(),
         lyrics_data: player.lyrics_data.clone(),

@@ -198,8 +198,13 @@ impl AudioProcessor {
                             self.resampler.process(pcm_data, &mut resampled);
                         }
 
-                        if !resampled.is_empty() && !self.engine.push(AudioFrame::Pcm(resampled)) {
-                            return Ok(());
+                        if !resampled.is_empty() {
+                            if packet_count == 1 {
+                                debug!("AudioProcessor: Sending first frame to engine (capacity={})", resampled.capacity());
+                            }
+                            if !self.engine.push(AudioFrame::Pcm(resampled)) {
+                                return Ok(());
+                            }
                         }
                     }
 

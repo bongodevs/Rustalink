@@ -9,6 +9,7 @@ max_event_queue_size = 100
 
 [player]
 stuck_threshold_ms = 10000
+stuck_initial_threshold_ms = 45000
 buffer_duration_ms = 400
 frame_buffer_duration_ms = 5000
 resampling_quality = "medium"                                                  # low | medium | high
