@@ -25,7 +25,6 @@ pub struct MonitorCtx {
     pub stop_signal: Arc<std::sync::atomic::AtomicBool>,
     pub ping: Arc<std::sync::atomic::AtomicI64>,
     pub stuck_threshold_ms: u64,
-    pub stuck_initial_threshold_ms: u64,
     pub update_every_n: u64,
     pub lyrics_subscribed: Arc<std::sync::atomic::AtomicBool>,
     pub lyrics_data: Arc<tokio::sync::Mutex<Option<LyricsData>>>,
@@ -41,6 +40,8 @@ pub async fn monitor_loop(ctx: MonitorCtx) {
     let mut stuck_fired = false;
     let mut buffering_started_at: Option<std::time::Instant> = None;
 
+    send_player_update(&ctx, last_pos);
+    
     loop {
         interval.tick().await;
         tick = tick.wrapping_add(1);
@@ -174,16 +175,16 @@ async fn check_stuck(
     last_pos_changed_at: std::time::Instant,
     buffering_started_at: Option<std::time::Instant>,
 ) -> bool {
+    if ctx.handle.get_state() != PlaybackState::Playing {
+        return false;
+    }
+
     let elapsed_ms = match buffering_started_at {
         Some(started) => started.elapsed().as_millis() as u64,
         None => last_pos_changed_at.elapsed().as_millis() as u64,
     };
 
-    let threshold = if cur_pos == 0 {
-        ctx.stuck_threshold_ms.max(ctx.stuck_initial_threshold_ms)
-    } else {
-        ctx.stuck_threshold_ms
-    };
+    let threshold = ctx.stuck_threshold_ms;
 
     if elapsed_ms >= threshold {
         ctx.session.send_message(&protocol::OutgoingMessage::Event {
@@ -208,7 +209,6 @@ async fn check_stuck(
             threshold,
             buffering_started_at.is_some()
         );
-        ctx.handle.stop();
         return true;
     }
     false
