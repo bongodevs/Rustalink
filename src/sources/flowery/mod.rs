@@ -7,9 +7,7 @@ use tracing::debug;
 use crate::{
     config::sources::FloweryConfig,
     protocol::tracks::{LoadResult, Track, TrackInfo},
-    sources::{
-        SourcePlugin, http::HttpTrack, playable_track::BoxedTrack
-    },
+    sources::{SourcePlugin, http::HttpTrack, playable_track::BoxedTrack},
 };
 
 pub struct FlowerySource {

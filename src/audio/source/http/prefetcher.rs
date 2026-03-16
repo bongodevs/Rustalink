@@ -157,7 +157,8 @@ pub async fn prefetch_loop(
                         }
                     }
                     Ok(res)
-                }.await;
+                }
+                .await;
 
                 match skip_result {
                     Ok(r) => {

@@ -32,13 +32,16 @@ impl PlayableTrack for TwitchTrack {
 
         let (err_tx, _err_rx) = flume::bounded::<String>(1);
 
-        let reader = Box::new(LiveHlsReader::new(
-            self.stream_url.clone(),
-            self.local_addr,
-            self.proxy.clone(),
-            handle,
-            err_tx,
-        ).await) as Box<dyn MediaSource>;
+        let reader = Box::new(
+            LiveHlsReader::new(
+                self.stream_url.clone(),
+                self.local_addr,
+                self.proxy.clone(),
+                handle,
+                err_tx,
+            )
+            .await,
+        ) as Box<dyn MediaSource>;
 
         Ok(ResolvedTrack::new(reader, Some(AudioFormat::Aac)))
     }
@@ -211,7 +214,10 @@ impl Read for LiveHlsReader {
                 return Ok(n);
             }
 
-            match self.chunk_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+            match self
+                .chunk_rx
+                .recv_timeout(std::time::Duration::from_millis(500))
+            {
                 Ok(chunk) => {
                     self.current = chunk;
                     self.pos = 0;

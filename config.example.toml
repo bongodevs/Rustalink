@@ -253,6 +253,7 @@ enabled = true
 [sources.amazonmusic]
 enabled = true
 search_limit = 10
+# api_url = "http://localhost:3000/" # Custom API URL for direct playback (Find it yourself)
 # proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
 
 [lyrics]

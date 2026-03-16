@@ -1,8 +1,8 @@
 pub mod reader;
 pub mod track;
 
-pub use track::HttpTrack;
 use std::sync::{Arc, OnceLock};
+pub use track::HttpTrack;
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -18,10 +18,7 @@ use tracing::{debug, warn};
 use crate::{
     common::types::AnyResult,
     protocol::tracks::{LoadResult, Track, TrackInfo},
-    sources::{
-        SourcePlugin,
-        playable_track::PlayableTrack,
-    },
+    sources::{SourcePlugin, playable_track::PlayableTrack},
 };
 
 fn url_regex() -> &'static Regex {
@@ -42,7 +39,10 @@ impl HttpSource {
         Self
     }
 
-    async fn probe_metadata(url: String, local_addr: Option<std::net::IpAddr>) -> AnyResult<TrackInfo> {
+    async fn probe_metadata(
+        url: String,
+        local_addr: Option<std::net::IpAddr>,
+    ) -> AnyResult<TrackInfo> {
         let source = reader::HttpReader::new(&url, local_addr, None).await?;
         let mut hint = Hint::new();
 
@@ -182,5 +182,3 @@ impl SourcePlugin for HttpSource {
         }
     }
 }
-
-

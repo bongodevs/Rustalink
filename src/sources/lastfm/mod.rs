@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use regex::Regex;
 
 use crate::{
-    protocol::tracks::LoadResult, sources::{SourcePlugin, playable_track::BoxedTrack},
+    protocol::tracks::LoadResult,
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 pub fn path_regex() -> &'static Regex {

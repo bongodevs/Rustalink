@@ -38,8 +38,8 @@ impl PlayableTrack for TidalTrack {
         );
 
         let client_inner = (*self.client.inner).clone();
-        let stream_url   = self.stream_url.clone();
-        let kind         = self.kind;
+        let stream_url = self.stream_url.clone();
+        let kind = self.kind;
 
         let reader = HttpSource::new(client_inner, &stream_url)
             .await

@@ -17,10 +17,7 @@ use tracing::{debug, error, warn};
 use crate::{
     common::Severity,
     protocol::tracks::{LoadError, LoadResult, Track, TrackInfo},
-    sources::{
-        SourcePlugin,
-        playable_track::BoxedTrack,
-    },
+    sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
 pub struct LocalSource;
@@ -188,4 +185,3 @@ impl SourcePlugin for LocalSource {
         Some(Arc::new(LocalTrack { path }))
     }
 }
-

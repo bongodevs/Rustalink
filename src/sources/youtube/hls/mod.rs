@@ -434,9 +434,9 @@ async fn prefetch_loop(
 
                 let mut tmp_buf = Vec::with_capacity(256 * 1024);
                 for res in &batch {
-                    if let Ok(resolved) = resolve_resource_static(res, &cipher_manager, &player_url).await
-                        && let Err(e) =
-                            fetch_and_demux_into(&client, &resolved, &mut tmp_buf).await
+                    if let Ok(resolved) =
+                        resolve_resource_static(res, &cipher_manager, &player_url).await
+                        && let Err(e) = fetch_and_demux_into(&client, &resolved, &mut tmp_buf).await
                     {
                         tracing::warn!("HLS prefetch: segment fetch error during seek: {}", e);
                     }
@@ -492,8 +492,7 @@ async fn prefetch_loop(
             }
 
             if let Ok(resolved) = resolve_resource_static(res, &cipher_manager, &player_url).await
-                && let Err(e) =
-                    fetch_and_demux_into(&client, &resolved, &mut tmp_buf).await
+                && let Err(e) = fetch_and_demux_into(&client, &resolved, &mut tmp_buf).await
             {
                 tracing::warn!("HLS prefetch: segment fetch error: {}", e);
             }

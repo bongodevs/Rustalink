@@ -9,6 +9,7 @@ pub struct AmazonMusicConfig {
     #[serde(default = "default_search_limit")]
     pub search_limit: usize,
     pub proxy: Option<HttpProxyConfig>,
+    pub api_url: Option<String>,
 }
 
 fn default_search_limit() -> usize {

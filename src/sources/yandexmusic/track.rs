@@ -42,15 +42,10 @@ impl PlayableTrack for YandexMusicTrack {
 
         http_track.resolve().await
     }
-
 }
 
-
-pub(super) async fn fetch_download_url(
-    client: &Arc<reqwest::Client>,
-    id: &str,
-) -> Option<String> {
-    let url  = format!("https://api.music.yandex.net/tracks/{}/download-info", id);
+pub(super) async fn fetch_download_url(client: &Arc<reqwest::Client>, id: &str) -> Option<String> {
+    let url = format!("https://api.music.yandex.net/tracks/{}/download-info", id);
     let resp = client.get(url).send().await.ok()?;
     let data: serde_json::Value = resp.json().await.ok()?;
 
@@ -62,7 +57,7 @@ pub(super) async fn fetch_download_url(
         .collect();
 
     mp3_items.sort_by_key(|item| item["bitrateInKbps"].as_u64().unwrap_or(0));
-    let best_mp3          = mp3_items.last()?;
+    let best_mp3 = mp3_items.last()?;
     let download_info_url = best_mp3["downloadInfoUrl"].as_str()?;
 
     let xml_resp = client.get(download_info_url).send().await.ok()?;
@@ -70,14 +65,14 @@ pub(super) async fn fetch_download_url(
 
     let get_tag = |text: &str, tag: &str| -> Option<String> {
         let pattern = format!("<{tag}>(?P<val>[^<]+)</{tag}>");
-        let re      = Regex::new(&pattern).ok()?;
+        let re = Regex::new(&pattern).ok()?;
         re.captures(text)?.name("val")?.as_str().to_string().into()
     };
 
     let host = get_tag(&xml_text, "host")?;
     let path = get_tag(&xml_text, "path")?;
-    let ts   = get_tag(&xml_text, "ts")?;
-    let s    = get_tag(&xml_text, "s")?;
+    let ts = get_tag(&xml_text, "ts")?;
+    let s = get_tag(&xml_text, "s")?;
 
     let md5 = utils::generate_download_sign(&path, &s);
 

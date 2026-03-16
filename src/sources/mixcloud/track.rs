@@ -32,15 +32,17 @@ impl PlayableTrack for MixcloudTrack {
         };
 
         let local_addr = self.local_addr;
-        let uri        = self.uri.clone();
+        let uri = self.uri.clone();
 
         if let Some(url) = hls_url {
             crate::sources::youtube::hls::HlsReader::new(&url, local_addr, None, None, None)
                 .await
-                .map(|r| ResolvedTrack::new(
-                    Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                    Some(AudioFormat::Aac),
-                ))
+                .map(|r| {
+                    ResolvedTrack::new(
+                        Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
+                        Some(AudioFormat::Aac),
+                    )
+                })
                 .map_err(|e| {
                     error!("Mixcloud HlsReader failed to initialize: {e}");
                     format!("Failed to init HLS reader: {e}")
@@ -54,10 +56,12 @@ impl PlayableTrack for MixcloudTrack {
 
             super::reader::MixcloudReader::new(&url, local_addr)
                 .await
-                .map(|r| ResolvedTrack::new(
-                    Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                    hint,
-                ))
+                .map(|r| {
+                    ResolvedTrack::new(
+                        Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
+                        hint,
+                    )
+                })
                 .map_err(|e| {
                     error!("MixcloudReader failed to initialize: {e}");
                     format!("Failed to init reader: {e}")

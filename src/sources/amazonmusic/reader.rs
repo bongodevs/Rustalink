@@ -1,0 +1,48 @@
+use std::io::{Read, Seek, SeekFrom};
+
+use symphonia::core::io::MediaSource;
+
+use crate::{
+    audio::source::{HttpSource, create_client},
+    common::types::AnyResult,
+};
+
+const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+
+pub struct AmazonRemoteReader {
+    inner: HttpSource,
+}
+
+impl AmazonRemoteReader {
+    pub async fn open(
+        url: &str,
+        local_addr: Option<std::net::IpAddr>,
+        proxy: Option<crate::config::HttpProxyConfig>,
+    ) -> AnyResult<Self> {
+        let client = create_client(UA.to_owned(), local_addr, proxy, None)?;
+        let inner = HttpSource::new(client, url).await?;
+        Ok(Self { inner })
+    }
+}
+
+impl Read for AmazonRemoteReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl Seek for AmazonRemoteReader {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+impl MediaSource for AmazonRemoteReader {
+    fn is_seekable(&self) -> bool {
+        self.inner.is_seekable()
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        self.inner.byte_len()
+    }
+}

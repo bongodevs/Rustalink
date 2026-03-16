@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::json;
 use tracing::debug;
 
+use super::direct::AmazonMusicTrack;
 use super::{
     api::AmazonMusicClient,
     parsers::{
@@ -35,6 +36,14 @@ use crate::{
     sources::{SourcePlugin, playable_track::BoxedTrack},
 };
 
+#[derive(serde::Deserialize)]
+struct StreamApiResponse {
+    #[serde(rename = "streamUrl")]
+    stream_url: String,
+    #[serde(rename = "decryptionKey")]
+    decryption_key: String,
+}
+
 const TRACK_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/tracks/([A-Z0-9]{10,20})";
 const ALBUM_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/albums/([A-Z0-9]{10,20})";
 const ARTIST_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.[a-z.]+/artists/([A-Z0-9]{10,20})";
@@ -46,8 +55,11 @@ const DOMAIN_RE: &str = r"(?i)^https?://(?:www\.)?music\.amazon\.";
 
 pub struct AmazonMusicSource {
     client: Arc<AmazonMusicClient>,
+    http: Arc<reqwest::Client>,
     search_limit: usize,
     proxy: Option<crate::config::HttpProxyConfig>,
+    api_url: Option<String>,
+    local_addr: Option<IpAddr>,
     track_re: Regex,
     album_re: Regex,
     artist_re: Regex,
@@ -59,9 +71,12 @@ pub struct AmazonMusicSource {
 impl AmazonMusicSource {
     pub fn new(config: AmazonMusicConfig, http: Arc<reqwest::Client>) -> Result<Self, String> {
         Ok(Self {
-            client: Arc::new(AmazonMusicClient::new(http)),
+            client: Arc::new(AmazonMusicClient::new(Arc::clone(&http))),
+            http,
             search_limit: config.search_limit.min(5),
             proxy: config.proxy,
+            api_url: config.api_url,
+            local_addr: None,
             track_re: Regex::new(TRACK_RE).map_err(|e| e.to_string())?,
             album_re: Regex::new(ALBUM_RE).map_err(|e| e.to_string())?,
             artist_re: Regex::new(ARTIST_RE).map_err(|e| e.to_string())?,
@@ -499,10 +514,71 @@ impl SourcePlugin for AmazonMusicSource {
 
     async fn get_track(
         &self,
-        _identifier: &str,
-        _routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
+        identifier: &str,
+        routeplanner: Option<Arc<dyn crate::routeplanner::RoutePlanner>>,
     ) -> Option<BoxedTrack> {
-        None
+        let api_base = match self.api_url.as_ref() {
+            Some(url) => url,
+            None => {
+                tracing::debug!("AmazonMusic: api_url not set, falling back to mirror");
+                return None;
+            }
+        };
+
+        let track_id = self
+            .capture_id(&self.track_re, identifier)
+            .unwrap_or_else(|| identifier.to_string());
+
+        let api_endpoint = format!("{}/api/track/{}", api_base.trim_end_matches('/'), track_id);
+
+        let response = match self
+            .http
+            .get(&api_endpoint)
+            .header("User-Agent", super::direct::UA)
+            .send()
+            .await
+        {
+            Ok(res) => {
+                if !res.status().is_success() {
+                    tracing::warn!("AmazonMusic API returned error status: {}", res.status());
+                    return None;
+                }
+                match res.json::<StreamApiResponse>().await {
+                    Ok(data) => data,
+                    Err(e) => {
+                        tracing::warn!("AmazonMusic API failed to parse JSON: {}", e);
+                        return None;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("AmazonMusic API request failed: {}", e);
+                return None;
+            }
+        };
+
+        if response.stream_url.is_empty() {
+            tracing::warn!("AmazonMusic API returned empty stream URL");
+            return None;
+        }
+
+        let local_addr = routeplanner
+            .as_ref()
+            .and_then(|rp| rp.get_address())
+            .or(self.local_addr);
+
+        tracing::info!(
+            "AmazonMusic: Direct playback configured successfully for {}",
+            track_id
+        );
+
+        Some(Arc::new(AmazonMusicTrack {
+            track_id,
+            stream_url: response.stream_url,
+            decryption_key: response.decryption_key,
+            local_addr,
+            proxy: self.proxy.clone(),
+        }))
     }
 
     fn get_proxy_config(&self) -> Option<crate::config::HttpProxyConfig> {

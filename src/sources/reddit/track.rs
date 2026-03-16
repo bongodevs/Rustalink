@@ -18,7 +18,9 @@ pub struct RedditTrack {
 #[async_trait]
 impl PlayableTrack for RedditTrack {
     async fn resolve(&self) -> Result<ResolvedTrack, String> {
-        let url = self.audio_url.clone()
+        let url = self
+            .audio_url
+            .clone()
             .ok_or_else(|| "No audio stream available for Reddit track".to_string())?;
 
         debug!("Reddit playback URL: {url}");

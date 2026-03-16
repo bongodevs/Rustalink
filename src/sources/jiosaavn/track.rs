@@ -24,11 +24,11 @@ pub struct JioSaavnTrack {
 #[async_trait]
 impl PlayableTrack for JioSaavnTrack {
     async fn resolve(&self) -> Result<ResolvedTrack, String> {
-        let url = self
-            .resolve_url()
-            .ok_or_else(|| "Failed to decrypt JioSaavn URL. Check secretKey in config.toml".to_string())?;
+        let url = self.resolve_url().ok_or_else(|| {
+            "Failed to decrypt JioSaavn URL. Check secretKey in config.toml".to_string()
+        })?;
 
-        let hint   = format_hint_from_url(&url);
+        let hint = format_hint_from_url(&url);
         let reader = super::reader::JioSaavnReader::new(&url, self.local_addr, self.proxy.clone())
             .await
             .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)

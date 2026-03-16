@@ -26,7 +26,12 @@ impl PlayableTrack for AudiusTrack {
         } else {
             fetch_stream_url(&self.client, &self.track_id, &self.app_name)
                 .await
-                .ok_or_else(|| format!("Failed to fetch Audius stream URL for track ID {}", self.track_id))?
+                .ok_or_else(|| {
+                    format!(
+                        "Failed to fetch Audius stream URL for track ID {}",
+                        self.track_id
+                    )
+                })?
         };
 
         debug!("Audius stream URL: {url}");

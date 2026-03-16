@@ -24,7 +24,8 @@ impl PlayableTrack for HttpTrack {
             .map(AudioFormat::from_ext)
             .filter(|f| *f != AudioFormat::Unknown);
 
-        let reader = reader::HttpReader::new(&self.url, self.local_addr, self.proxy.clone()).await
+        let reader = reader::HttpReader::new(&self.url, self.local_addr, self.proxy.clone())
+            .await
             .map(|r| Box::new(r) as Box<dyn symphonia::core::io::MediaSource>)
             .map_err(|e| format!("Failed to open stream: {e}"))?;
 

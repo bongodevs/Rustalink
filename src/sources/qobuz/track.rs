@@ -28,7 +28,12 @@ impl PlayableTrack for QobuzTrack {
     async fn resolve(&self) -> Result<ResolvedTrack, String> {
         let url = switch_media_url(&self.client, &self.token_tracker, &self.info.identifier)
             .await
-            .map_err(|e| format!("Qobuz: Failed to resolve media URL for {}: {e}", self.info.identifier))?
+            .map_err(|e| {
+                format!(
+                    "Qobuz: Failed to resolve media URL for {}: {e}",
+                    self.info.identifier
+                )
+            })?
             .ok_or_else(|| "Failed to resolve Qobuz media URL".to_string())?;
 
         HttpTrack {
@@ -60,7 +65,7 @@ async fn switch_media_url(
         .as_secs();
 
     let format_id = "5";
-    let intent    = "stream";
+    let intent = "stream";
 
     let sig_data = format!(
         "trackgetFileUrlformat_id{format_id}intent{intent}track_id{track_id}{unix_ts}{}",
@@ -97,10 +102,11 @@ async fn switch_media_url(
 
     let json: serde_json::Value = resp.json().await?;
     if let Some(url) = json.get("url").and_then(|v| v.as_str()) {
-        let is_sample = json
-            .get("sample")
-            .and_then(|v| v.as_bool())
-            .or_else(|| json.get("sample").and_then(|v| v.as_str()).map(|s| s == "true"));
+        let is_sample = json.get("sample").and_then(|v| v.as_bool()).or_else(|| {
+            json.get("sample")
+                .and_then(|v| v.as_str())
+                .map(|s| s == "true")
+        });
 
         if is_sample == Some(true) {
             return Ok(None);

@@ -5,7 +5,9 @@ use rand::{Rng, distributions::Alphanumeric, thread_rng};
 use tracing::debug;
 
 use crate::sources::{
-    audiomack::utils::build_auth_header, http::HttpTrack, playable_track::{PlayableTrack, ResolvedTrack}
+    audiomack::utils::build_auth_header,
+    http::HttpTrack,
+    playable_track::{PlayableTrack, ResolvedTrack},
 };
 
 pub struct AudiomackTrack {

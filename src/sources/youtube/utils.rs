@@ -4,7 +4,10 @@ use symphonia::core::io::MediaSource;
 
 use crate::{
     common::types::AudioFormat,
-    sources::{http::reader::HttpReader, youtube::{cipher::YouTubeCipherManager, hls::HlsReader, reader::YoutubeReader}},
+    sources::{
+        http::reader::HttpReader,
+        youtube::{cipher::YouTubeCipherManager, hls::HlsReader, reader::YoutubeReader},
+    },
 };
 
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
@@ -25,13 +28,9 @@ pub async fn create_reader(
     cipher_manager: Arc<YouTubeCipherManager>,
 ) -> AnyResult<Box<dyn MediaSource>> {
     if url.contains(".m3u8") || url.contains("/playlist") {
-        Ok(Box::new(HlsReader::new(
-            url,
-            local_addr,
-            Some(cipher_manager),
-            None,
-            proxy,
-        ).await?))
+        Ok(Box::new(
+            HlsReader::new(url, local_addr, Some(cipher_manager), None, proxy).await?,
+        ))
     } else if client_name == "TV" {
         Ok(Box::new(YoutubeReader::new(url, local_addr, proxy).await?))
     } else {
@@ -77,10 +76,10 @@ pub fn parse_playability_status(body: &serde_json::Value) -> Result<(), String> 
         }
         "CONTENT_CHECK_REQUIRED" => Err(reason.to_string()),
         "LIVE_STREAM_OFFLINE" => {
-            if let Some(err_screen) = p.and_then(|p| p.get("errorScreen")) {
-                if err_screen.get("ypcTrailerRenderer").is_some() {
-                    return Err("This trailer cannot be loaded.".to_string());
-                }
+            if let Some(err_screen) = p.and_then(|p| p.get("errorScreen"))
+                && err_screen.get("ypcTrailerRenderer").is_some()
+            {
+                return Err("This trailer cannot be loaded.".to_string());
             }
             Err(reason.to_string())
         }

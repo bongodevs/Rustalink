@@ -24,20 +24,27 @@ impl PlayableTrack for GaanaTrack {
     async fn resolve(&self) -> Result<ResolvedTrack, String> {
         let url = fetch_stream_url_internal(&self.client, &self.track_id, &self.stream_quality)
             .await
-            .ok_or_else(|| format!("GaanaTrack: Failed to fetch stream URL for {}", self.track_id))?;
+            .ok_or_else(|| {
+                format!(
+                    "GaanaTrack: Failed to fetch stream URL for {}",
+                    self.track_id
+                )
+            })?;
 
         let local_addr = self.local_addr;
-        let proxy      = self.proxy.clone();
+        let proxy = self.proxy.clone();
 
         let is_hls = url.contains(".m3u8") || url.contains("/api/manifest/hls_");
 
         if is_hls {
             crate::sources::youtube::hls::HlsReader::new(&url, local_addr, None, None, proxy)
                 .await
-                .map(|r| ResolvedTrack::new(
-                    Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                    Some(AudioFormat::Aac),
-                ))
+                .map(|r| {
+                    ResolvedTrack::new(
+                        Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
+                        Some(AudioFormat::Aac),
+                    )
+                })
                 .map_err(|e| format!("Failed to init HLS reader: {e}"))
         } else {
             let hint = std::path::Path::new(&url)
@@ -47,10 +54,12 @@ impl PlayableTrack for GaanaTrack {
 
             super::reader::GaanaReader::new(&url, local_addr, proxy)
                 .await
-                .map(|r| ResolvedTrack::new(
-                    Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
-                    hint,
-                ))
+                .map(|r| {
+                    ResolvedTrack::new(
+                        Box::new(r) as Box<dyn symphonia::core::io::MediaSource>,
+                        hint,
+                    )
+                })
                 .map_err(|e| format!("Failed to init reader: {e}"))
         }
     }

@@ -18,7 +18,6 @@ pub struct NeteaseTrack {
 }
 #[async_trait]
 impl PlayableTrack for NeteaseTrack {
-
     async fn resolve(&self) -> Result<ResolvedTrack, String> {
         let url = self.stream_url.clone();
 

@@ -10,7 +10,10 @@ use async_trait::async_trait;
 use regex::Regex;
 use token::AppleMusicTokenTracker;
 
-use crate::{protocol::tracks::LoadResult, sources::{SourcePlugin, playable_track::BoxedTrack}};
+use crate::{
+    protocol::tracks::LoadResult,
+    sources::{SourcePlugin, playable_track::BoxedTrack},
+};
 
 const API_BASE: &str = "https://api.music.apple.com/v1";
 

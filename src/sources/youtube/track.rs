@@ -33,7 +33,7 @@ impl PlayableTrack for YoutubeTrack {
     }
 
     async fn resolve(&self) -> Result<ResolvedTrack, String> {
-        let context    = serde_json::json!({ "visitorData": self.visitor_data });
+        let context = serde_json::json!({ "visitorData": self.visitor_data });
         let mut last_error = String::from("No clients available");
 
         for client in &self.clients {
@@ -49,15 +49,24 @@ impl PlayableTrack for YoutubeTrack {
                 .await
             {
                 Ok(Some(url)) => {
-                    info!("YoutubeTrack: resolved '{}' using '{name}'", self.identifier);
+                    info!(
+                        "YoutubeTrack: resolved '{}' using '{name}'",
+                        self.identifier
+                    );
                     url
                 }
                 Ok(None) => {
-                    debug!("YoutubeTrack: client '{name}' returned no URL for '{}'", self.identifier);
+                    debug!(
+                        "YoutubeTrack: client '{name}' returned no URL for '{}'",
+                        self.identifier
+                    );
                     continue;
                 }
                 Err(e) => {
-                    warn!("YoutubeTrack: client '{name}' failed for '{}': {e}", self.identifier);
+                    warn!(
+                        "YoutubeTrack: client '{name}' failed for '{}': {e}",
+                        self.identifier
+                    );
                     last_error = e.to_string();
                     if is_playability_error(&last_error) {
                         return Err(last_error);
@@ -67,12 +76,12 @@ impl PlayableTrack for YoutubeTrack {
             };
 
             // URL mil gaya — hint nikalo, reader banao
-            let is_hls     = url.contains(".m3u8") || url.contains("/playlist");
-            let hint       = Some(detect_audio_kind(&url, is_hls));
-            let proxy      = self.proxy.clone();
+            let is_hls = url.contains(".m3u8") || url.contains("/playlist");
+            let hint = Some(detect_audio_kind(&url, is_hls));
+            let proxy = self.proxy.clone();
             let local_addr = self.local_addr;
-            let cipher     = self.cipher_manager.clone();
-            let url_clone  = url.clone();
+            let cipher = self.cipher_manager.clone();
+            let url_clone = url.clone();
             let name_clone = name.clone();
 
             match create_reader(&url_clone, &name_clone, local_addr, proxy, cipher).await {
@@ -85,11 +94,13 @@ impl PlayableTrack for YoutubeTrack {
             }
         }
 
-        error!("YoutubeTrack: all clients failed for '{}': {last_error}", self.identifier);
+        error!(
+            "YoutubeTrack: all clients failed for '{}': {last_error}",
+            self.identifier
+        );
         Err(format!("All clients failed: {last_error}"))
     }
 }
-
 
 fn is_playability_error(msg: &str) -> bool {
     msg.contains("This video ")
