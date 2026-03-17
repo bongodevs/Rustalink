@@ -85,7 +85,7 @@ pub async fn youtube_oauth_refresh(
             tracing::error!("GET /youtube/oauth/{}: {}", refresh_token, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_owned()})),
+                Json(serde_json::json!({"error": e.to_string()})),
             )
                 .into_response()
         }
