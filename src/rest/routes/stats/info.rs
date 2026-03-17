@@ -37,8 +37,8 @@ pub async fn get_info(State(state): State<Arc<AppState>>) -> Json<protocol::Info
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
         },
-        jvm: "Rust".to_string(),
-        lavaplayer: "symphonia".to_string(),
+        jvm: "Rust".to_owned(),
+        lavaplayer: "symphonia".to_owned(),
         source_managers: state.source_manager.source_names(),
         filters: Filters::names()
             .into_iter()

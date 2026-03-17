@@ -14,6 +14,9 @@ use crate::{
     sources::youtube::clients::common::{resolve_format_url, select_best_audio_format},
 };
 
+static RANGE_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"bytes=(\d+)-(\d+)?").expect("invalid regex"));
+
 pub async fn get_youtube_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     tracing::info!("GET /youtube");
 
@@ -82,7 +85,7 @@ pub async fn youtube_oauth_refresh(
             tracing::error!("GET /youtube/oauth/{}: {}", refresh_token, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
+                Json(serde_json::json!({"error": e.to_owned()})),
             )
                 .into_response()
         }
@@ -442,8 +445,7 @@ fn parse_range_header(
         return (0, content_length.saturating_sub(1));
     };
 
-    let regex = regex::Regex::new(r"bytes=(\d+)-(\d+)?").expect("invalid regex");
-    if let Some(caps) = regex.captures(range_val) {
+    if let Some(caps) = RANGE_RE.captures(range_val) {
         let start = caps
             .get(1)
             .and_then(|m| m.as_str().parse::<u64>().ok())
