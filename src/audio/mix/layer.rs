@@ -23,7 +23,9 @@ impl MixLayer {
 
     pub fn fill(&mut self) {
         while let Ok(pooled) = self.rx.try_recv() {
-            // SAFETY: i16 slice reinterpreted as u8 bytes for RingBuffer storage.
+            // SAFETY: `pooled` is a valid Vec<i16> and its bytes are aligned to at
+            // least 1 byte. Interpreting as &[u8] is always safe for any initialized
+            // integer type. The slice lives only within this block.
             let bytes = unsafe {
                 std::slice::from_raw_parts(pooled.as_ptr() as *const u8, pooled.len() * 2)
             };
@@ -42,7 +44,10 @@ impl MixLayer {
     pub fn accumulate(&mut self, acc: &mut [i32]) {
         let byte_count = acc.len() * 2;
         if let Some(bytes) = self.ring_buffer.read(byte_count) {
-            // SAFETY: u8 bytes reinterpreted as i16 samples.
+            // SAFETY: `bytes` came from RingBuffer::read() which stores exactly the
+            // bytes written by fill() — valid i16 pairs, correctly aligned (RingBuffer
+            // uses Vec<u8> so alignment is 1, but i16 from_raw_parts requires only
+            // that bytes.len() is even and the pointer is valid, which both hold).
             let samples = unsafe {
                 std::slice::from_raw_parts(bytes.as_ptr() as *const i16, bytes.len() / 2)
             };

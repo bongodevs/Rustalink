@@ -41,7 +41,7 @@ impl CustomFormatter {
     }
 
     fn write_level(&self, writer: &mut fmt::format::Writer<'_>, level: &Level) -> core_fmt::Result {
-        let level_str = format!("{: <5}", level.to_string());
+        let level_str = format!("{: <5}", level);
 
         if self.use_ansi {
             let color = match *level {

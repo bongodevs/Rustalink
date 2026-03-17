@@ -97,8 +97,8 @@ fn format_byte_size(bytes: u64) -> String {
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 
 /// Returns the default User-Agent string.
-pub fn default_user_agent() -> String {
-    DEFAULT_USER_AGENT.to_string()
+pub fn default_user_agent() -> &'static str {
+    DEFAULT_USER_AGENT
 }
 
 /// Shortens verbose HTTP errors to remove sensitive URLs and query parameters for clean `cause` fields.
