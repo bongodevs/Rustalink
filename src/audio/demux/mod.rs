@@ -27,7 +27,7 @@ pub enum DemuxResult {
 
 pub fn open_format(
     source: Box<dyn MediaSource>,
-    kind: Option<crate::common::types::AudioFormat>,
+    kind: Option<AudioFormat>,
 ) -> Result<DemuxResult, Error> {
     let mss = MediaSourceStream::new(source, Default::default());
 
