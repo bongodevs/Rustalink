@@ -63,7 +63,7 @@ impl DeezerProvider {
                 let data: Value = resp.json().await.ok()?;
                 data.get("jwt")
                     .and_then(|t| t.as_str())
-                    .map(|s| s.to_string())
+                    .map(|s| s.to_owned())
             })
             .await
     }
@@ -83,6 +83,7 @@ impl DeezerProvider {
             .and_then(|d| d.as_array())
             .and_then(|a| a.first())
             .and_then(|t| t.get("id"))
+            .and_then(|id| id.as_u64())
             .map(|id| id.to_string())
     }
 }
@@ -217,7 +218,7 @@ impl LyricsProvider for DeezerProvider {
                     .get("line")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
-                    .to_string();
+                    .to_owned();
                 let timestamp = line
                     .get("milliseconds")
                     .and_then(|v| v.as_u64())

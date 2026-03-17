@@ -1,11 +1,18 @@
 use async_trait::async_trait;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use super::{LyricsProvider, utils};
 use crate::protocol::{
     models::{LyricsData, LyricsLine},
     tracks::TrackInfo,
 };
+
+static PRELOADED_STATE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)window\.__PRELOADED_STATE__\s*=\s*JSON\.parse\('(.*?)'\);"#).unwrap()
+});
+static ESCAPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\\(.)"#).unwrap());
+static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<[^>]*>"#).unwrap());
 
 #[derive(Default)]
 pub struct GeniusProvider {
@@ -55,20 +62,18 @@ impl LyricsProvider for GeniusProvider {
         let song_resp = self.client.get(song_url).send().await.ok()?;
         let song_page = song_resp.text().await.ok()?;
 
-        let re =
-            Regex::new(r#"(?s)window\.__PRELOADED_STATE__\s*=\s*JSON\.parse\('(.*?)'\);"#).unwrap();
+        let re = &*PRELOADED_STATE_RE;
         let caps = re.captures(&song_page)?;
         let lyrics_data_raw = caps.get(1)?.as_str();
 
-        // Unescape any backslash-escaped character, matching the replace(/\\(.)/g, '$1')
-        let escape_re = Regex::new(r#"\\(.)"#).unwrap();
+        let escape_re = &*ESCAPE_RE;
         let lyrics_data_unescaped = escape_re.replace_all(lyrics_data_raw, "$1");
 
         let lyrics_json: serde_json::Value = serde_json::from_str(&lyrics_data_unescaped).ok()?;
 
         let lyrics_content = lyrics_json["songPage"]["lyricsData"]["body"]["html"].as_str()?;
 
-        let tag_re = Regex::new(r#"<[^>]*>"#).unwrap();
+        let tag_re = &*TAG_RE;
         let lyrics_text = lyrics_content
             .replace("<br>", "\n")
             .replace("<br/>", "\n")

@@ -26,11 +26,15 @@ static LRC_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"\[(\d+):(\d{2})(?:\.(\d{2,3}))?\]"#).unwrap());
 
 pub fn clean_text(text: &str) -> String {
-    let mut result = text.to_string();
+    use std::borrow::Cow;
+    let mut result: Cow<str> = Cow::Borrowed(text);
     for re in CLEAN_PATTERNS.iter() {
-        result = re.replace_all(&result, "").to_string();
+        let replaced = re.replace_all(&*result, "");
+        if let Cow::Owned(s) = replaced {
+            result = Cow::Owned(s);
+        }
     }
-    result.trim().to_string()
+    result.trim().to_owned()
 }
 
 pub fn unescape_html(text: &str) -> String {

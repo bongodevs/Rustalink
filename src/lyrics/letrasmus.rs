@@ -1,12 +1,22 @@
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::Value;
+use std::sync::LazyLock;
 
 use super::{LyricsProvider, utils};
 use crate::protocol::{
     models::{LyricsData, LyricsLine},
     tracks::TrackInfo,
 };
+
+static OMQ_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"_omq\.push\(\['ui/lyric',\s*(\{[\s\S]*?\})\s*,"#).unwrap()
+});
+static LYRIC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)<div class="lyric-original[^>]*">([\s\S]*?)</div>"#).unwrap()
+});
+static LYRIC_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<[^>]*>"#).unwrap());
 
 pub struct LetrasMusProvider {
     client: reqwest::Client,
@@ -66,7 +76,7 @@ impl LyricsProvider for LetrasMusProvider {
             .ok()?;
 
         // Extract _omq data (metadata)
-        let omq_re = Regex::new(r#"_omq\.push\(\['ui/lyric',\s*(\{[\s\S]*?\})\s*,"#).unwrap();
+        let omq_re = &*OMQ_RE;
         let omq = omq_re
             .captures(&html)
             .and_then(|c| serde_json::from_str::<Value>(c.get(1)?.as_str()).ok());
@@ -124,8 +134,7 @@ impl LyricsProvider for LetrasMusProvider {
         }
 
         // Fallback to plain lyrics from HTML
-        let lyric_re =
-            Regex::new(r#"(?i)<div class="lyric-original[^>]*">([\s\S]*?)</div>"#).unwrap();
+        let lyric_re = &*LYRIC_RE;
         if let Some(c) = lyric_re.captures(&html) {
             let content = c
                 .get(1)?
@@ -133,7 +142,7 @@ impl LyricsProvider for LetrasMusProvider {
                 .replace("<br>", "\n")
                 .replace("<p>", "")
                 .replace("</p>", "\n");
-            let tag_re = Regex::new(r#"<[^>]*>"#).unwrap();
+            let tag_re = &*LYRIC_TAG_RE;
             let cleaned = tag_re.replace_all(&content, "");
             let lines: Vec<LyricsLine> = cleaned
                 .lines()

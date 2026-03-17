@@ -54,7 +54,7 @@ impl YandexProvider {
         mac.update(message.as_bytes());
         let result = mac.finalize();
         let sign = general_purpose::STANDARD.encode(result.into_bytes());
-        (urlencoding::encode(&sign).to_string(), ts)
+        (urlencoding::encode(&sign).into_owned(), ts)
     }
 }
 

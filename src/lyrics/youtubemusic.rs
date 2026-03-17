@@ -1,11 +1,15 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::sync::LazyLock;
 
 use super::{LyricsProvider, utils};
 use crate::protocol::{
     models::{LyricsData, LyricsLine},
     tracks::TrackInfo,
 };
+
+static VIDEO_ID_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#""videoId":"([^"]+)""#).unwrap());
 
 const YTM_DOMAIN: &str = "https://music.youtube.com";
 const YTM_BASE_API: &str = "https://music.youtube.com/youtubei/v1/";
@@ -146,10 +150,7 @@ impl LyricsProvider for YoutubeMusicLyricsProvider {
 
                 if video_id.is_none() {
                     let search_str = search_results.to_string();
-                    if let Some(caps) = regex::Regex::new(r#""videoId":"([^"]+)""#)
-                        .unwrap()
-                        .captures(&search_str)
-                    {
+                    if let Some(caps) = VIDEO_ID_RE.captures(&search_str) {
                         video_id = Some(caps[1].to_string());
                     }
                 }
