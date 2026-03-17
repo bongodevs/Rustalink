@@ -42,8 +42,8 @@ impl FailurePolicy {
     /// Maps a Discord closure code to a high-level session outcome.
     pub fn classify(&self, code: u16) -> SessionOutcome {
         match code {
-            4004 | 4011 | 4021 | 4022 => SessionOutcome::Shutdown,
-            4006 | 4009 | 4014 => SessionOutcome::Identify,
+            4004 | 4011 | 4014 | 4021 | 4022 => SessionOutcome::Shutdown,
+            4006 | 4009 => SessionOutcome::Identify,
             _ => SessionOutcome::Reconnect,
         }
     }
@@ -108,6 +108,9 @@ mod tests {
 
         assert_eq!(policy.classify(4004), SessionOutcome::Shutdown);
         assert_eq!(policy.classify(4011), SessionOutcome::Shutdown);
+        // 4014 = Disconnected: re-identifying with stale credentials is pointless;
+        // treat as Shutdown so the loop stops and waits for fresh voice state.
+        assert_eq!(policy.classify(4014), SessionOutcome::Shutdown);
         assert_eq!(policy.classify(4021), SessionOutcome::Shutdown);
         assert_eq!(policy.classify(4022), SessionOutcome::Shutdown);
     }
@@ -118,7 +121,6 @@ mod tests {
 
         assert_eq!(policy.classify(4006), SessionOutcome::Identify);
         assert_eq!(policy.classify(4009), SessionOutcome::Identify);
-        assert_eq!(policy.classify(4014), SessionOutcome::Identify);
     }
 
     #[test]

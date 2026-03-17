@@ -218,6 +218,11 @@ impl VoiceGateway {
         }
 
         let handshake = if is_resume {
+            debug!(
+                "[{}] Sending Resume with seq_ack={}",
+                self.guild_id,
+                seq_ack.load(Ordering::Relaxed)
+            );
             protocol::builders::resume(
                 self.guild_id.to_string(),
                 self.session_id.to_string(),

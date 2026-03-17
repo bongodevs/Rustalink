@@ -111,6 +111,7 @@ pub mod builders {
         token: String,
         seq_ack: i64,
     ) -> GatewayPayload {
+        let seq_ack = seq_ack.max(0);
         GatewayPayload {
             op: OpCode::Resume as u8,
             seq: None,
@@ -231,6 +232,31 @@ mod tests {
         assert_eq!(payload.d["token"], "token123");
         assert_eq!(payload.d["video"], true);
         assert_eq!(payload.d["seq_ack"], 42);
+    }
+
+    #[test]
+    fn test_builders_resume_negative_seq_ack_clamped_to_zero() {
+        // seq_ack of -1 is the sentinel "nothing received yet" — must be clamped to 0
+        // before sending to Discord, which expects a non-negative sequence number.
+        let payload = builders::resume(
+            "123".to_string(),
+            "session123".to_string(),
+            "token123".to_string(),
+            -1,
+        );
+        assert_eq!(payload.d["seq_ack"], 0, "seq_ack -1 should be clamped to 0");
+    }
+
+    #[test]
+    fn test_builders_resume_positive_seq_ack_preserved() {
+        // Positive seq_ack values must be passed through unchanged.
+        let payload = builders::resume(
+            "123".to_string(),
+            "session123".to_string(),
+            "token123".to_string(),
+            1337,
+        );
+        assert_eq!(payload.d["seq_ack"], 1337);
     }
 
     #[test]

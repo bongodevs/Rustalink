@@ -241,12 +241,13 @@ impl<'a> SessionState<'a> {
 
     fn on_hello(&mut self, d: Value) -> Option<SessionOutcome> {
         let interval = d["heartbeat_interval"].as_u64().unwrap_or(30_000);
-        if self.heartbeat_handle.is_some() {
-            warn!(
-                "[{}] Received unexpected mid-session HELLO. Forcing re-identify.",
+
+        if let Some(h) = self.heartbeat_handle.take() {
+            debug!(
+                "[{}] Restarting heartbeat on HELLO (was already running)",
                 self.gateway.guild_id
             );
-            return Some(SessionOutcome::Identify);
+            h.abort();
         }
 
         trace!(
