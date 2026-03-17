@@ -3,25 +3,23 @@ pub mod fade;
 pub mod tape;
 pub mod volume;
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU8, AtomicU64},
-};
+use std::sync::atomic::{AtomicU8, AtomicU64};
 
 use crate::audio::buffer::PooledBuffer;
 
+/// Context passed to [`TransitionEffect::process`] on each frame.
+pub struct ProcessContext<'a> {
+    pub mix_buf: &'a mut [i32],
+    pub i: &'a mut usize,
+    pub out_len: usize,
+    pub vol: f32,
+    pub stash: &'a mut Vec<i16>,
+    pub rx: &'a flume::Receiver<PooledBuffer>,
+    pub state_atomic: &'a AtomicU8,
+    pub position_atomic: &'a AtomicU64,
+}
+
 /// Interface for transition effects.
 pub trait TransitionEffect: Send {
-    #[allow(clippy::too_many_arguments)]
-    fn process(
-        &mut self,
-        mix_buf: &mut [i32],
-        i: &mut usize,
-        out_len: usize,
-        vol: f32,
-        stash: &mut Vec<i16>,
-        rx: &flume::Receiver<PooledBuffer>,
-        state_atomic: &Arc<AtomicU8>,
-        position_atomic: &Arc<AtomicU64>,
-    ) -> bool;
+    fn process(&mut self, ctx: ProcessContext<'_>) -> bool;
 }
