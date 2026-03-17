@@ -41,7 +41,7 @@ pub async fn monitor_loop(ctx: MonitorCtx) {
     let mut buffering_started_at: Option<std::time::Instant> = None;
 
     send_player_update(&ctx, last_pos);
-    
+
     loop {
         interval.tick().await;
         tick = tick.wrapping_add(1);

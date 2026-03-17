@@ -18,9 +18,9 @@ use regex::Regex;
 use serde_json::json;
 use tracing::debug;
 
-use super::direct::AmazonMusicTrack;
 use super::{
     api::AmazonMusicClient,
+    direct::AmazonMusicTrack,
     parsers::{
         parse_album_tracks, parse_artist_top_songs, parse_community_playlist_tracks,
         parse_playlist_tracks, parse_search_tracks, parse_track,

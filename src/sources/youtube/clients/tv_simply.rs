@@ -1,6 +1,7 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::sync::Arc;
 
 use super::{YouTubeClient, common::INNERTUBE_API};
 use crate::{
@@ -302,8 +303,9 @@ impl YouTubeClient for TvSimplyClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::sources::YouTubeCipherConfig;
-    use crate::sources::youtube::cipher::YouTubeCipherManager;
+    use crate::{
+        config::sources::YouTubeCipherConfig, sources::youtube::cipher::YouTubeCipherManager,
+    };
 
     #[tokio::test]
     async fn test_search() {
@@ -339,8 +341,9 @@ mod tests {
 #[cfg(test)]
 mod get_track_tests {
     use super::*;
-    use crate::config::sources::YouTubeCipherConfig;
-    use crate::sources::youtube::cipher::YouTubeCipherManager;
+    use crate::{
+        config::sources::YouTubeCipherConfig, sources::youtube::cipher::YouTubeCipherManager,
+    };
 
     #[tokio::test]
     async fn test_get_track_url() {

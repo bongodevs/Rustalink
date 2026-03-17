@@ -2,7 +2,6 @@ pub mod reader;
 pub mod track;
 
 use std::sync::{Arc, OnceLock};
-pub use track::HttpTrack;
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -14,6 +13,7 @@ use symphonia::core::{
     probe::Hint,
 };
 use tracing::{debug, warn};
+pub use track::HttpTrack;
 
 use crate::{
     common::types::AnyResult,

@@ -2,8 +2,6 @@ pub mod track;
 
 use std::{path::Path, sync::Arc};
 
-pub use track::LocalTrack;
-
 use async_trait::async_trait;
 use symphonia::core::{
     codecs::CODEC_TYPE_NULL,
@@ -13,6 +11,7 @@ use symphonia::core::{
     probe::Hint,
 };
 use tracing::{debug, error, warn};
+pub use track::LocalTrack;
 
 use crate::{
     common::Severity,
