@@ -21,7 +21,6 @@ impl FadeCurve {
 }
 
 pub struct FadeEffect {
-    /// Instantaneous gain applied to the output.
     current_gain: f32,
     target_gain: f32,
     start_gain: f32,
@@ -29,11 +28,10 @@ pub struct FadeEffect {
     fade_samples_elapsed: usize,
     fade_active: bool,
     curve: FadeCurve,
-    _channels: usize,
 }
 
 impl FadeEffect {
-    pub fn new(initial_gain: f32, channels: usize) -> Self {
+    pub fn new(initial_gain: f32, _channels: usize) -> Self {
         Self {
             current_gain: initial_gain,
             target_gain: initial_gain,
@@ -42,7 +40,6 @@ impl FadeEffect {
             fade_samples_elapsed: 0,
             fade_active: false,
             curve: FadeCurve::Sinusoidal,
-            _channels: channels,
         }
     }
 
@@ -84,7 +81,7 @@ impl FadeEffect {
         }
 
         // Short-circuit: no fade, gain == 1.0 → nothing to do.
-        if !self.fade_active && (self.current_gain - 1.0).abs() < f32::EPSILON {
+        if !self.fade_active && (self.current_gain - 1.0).abs() < 1e-5 {
             return;
         }
 

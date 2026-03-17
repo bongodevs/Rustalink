@@ -57,7 +57,9 @@ impl CrossfadeController {
     /// Pull as much data as possible from the next track's receiver into the buffer.
     pub fn fill_buffer(&mut self) {
         let Some(rx) = &self.next_rx else { return };
-        let Some(ring) = &mut self.ring_buffer else { return };
+        let Some(ring) = &mut self.ring_buffer else {
+            return;
+        };
 
         while let Ok(pooled) = rx.try_recv() {
             ring.write(crate::audio::buffer::as_byte_slice(&pooled));
@@ -160,7 +162,6 @@ impl CrossfadeController {
         }
         finished
     }
-
 }
 
 fn fade_gains(t: f32, curve: FadeCurve) -> (f32, f32) {
