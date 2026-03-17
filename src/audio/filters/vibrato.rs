@@ -1,6 +1,6 @@
 use super::{AudioFilter, delay_line::DelayLine, lfo::Lfo};
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
-const SAMPLE_RATE: f64 = 48000.0;
 const MAX_DELAY_MS: f64 = 20.0;
 
 /// Vibrato filter.
@@ -12,7 +12,7 @@ pub struct VibratoFilter {
 
 impl VibratoFilter {
     pub fn new(frequency: f32, depth: f32) -> Self {
-        let buffer_size = ((SAMPLE_RATE * MAX_DELAY_MS) / 1000.0).ceil() as usize;
+        let buffer_size = ((TARGET_SAMPLE_RATE as f64 * MAX_DELAY_MS) / 1000.0).ceil() as usize;
         let mut lfo = Lfo::new();
         let depth = depth.clamp(0.0, 2.0);
         lfo.update(frequency as f64, depth as f64);
@@ -33,7 +33,7 @@ impl AudioFilter for VibratoFilter {
             return;
         }
 
-        let max_delay_width = self.lfo.depth * SAMPLE_RATE * 0.005;
+        let max_delay_width = self.lfo.depth * TARGET_SAMPLE_RATE as f64 * 0.005;
         let center_delay = max_delay_width;
         let num_frames = samples.len() / 2;
 

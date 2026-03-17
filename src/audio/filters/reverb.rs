@@ -1,4 +1,5 @@
 use super::{AudioFilter, delay_line::DelayLine};
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
 const COMB_DELAYS: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
 const ALLPASS_DELAYS: [usize; 4] = [556, 441, 341, 225];
@@ -71,7 +72,7 @@ pub struct ReverbFilter {
 
 impl ReverbFilter {
     pub fn new(mix: f32, room_size: f32, damping: f32, width: f32) -> Self {
-        let fs = 48000.0;
+        let fs = TARGET_SAMPLE_RATE as f64;
 
         let comb_l = COMB_DELAYS
             .iter()

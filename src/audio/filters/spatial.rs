@@ -1,4 +1,5 @@
 use super::{AudioFilter, delay_line::DelayLine, lfo::Lfo};
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
 const MAX_DELAY_MS: f32 = 30.0;
 const BUFFER_SIZE: usize = ((48000.0 * MAX_DELAY_MS) / 1000.0) as usize;
@@ -38,7 +39,7 @@ impl AudioFilter for SpatialFilter {
             return;
         }
 
-        let fs = 48000.0;
+        let fs = TARGET_SAMPLE_RATE as f32;
         let wet = self.depth * 0.5;
         let dry = 1.0 - wet;
         let feedback = -0.3;

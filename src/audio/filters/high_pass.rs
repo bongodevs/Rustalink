@@ -2,6 +2,7 @@ use super::{
     AudioFilter,
     biquad::{BiquadCoeffs, BiquadState},
 };
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
 pub struct HighPassFilter {
     cutoff_frequency: i32,
@@ -30,7 +31,7 @@ impl HighPassFilter {
             return;
         }
 
-        let fs = 48000.0;
+        let fs = TARGET_SAMPLE_RATE as f64;
         let fc = self.cutoff_frequency as f64;
         let q = 0.7071067811865475; // 1 / sqrt(2)
 
@@ -68,16 +69,14 @@ impl AudioFilter for HighPassFilter {
             None => return,
         };
 
-        let boost_factor_f32 = self.boost_factor;
-
         for chunk in samples.chunks_exact_mut(2) {
             let left_in = chunk[0] as f32;
             let right_in = chunk[1] as f32;
 
             let left_out =
-                self.left_state.process(left_in as f64, coeffs) as f32 * boost_factor_f32;
+                self.left_state.process(left_in as f64, coeffs) as f32 * self.boost_factor;
             let right_out =
-                self.right_state.process(right_in as f64, coeffs) as f32 * boost_factor_f32;
+                self.right_state.process(right_in as f64, coeffs) as f32 * self.boost_factor;
 
             chunk[0] = left_out.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
             chunk[1] = right_out.clamp(i16::MIN as f32, i16::MAX as f32) as i16;

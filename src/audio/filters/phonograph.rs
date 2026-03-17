@@ -4,9 +4,10 @@ use super::{
     delay_line::DelayLine,
     lfo::Lfo,
 };
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
 const MAX_DELAY_MS: f32 = 60.0;
-const BUFFER_SIZE: usize = ((48000.0 * MAX_DELAY_MS) / 1000.0) as usize;
+const BUFFER_SIZE: usize = ((TARGET_SAMPLE_RATE as f32 * MAX_DELAY_MS) / 1000.0) as usize;
 
 struct XorShift32 {
     s: u32,
@@ -227,7 +228,7 @@ impl PhonographFilter {
     }
 
     fn recompute_filters(&mut self) {
-        let fs = 48000.0;
+        let fs = TARGET_SAMPLE_RATE as f64;
         let q = std::f64::consts::FRAC_1_SQRT_2;
 
         self.hp1_coeffs = Self::make_highpass(260.0, q, fs);
@@ -243,7 +244,7 @@ impl PhonographFilter {
 
 impl AudioFilter for PhonographFilter {
     fn process(&mut self, samples: &mut [i16]) {
-        let fs = 48000.0;
+        let fs = TARGET_SAMPLE_RATE as f32;
         let wow_max = self.depth * 0.014 * fs;
         let flutter_max = self.flutter * 0.0022 * fs;
         let center = 1.0 + wow_max + flutter_max;

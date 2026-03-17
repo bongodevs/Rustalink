@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use super::AudioFilter;
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
 pub struct EchoFilter {
     echo_length: f32, // in seconds (e.g. 1.0 = 1s)
@@ -18,7 +19,7 @@ impl EchoFilter {
         let length = echo_length.clamp(0.001, 5.0);
         let decay = decay.clamp(0.0, 1.0);
 
-        let frames = (48000.0 * length) as usize;
+        let frames = (TARGET_SAMPLE_RATE as f32 * length) as usize;
         let samples = frames * 2;
 
         let mut buffer = VecDeque::with_capacity(samples);

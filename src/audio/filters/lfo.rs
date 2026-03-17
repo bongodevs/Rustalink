@@ -1,6 +1,7 @@
 use std::f64::consts::PI;
 
-const SAMPLE_RATE: f64 = 48000.0;
+use crate::audio::constants::TARGET_SAMPLE_RATE;
+
 const TWO_PI: f64 = 2.0 * PI;
 
 /// Low-Frequency Oscillator (sine wave).
@@ -27,7 +28,7 @@ impl Lfo {
             return 0.0;
         }
         let value = self.phase.sin();
-        self.phase += TWO_PI * self.frequency / SAMPLE_RATE;
+        self.phase += TWO_PI * self.frequency / TARGET_SAMPLE_RATE as f64;
         if self.phase > TWO_PI {
             self.phase -= TWO_PI;
         }

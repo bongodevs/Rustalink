@@ -1,6 +1,5 @@
 use super::AudioFilter;
-
-const MAX_INT_16: f64 = 32767.0;
+use crate::audio::constants::INT16_NORM_F64;
 
 pub struct DistortionFilter {
     sin_offset: f32,
@@ -47,7 +46,7 @@ impl AudioFilter for DistortionFilter {
 
             for ch in 0..2 {
                 let sample = samples[offset_idx + ch] as f64;
-                let normalized = sample / MAX_INT_16;
+                let normalized = sample / INT16_NORM_F64;
 
                 let mut distorted = 0.0f64;
 
@@ -70,9 +69,8 @@ impl AudioFilter for DistortionFilter {
                     distorted += tan_input.tan();
                 }
 
-                distorted = (distorted * self.scale as f64 + self.offset as f64) * MAX_INT_16;
-                samples[offset_idx + ch] =
-                    (distorted as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                distorted = (distorted * self.scale as f64 + self.offset as f64) * INT16_NORM_F64;
+                samples[offset_idx + ch] = distorted.clamp(i16::MIN as f64, i16::MAX as f64) as i16;
             }
         }
     }

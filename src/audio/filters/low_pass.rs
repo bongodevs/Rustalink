@@ -37,12 +37,12 @@ impl AudioFilter for LowPassFilter {
             let left = samples[offset] as f64;
             let new_left = self.prev_left + self.smoothing_factor * (left - self.prev_left);
             self.prev_left = new_left;
-            samples[offset] = (new_left as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            samples[offset] = new_left.clamp(i16::MIN as f64, i16::MAX as f64) as i16;
 
             let right = samples[offset + 1] as f64;
             let new_right = self.prev_right + self.smoothing_factor * (right - self.prev_right);
             self.prev_right = new_right;
-            samples[offset + 1] = (new_right as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            samples[offset + 1] = new_right.clamp(i16::MIN as f64, i16::MAX as f64) as i16;
         }
     }
 

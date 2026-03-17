@@ -1,4 +1,5 @@
 use super::{AudioFilter, lfo::Lfo};
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
 const MAX_STAGES: usize = 12;
 
@@ -125,7 +126,7 @@ impl AudioFilter for PhaserFilter {
             return;
         }
 
-        let fs = 48000.0;
+        let fs = TARGET_SAMPLE_RATE as f32;
         let sweep_range = self.max_frequency - self.min_frequency;
 
         for chunk in samples.chunks_exact_mut(2) {

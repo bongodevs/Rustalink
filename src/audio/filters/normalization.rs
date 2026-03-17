@@ -1,4 +1,5 @@
 use super::AudioFilter;
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
 pub struct NormalizationFilter {
     max_amplitude: f32,
@@ -15,10 +16,8 @@ impl NormalizationFilter {
 
         let attack_ms = 1.0;
         let release_ms = 100.0;
-        let fs = 48000.0;
-
-        let attack_coef = (-1.0 / ((attack_ms / 1000.0) * fs) as f32).exp();
-        let release_coef = (-1.0 / ((release_ms / 1000.0) * fs) as f32).exp();
+        let attack_coef = (-1.0 / ((attack_ms / 1000.0) * TARGET_SAMPLE_RATE as f64) as f32).exp();
+        let release_coef = (-1.0 / ((release_ms / 1000.0) * TARGET_SAMPLE_RATE as f64) as f32).exp();
 
         Self {
             max_amplitude,

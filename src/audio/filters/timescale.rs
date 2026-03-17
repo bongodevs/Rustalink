@@ -11,9 +11,6 @@ fn cubic_resample(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
 }
 
 pub struct TimescaleFilter {
-    _speed: f64,
-    _pitch: f64,
-    _rate: f64,
     final_rate: f32,
     input_buffer: Vec<i16>,
     position: f32,
@@ -27,9 +24,6 @@ impl TimescaleFilter {
         let final_rate = (speed * pitch * rate) as f32;
 
         Self {
-            _speed: speed,
-            _pitch: pitch,
-            _rate: rate,
             final_rate,
             input_buffer: Vec::with_capacity(4096),
             position: 0.0,

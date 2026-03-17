@@ -30,11 +30,11 @@ impl AudioFilter for RotationFilter {
             let left = samples[offset] as f64;
             let right = samples[offset + 1] as f64;
 
-            let new_left = (left * left_factor) as i32;
-            let new_right = (right * right_factor) as i32;
+            let new_left = left * left_factor;
+            let new_right = right * right_factor;
 
-            samples[offset] = new_left.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-            samples[offset + 1] = new_right.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            samples[offset] = new_left.clamp(i16::MIN as f64, i16::MAX as f64) as i16;
+            samples[offset + 1] = new_right.clamp(i16::MIN as f64, i16::MAX as f64) as i16;
         }
     }
 

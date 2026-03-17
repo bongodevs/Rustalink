@@ -2,8 +2,8 @@ use super::{
     AudioFilter,
     biquad::{BiquadCoeffs, BiquadState},
 };
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
-const SAMPLE_RATE: f64 = 48000.0;
 const SCALE_16: f64 = 32768.0;
 const INV_16: f64 = 1.0 / SCALE_16;
 const MAX_OUTPUT_GAIN: f64 = 0.98;
@@ -20,6 +20,10 @@ pub struct KaraokeFilter {
     lp_states: [BiquadState; 2],
     hp_states: [BiquadState; 2],
     prev_gain: f64,
+
+    // Scratch buffers — allocated once, reused on every process() call.
+    out_left_buf: Vec<f64>,
+    out_right_buf: Vec<f64>,
 }
 
 impl KaraokeFilter {
@@ -40,10 +44,13 @@ impl KaraokeFilter {
             lp_states: [BiquadState::default(), BiquadState::default()],
             hp_states: [BiquadState::default(), BiquadState::default()],
             prev_gain: MAX_OUTPUT_GAIN,
+            out_left_buf: Vec::new(),
+            out_right_buf: Vec::new(),
         }
     }
 
     fn compute_coefficients(band: f64, width: f64) -> (BiquadCoeffs, BiquadCoeffs) {
+        let fs = TARGET_SAMPLE_RATE as f64;
         if band <= 0.0 || width <= 0.0 {
             let passthrough = BiquadCoeffs {
                 b0: 1.0,
@@ -55,12 +62,12 @@ impl KaraokeFilter {
             return (passthrough.clone(), passthrough);
         }
 
-        let fc = band.clamp(1.0, SAMPLE_RATE * 0.49);
+        let fc = band.clamp(1.0, fs * 0.49);
         let w = width.max(1e-6);
         let q = (fc / w).max(1e-4);
 
-        let lp = BiquadCoeffs::lowpass(fc, q, SAMPLE_RATE);
-        let hp = BiquadCoeffs::highpass(fc, q, SAMPLE_RATE);
+        let lp = BiquadCoeffs::lowpass(fc, q, fs);
+        let hp = BiquadCoeffs::highpass(fc, q, fs);
         (lp, hp)
     }
 }
@@ -76,10 +83,14 @@ impl AudioFilter for KaraokeFilter {
             return;
         }
 
+        // Reuse scratch buffers; grow only if needed (never shrinks — fine for fixed-size frames).
+        if self.out_left_buf.len() < num_frames {
+            self.out_left_buf.resize(num_frames, 0.0);
+            self.out_right_buf.resize(num_frames, 0.0);
+        }
+
         let do_filter = self.level > 0.0 && self.filter_band > 0.0 && self.filter_width > 0.0;
 
-        let mut out_left_buf = vec![0.0f64; num_frames];
-        let mut out_right_buf = vec![0.0f64; num_frames];
         let mut original_energy = 0.0f64;
         let mut processed_energy = 0.0f64;
 
@@ -108,8 +119,8 @@ impl AudioFilter for KaraokeFilter {
                 right = low_right + cancelled * self.level as f64;
             }
 
-            out_left_buf[frame] = left;
-            out_right_buf[frame] = right;
+            self.out_left_buf[frame] = left;
+            self.out_right_buf[frame] = right;
             processed_energy += left * left + right * right;
         }
 
@@ -133,8 +144,8 @@ impl AudioFilter for KaraokeFilter {
             let offset = frame * 2;
             current += step;
 
-            let mut out_l = out_left_buf[frame] * current;
-            let mut out_r = out_right_buf[frame] * current;
+            let mut out_l = self.out_left_buf[frame] * current;
+            let mut out_r = self.out_right_buf[frame] * current;
 
             let peak = out_l.abs().max(out_r.abs());
             if peak > 0.9999 {

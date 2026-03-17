@@ -1,4 +1,5 @@
 use super::{AudioFilter, delay_line::DelayLine, lfo::Lfo};
+use crate::audio::constants::TARGET_SAMPLE_RATE;
 
 const MAX_DELAY_MS: f32 = 10.0;
 const BUFFER_SIZE: usize = ((48000.0 * MAX_DELAY_MS) / 1000.0) as usize;
@@ -40,7 +41,7 @@ impl AudioFilter for FlangerFilter {
             return;
         }
 
-        let fs = 48000.0;
+        let fs = TARGET_SAMPLE_RATE as f32;
         let max_delay_width = self.depth * (fs * 0.005);
         let center_delay = max_delay_width;
 
