@@ -218,13 +218,13 @@ impl Mixer {
             if state == PlaybackState::Stopping && !track.flow.tape.is_ramping() {
                 track.flow.tape.tape_to(
                     track.config.tape.tape_stop_duration_ms as f32,
-                    "stop",
+                    false,
                     track.config.tape.curve,
                 );
             } else if state == PlaybackState::Starting && !track.flow.tape.is_ramping() {
                 track.flow.tape.tape_to(
                     track.config.tape.tape_stop_duration_ms as f32,
-                    "start",
+                    true,
                     track.config.tape.curve,
                 );
             }

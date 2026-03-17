@@ -43,8 +43,8 @@ impl TapeEffect {
         self.ramp_completed = false;
     }
 
-    pub fn tape_to(&mut self, duration_ms: f32, variant: &str, curve_type: TapeCurve) {
-        let target_rate = if variant == "start" { 1.0 } else { 0.01 };
+    pub fn tape_to(&mut self, duration_ms: f32, is_start: bool, curve_type: TapeCurve) {
+        let target_rate = if is_start { 1.0 } else { 0.01 };
 
         if duration_ms <= 0.0 {
             self.current_rate = target_rate;
@@ -71,12 +71,7 @@ impl TapeEffect {
     }
 
     pub fn check_ramp_completed(&mut self) -> bool {
-        if self.ramp_completed {
-            self.ramp_completed = false;
-            true
-        } else {
-            false
-        }
+        std::mem::replace(&mut self.ramp_completed, false)
     }
 
     pub fn process(&mut self, frame: &mut [i16]) {
@@ -109,19 +104,13 @@ impl TapeEffect {
             }
 
             if self.current_rate <= 0.01 && self.tape.is_none() {
-                while out_idx < frame.len() {
-                    frame[out_idx] = 0;
-                    out_idx += 1;
-                }
+                frame[out_idx..].fill(0);
                 break;
             }
 
             let i_pos = (self.read_pos.floor() as usize / channels) * channels;
             if i_pos + channels * 3 >= self.input_buffer.len() {
-                while out_idx < frame.len() {
-                    frame[out_idx] = 0;
-                    out_idx += 1;
-                }
+                frame[out_idx..].fill(0);
                 break;
             }
 
@@ -152,7 +141,8 @@ impl TapeEffect {
             self.read_pos += self.current_rate as f64 * channels as f64;
         }
 
-        if self.read_pos > (self.sample_rate as f64 * channels as f64 * 2.0) {
+        // Flush consumed samples when > 1s of data has been read to bound memory usage.
+        if self.read_pos > (self.sample_rate as f64 * channels as f64) {
             let integral = (self.read_pos.floor() as usize / channels) * channels;
             self.input_buffer.copy_within(integral.., 0);
             self.input_buffer
