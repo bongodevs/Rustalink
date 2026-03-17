@@ -17,7 +17,8 @@ impl NormalizationFilter {
         let attack_ms = 1.0;
         let release_ms = 100.0;
         let attack_coef = (-1.0 / ((attack_ms / 1000.0) * TARGET_SAMPLE_RATE as f64) as f32).exp();
-        let release_coef = (-1.0 / ((release_ms / 1000.0) * TARGET_SAMPLE_RATE as f64) as f32).exp();
+        let release_coef =
+            (-1.0 / ((release_ms / 1000.0) * TARGET_SAMPLE_RATE as f64) as f32).exp();
 
         Self {
             max_amplitude,
