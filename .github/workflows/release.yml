@@ -294,7 +294,7 @@ jobs:
           BODY: ${{ github.event.release.body }}
 
       - name: Send Discord Webhook
-        uses: tsickert/discord-webhook@v7
+        uses: tsickert/discord-webhook@v7.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           raw-data: discord_payload.json
