@@ -370,23 +370,52 @@ async fn prefetch_loop(
     let (lock, cvar) = &*shared;
 
     loop {
-        let mut state = lock.lock();
-        while !state.need_data {
-            cvar.wait(&mut state);
+        enum Action {
+            Stop,
+            Seek { target_index: usize, batch: Vec<Resource> },
+            Fetch { batch: Vec<Resource>, current_idx: usize },
+            Eos,
         }
 
-        match std::mem::replace(&mut state.command, PrefetchCommand::Continue) {
-            PrefetchCommand::Stop => return,
-            PrefetchCommand::Seek(target_index) => {
-                state.next_buf.clear();
-                state.eos = false;
-                state.current_segment_index = target_index;
-                state.pending = all_segments[target_index..].to_vec();
+        // Acquire lock, wait for work, extract what we need, then drop the guard.
+        let action = {
+            let mut state = lock.lock();
+            while !state.need_data {
+                cvar.wait(&mut state);
+            }
 
-                let count = if !state.pending.is_empty() { 1 } else { 0 };
-                let batch: Vec<Resource> = state.pending.drain(..count).collect();
-                drop(state);
+            match std::mem::replace(&mut state.command, PrefetchCommand::Continue) {
+                PrefetchCommand::Stop => Action::Stop,
+                PrefetchCommand::Seek(target_index) => {
+                    state.next_buf.clear();
+                    state.eos = false;
+                    state.current_segment_index = target_index;
+                    state.pending = all_segments[target_index..].to_vec();
+                    let count = if !state.pending.is_empty() { 1 } else { 0 };
+                    let batch = state.pending.drain(..count).collect();
+                    Action::Seek { target_index, batch }
+                }
+                PrefetchCommand::Continue => {
+                    if state.pending.is_empty() {
+                        state.eos = true;
+                        state.need_data = false;
+                        cvar.notify_one();
+                        Action::Eos
+                    } else {
+                        let count = PREFETCH_SEGMENTS.min(state.pending.len());
+                        let batch = state.pending.drain(..count).collect();
+                        let current_idx = state.current_segment_index;
+                        Action::Fetch { batch, current_idx }
+                    }
+                }
+            }
+        }; // MutexGuard dropped here — no guard held across any .await below
 
+        match action {
+            Action::Stop => return,
+            Action::Eos => continue,
+
+            Action::Seek { target_index, batch } => {
                 let mut tmp_buf = Vec::new();
                 for res in &batch {
                     debug!(
@@ -407,46 +436,31 @@ async fn prefetch_loop(
                 state.seek_done = true;
                 state.eos = state.pending.is_empty();
                 cvar.notify_one();
-                continue;
             }
-            PrefetchCommand::Continue => {}
-        }
 
-        if state.pending.is_empty() {
-            state.eos = true;
-            state.need_data = false;
-            cvar.notify_one();
-            continue;
-        }
-
-        let count = PREFETCH_SEGMENTS.min(state.pending.len());
-        let batch: Vec<Resource> = state.pending.drain(..count).collect();
-        let current_idx = state.current_segment_index;
-        drop(state);
-
-        let mut tmp_buf = Vec::with_capacity(256 * 1024);
-        for res in &batch {
-            {
-                let s = lock.lock();
-                if !matches!(s.command, PrefetchCommand::Continue) {
-                    break;
+            Action::Fetch { batch, current_idx } => {
+                let mut tmp_buf = Vec::with_capacity(256 * 1024);
+                for res in &batch {
+                    {
+                        let s = lock.lock();
+                        if !matches!(s.command, PrefetchCommand::Continue) {
+                            break;
+                        }
+                    }
+                    let _ = fetch_and_demux_into(&client, res, &mut tmp_buf).await;
                 }
+
+                let mut state = lock.lock();
+                if !matches!(state.command, PrefetchCommand::Continue) {
+                    continue;
+                }
+                state.next_buf.extend_from_slice(&tmp_buf);
+                state.current_segment_index = current_idx + batch.len();
+                state.eos = state.pending.is_empty();
+                state.need_data = false;
+                cvar.notify_one();
             }
-            let _ = fetch_and_demux_into(&client, res, &mut tmp_buf).await;
         }
-
-        let mut state = lock.lock();
-        if !matches!(state.command, PrefetchCommand::Continue) {
-            // Re-enter the loop to immediately handle the new command (e.g. Seek)
-            // without resetting need_data to false, which would cause a deadlock
-            continue;
-        }
-
-        state.next_buf.extend_from_slice(&tmp_buf);
-        state.current_segment_index = current_idx + batch.len();
-        state.eos = state.pending.is_empty();
-        state.need_data = false;
-        cvar.notify_one();
     }
 }
 

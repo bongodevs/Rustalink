@@ -9,7 +9,6 @@ use symphonia::core::{
     units::Duration,
 };
 
-/// Max decoded samples per opus frame at 48 kHz: 120 ms → 5760 samples/channel.
 use crate::audio::constants::MAX_OPUS_FRAME_SIZE;
 
 pub struct OpusCodecDecoder {
@@ -17,13 +16,24 @@ pub struct OpusCodecDecoder {
     channels: usize,
     decoder: OpusDecoder,
     buf: AudioBuffer<i16>,
-    /// Reusable interleaved scratch buffer — avoids per-frame heap allocs.
     pcm: Vec<i16>,
 }
 
-// audiopus::coder::Decoder is Send but not Sync.
-// We only touch it via `&mut self`, so Sync is safe.
 unsafe impl Sync for OpusCodecDecoder {}
+
+#[inline]
+fn opus_channels(n: usize) -> Channels {
+    if n == 1 {
+        Channels::Mono
+    } else {
+        Channels::Stereo
+    }
+}
+
+#[inline]
+fn opus_layout(n: usize) -> Layout {
+    if n == 1 { Layout::Mono } else { Layout::Stereo }
+}
 
 impl Decoder for OpusCodecDecoder {
     fn try_new(params: &CodecParameters, _options: &DecoderOptions) -> Result<Self> {
@@ -34,12 +44,6 @@ impl Decoder for OpusCodecDecoder {
         let sample_rate = params.sample_rate.unwrap_or(48000);
         let channels = params.channels.map(|c| c.count()).unwrap_or(2).clamp(1, 2);
 
-        let opus_channels = if channels == 1 {
-            Channels::Mono
-        } else {
-            Channels::Stereo
-        };
-
         let opus_rate = match sample_rate {
             8000 => SampleRate::Hz8000,
             12000 => SampleRate::Hz12000,
@@ -48,15 +52,10 @@ impl Decoder for OpusCodecDecoder {
             _ => SampleRate::Hz48000,
         };
 
-        let decoder = OpusDecoder::new(opus_rate, opus_channels)
-            .map_err(|e| Error::IoError(std::io::Error::other(e.to_string())))?;
+        let decoder = OpusDecoder::new(opus_rate, opus_channels(channels))
+            .map_err(|e| Error::IoError(std::io::Error::other(e)))?;
 
-        let layout = if channels == 1 {
-            Layout::Mono
-        } else {
-            Layout::Stereo
-        };
-        let spec = SignalSpec::new_with_layout(sample_rate, layout);
+        let spec = SignalSpec::new_with_layout(sample_rate, opus_layout(channels));
         let buf = AudioBuffer::<i16>::new(MAX_OPUS_FRAME_SIZE as Duration, spec);
         let pcm = vec![0i16; MAX_OPUS_FRAME_SIZE * channels];
 
@@ -79,13 +78,9 @@ impl Decoder for OpusCodecDecoder {
     }
 
     fn reset(&mut self) {
-        let channels = if self.channels == 1 {
-            Channels::Mono
-        } else {
-            Channels::Stereo
-        };
-        if let Ok(dec) = OpusDecoder::new(SampleRate::Hz48000, channels) {
-            self.decoder = dec;
+        match OpusDecoder::new(SampleRate::Hz48000, opus_channels(self.channels)) {
+            Ok(dec) => self.decoder = dec,
+            Err(e) => tracing::warn!("opus decoder reset failed: {e}"),
         }
     }
 
@@ -99,20 +94,26 @@ impl Decoder for OpusCodecDecoder {
             .decode(
                 Packet::try_from(packet.data.as_ref()).ok(),
                 MutSignals::try_from(self.pcm.as_mut_slice())
-                    .map_err(|e| Error::IoError(std::io::Error::other(e.to_string())))?,
+                    .map_err(|e| Error::IoError(std::io::Error::other(e)))?,
                 false,
             )
-            .map_err(|e| Error::IoError(std::io::Error::other(e.to_string())))?;
+            .map_err(|e| Error::IoError(std::io::Error::other(e)))?;
 
         self.buf.clear();
         self.buf.render_reserved(Some(n));
 
         let ch = self.channels;
-        for c in 0..ch {
-            let plane = self.buf.chan_mut(c);
-            debug_assert_eq!(plane.len(), n, "plane length must equal decoded frame size");
-            for (i, s) in plane.iter_mut().enumerate() {
-                *s = self.pcm[i * ch + c];
+        if ch == 1 {
+            let plane = self.buf.chan_mut(0);
+            plane.copy_from_slice(&self.pcm[..n]);
+        } else {
+            let left = self.buf.chan_mut(0);
+            for (i, chunk) in self.pcm[..n * 2].chunks_exact(2).enumerate() {
+                left[i] = chunk[0];
+            }
+            let right = self.buf.chan_mut(1);
+            for (i, chunk) in self.pcm[..n * 2].chunks_exact(2).enumerate() {
+                right[i] = chunk[1];
             }
         }
 

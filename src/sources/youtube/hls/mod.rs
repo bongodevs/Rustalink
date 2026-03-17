@@ -400,38 +400,59 @@ async fn prefetch_loop(
     let (lock, cvar) = &*shared;
 
     loop {
-        // Wait until the reader signals it needs data.
-        let mut state = lock.lock();
-        while !state.need_data {
-            cvar.wait(&mut state);
+        enum Action {
+            Stop,
+            Seek { batch: Vec<Resource> },
+            Fetch { batch: Vec<Resource>, seg_idx: usize },
+            Eos,
         }
 
-        // Check for commands.
-        match std::mem::replace(&mut state.command, PrefetchCommand::Continue) {
-            PrefetchCommand::Stop => {
-                return;
+        // Acquire lock, wait for work, extract what we need, then drop the guard.
+        let action = {
+            let mut state = lock.lock();
+            while !state.need_data {
+                cvar.wait(&mut state);
             }
 
-            PrefetchCommand::Seek(target_index) => {
-                // Reset for seek.
-                state.next_buf.clear();
-                state.eos = false;
-                state.current_segment_index = target_index;
-                state.pending = all_segments[target_index..].to_vec();
+            match std::mem::replace(&mut state.command, PrefetchCommand::Continue) {
+                PrefetchCommand::Stop => Action::Stop,
 
-                // Re-use cached map data if available.
-                if let Some(map_data) = &cached_map_data {
-                    state.next_buf.extend_from_slice(map_data);
+                PrefetchCommand::Seek(target_index) => {
+                    state.next_buf.clear();
+                    state.eos = false;
+                    state.current_segment_index = target_index;
+                    state.pending = all_segments[target_index..].to_vec();
+
+                    if let Some(map_data) = &cached_map_data {
+                        state.next_buf.extend_from_slice(map_data);
+                    }
+
+                    let count = if !state.pending.is_empty() { 1 } else { 0 };
+                    let batch = state.pending.drain(..count).collect();
+                    Action::Seek { batch }
                 }
 
-                // Fetch JUST ONE segment to start playback ASAP (minimal latency).
-                // The remaining segments will be fetched in the next loop iteration.
-                let count = if !state.pending.is_empty() { 1 } else { 0 };
-                let batch: Vec<Resource> = state.pending.drain(..count).collect();
+                PrefetchCommand::Continue => {
+                    if state.pending.is_empty() {
+                        state.eos = true;
+                        state.need_data = false;
+                        cvar.notify_one();
+                        Action::Eos
+                    } else {
+                        let count = PREFETCH_SEGMENTS.min(state.pending.len());
+                        let batch = state.pending.drain(..count).collect();
+                        let seg_idx = state.current_segment_index;
+                        Action::Fetch { batch, seg_idx }
+                    }
+                }
+            }
+        }; // MutexGuard dropped here — no guard held across any .await below
 
-                // Drop the lock while fetching (network I/O).
-                drop(state);
+        match action {
+            Action::Stop => return,
+            Action::Eos => continue,
 
+            Action::Seek { batch } => {
                 let mut tmp_buf = Vec::with_capacity(256 * 1024);
                 for res in &batch {
                     if let Ok(resolved) =
@@ -442,7 +463,6 @@ async fn prefetch_loop(
                     }
                 }
 
-                // Re-acquire lock and store data.
                 let mut state = lock.lock();
                 state.next_buf.extend_from_slice(&tmp_buf);
                 state.current_segment_index += batch.len();
@@ -450,67 +470,33 @@ async fn prefetch_loop(
                 state.seek_done = true;
                 state.eos = state.pending.is_empty();
                 cvar.notify_one();
-                continue;
             }
 
-            PrefetchCommand::Continue => {
-                // Normal prefetch path below.
+            Action::Fetch { batch, seg_idx } => {
+                let mut tmp_buf = Vec::with_capacity(256 * 1024);
+                for res in &batch {
+                    if abort_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    if let Ok(resolved) = resolve_resource_static(res, &cipher_manager, &player_url).await
+                        && let Err(e) = fetch_and_demux_into(&client, &resolved, &mut tmp_buf).await
+                    {
+                        tracing::warn!("HLS prefetch: segment fetch error: {}", e);
+                    }
+                }
+
+                let mut state = lock.lock();
+                if !matches!(state.command, PrefetchCommand::Continue) {
+                    continue;
+                }
+                state.next_buf.extend_from_slice(&tmp_buf);
+                state.current_segment_index = seg_idx + batch.len();
+                state.eos = state.pending.is_empty();
+                state.need_data = false;
+                cvar.notify_one();
             }
         }
-
-        if state.pending.is_empty() {
-            state.eos = true;
-            state.need_data = false;
-            cvar.notify_one();
-            continue;
-        }
-
-        // Fetch the next batch of segments.
-        let count = PREFETCH_SEGMENTS.min(state.pending.len());
-        let batch: Vec<Resource> = state.pending.drain(..count).collect();
-        let seg_idx = state.current_segment_index;
-
-        // Drop lock while doing network I/O.
-        drop(state);
-
-        /*
-        tracing::debug!(
-            "HLS prefetch: fetching {} segments (index {} → {})",
-            batch.len(),
-            seg_idx,
-            seg_idx + batch.len()
-        );
-        */
-
-        let mut tmp_buf = Vec::with_capacity(256 * 1024);
-        for res in &batch {
-            // Fast abort check between segments — no mutex, just an atomic load.
-            // The full command (Stop/Seek) will be handled in the outer loop's
-            // mutex wait after this inner loop breaks.
-            if abort_flag.load(Ordering::Relaxed) {
-                break;
-            }
-
-            if let Ok(resolved) = resolve_resource_static(res, &cipher_manager, &player_url).await
-                && let Err(e) = fetch_and_demux_into(&client, &resolved, &mut tmp_buf).await
-            {
-                tracing::warn!("HLS prefetch: segment fetch error: {}", e);
-            }
-        }
-
-        // Re-acquire lock and store the fetched data.
-        let mut state = lock.lock();
-        if !matches!(state.command, PrefetchCommand::Continue) {
-            // Re-enter the loop to immediately handle the new command (e.g. Seek)
-            // without resetting need_data to false, which would cause a deadlock
-            continue;
-        }
-
-        state.next_buf.extend_from_slice(&tmp_buf);
-        state.current_segment_index = seg_idx + batch.len();
-        state.eos = state.pending.is_empty();
-        state.need_data = false;
-        cvar.notify_one();
     }
 }
 
