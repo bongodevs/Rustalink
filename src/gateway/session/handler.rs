@@ -637,11 +637,14 @@ impl<'a> SessionState<'a> {
     }
 
     fn send_json(&self, op: u8, d: Value) {
-        let _ = self.tx.send(Message::Text(
-            serde_json::to_string(&GatewayPayload { op, seq: None, d })
-                .unwrap()
-                .into(),
-        ));
+        match serde_json::to_string(&GatewayPayload { op, seq: None, d }) {
+            Ok(json) => {
+                let _ = self.tx.send(Message::Text(json.into()));
+            }
+            Err(e) => {
+                warn!("[{}] JSON serialization failed: {e}", self.gateway.guild_id);
+            }
+        }
     }
 
     fn send_binary(&self, op: u8, payload: &[u8]) {

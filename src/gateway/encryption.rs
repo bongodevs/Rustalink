@@ -92,16 +92,16 @@ impl DaveHandler {
 
         let nz_version = NonZeroU16::new(version).unwrap_or(DAVE_MIN_VERSION);
 
-        let session = if let Some(s) = &mut self.session {
+        if let Some(s) = &mut self.session {
             s.reinit(nz_version, self.user_id.0, self.channel_id.0, None)
                 .map_err(map_boxed_err)?;
-            s
         } else {
             let session = DaveSession::new(nz_version, self.user_id.0, self.channel_id.0, None)
                 .map_err(map_boxed_err)?;
             self.session = Some(session);
-            self.session.as_mut().unwrap()
-        };
+        }
+
+        let session = self.session.as_mut().ok_or_else(|| map_boxed_err("DAVE session initialization failed"))?;
 
         self.protocol_version = version;
         self.external_sender_set = false;

@@ -15,7 +15,7 @@ use crate::{
 };
 
 static RANGE_RE: std::sync::LazyLock<regex::Regex> =
-    std::sync::LazyLock::new(|| regex::Regex::new(r"bytes=(\d+)-(\d+)?").expect("invalid regex"));
+    std::sync::LazyLock::new(|| regex::Regex::new(r"bytes=(\d+)-(\d+)?").expect("invalid RANGE_RE regex pattern"));
 
 pub async fn get_youtube_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     tracing::info!("GET /youtube");

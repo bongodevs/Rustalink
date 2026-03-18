@@ -109,12 +109,11 @@ impl Read for HttpSource {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let (lock, cvar) = &*self.shared;
         let mut state = lock.lock();
-
         loop {
             if !state.chunks.is_empty() || state.done || state.error.is_some() {
                 break;
             }
-            cvar.wait(&mut state);
+            cvar.wait_for(&mut state, std::time::Duration::from_millis(100));
         }
 
         if let Some(err) = state.error.take() {

@@ -86,10 +86,10 @@ impl SharedState {
 
 const SLEEP_SLICE_MS: u64 = 50;
 
-fn interruptible_sleep(shared: &Arc<(Mutex<SharedState>, Condvar)>, total_ms: u64) -> bool {
+async fn interruptible_sleep(shared: &Arc<(Mutex<SharedState>, Condvar)>, total_ms: u64) -> bool {
     let slices = (total_ms / SLEEP_SLICE_MS).max(1);
     for _ in 0..slices {
-        std::thread::sleep(Duration::from_millis(SLEEP_SLICE_MS));
+        tokio::time::sleep(Duration::from_millis(SLEEP_SLICE_MS)).await;
         if matches!(shared.0.lock().command, PrefetchCommand::Stop) {
             return true;
         }
@@ -223,7 +223,7 @@ pub async fn prefetch_loop(
                         retry_count, MAX_FETCH_RETRIES, e, backoff_ms
                     );
 
-                    if interruptible_sleep(&shared, backoff_ms) {
+                    if interruptible_sleep(&shared, backoff_ms).await {
                         break 'outer;
                     }
                     continue;
@@ -298,7 +298,7 @@ pub async fn prefetch_loop(
                     retry_count, MAX_FETCH_RETRIES, e, backoff_ms
                 );
 
-                if interruptible_sleep(&shared, backoff_ms) {
+                if interruptible_sleep(&shared, backoff_ms).await {
                     break 'outer;
                 }
             }

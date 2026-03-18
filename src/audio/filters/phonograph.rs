@@ -4,10 +4,15 @@ use super::{
     delay_line::DelayLine,
     lfo::Lfo,
 };
-use crate::audio::constants::TARGET_SAMPLE_RATE;
+use crate::audio::constants::{
+    TARGET_SAMPLE_RATE,
+    PHONOGRAPH_MAX_DELAY_MS,
+    PHONOGRAPH_R1_SIZE,
+    PHONOGRAPH_R2_SIZE,
+    PHONOGRAPH_R3_SIZE,
+};
 
-const MAX_DELAY_MS: f32 = 60.0;
-const BUFFER_SIZE: usize = ((TARGET_SAMPLE_RATE as f32 * MAX_DELAY_MS) / 1000.0) as usize;
+const BUFFER_SIZE: usize = ((TARGET_SAMPLE_RATE as f32 * PHONOGRAPH_MAX_DELAY_MS) / 1000.0) as usize;
 
 struct XorShift32 {
     s: u32,
@@ -130,9 +135,9 @@ impl PhonographFilter {
             hiss_hp_coeffs: BiquadCoeffs::default(),
             hiss_lp_coeffs: BiquadCoeffs::default(),
 
-            r1: DelayLine::new(148 * 48),
-            r2: DelayLine::new(115 * 48),
-            r3: DelayLine::new(63 * 48),
+            r1: DelayLine::new(PHONOGRAPH_R1_SIZE),
+            r2: DelayLine::new(PHONOGRAPH_R2_SIZE),
+            r3: DelayLine::new(PHONOGRAPH_R3_SIZE),
             room_damp: 0.0,
 
             tick_env: 0.0,

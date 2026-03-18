@@ -35,11 +35,13 @@ async fn main() -> AnyResult<()> {
     info!("Rustalink Server starting...");
 
     let routeplanner = if config.route_planner.enabled && !config.route_planner.cidrs.is_empty() {
-        Some(
-            Arc::new(rustalink::routeplanner::BalancingIpRoutePlanner::new(
-                config.route_planner.cidrs.clone(),
-            )) as Arc<dyn rustalink::routeplanner::RoutePlanner>,
-        )
+        match rustalink::routeplanner::BalancingIpRoutePlanner::new(config.route_planner.cidrs.clone()) {
+            Ok(planner) => Some(Arc::new(planner) as Arc<dyn rustalink::routeplanner::RoutePlanner>),
+            Err(e) => {
+                tracing::warn!("Failed to initialize route planner: {}. Running without IP rotation.", e);
+                None
+            }
+        }
     } else {
         None
     };

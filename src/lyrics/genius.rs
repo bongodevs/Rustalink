@@ -10,10 +10,10 @@ use crate::protocol::{
 };
 
 static PRELOADED_STATE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?s)window\.__PRELOADED_STATE__\s*=\s*JSON\.parse\('(.*?)'\);"#).unwrap()
+    Regex::new(r#"(?s)window\.__PRELOADED_STATE__\s*=\s*JSON\.parse\('(.*?)'\);"#).expect("invalid PRELOADED_STATE_RE pattern")
 });
-static ESCAPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\\(.)"#).unwrap());
-static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<[^>]*>"#).unwrap());
+static ESCAPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\\(.)"#).expect("invalid ESCAPE_RE pattern"));
+static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<[^>]*>"#).expect("invalid TAG_RE pattern"));
 
 #[derive(Default)]
 pub struct GeniusProvider {

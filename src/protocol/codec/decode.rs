@@ -47,9 +47,8 @@ pub fn decode_track(encoded: &str) -> Result<Track, CodecError> {
     };
 
     let source_name = stream.read_string()?;
-    let position = stream.read_u64::<BigEndian>().unwrap_or(0);
+    let position = stream.read_u64::<BigEndian>()?;
 
-    // Optional userData follows the standard fields
     let user_data = stream.read_json().unwrap_or_else(|_| serde_json::json!({}));
 
     Ok(Track {

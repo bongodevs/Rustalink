@@ -28,7 +28,8 @@ impl PoolInner {
     }
 
     fn aligned_size(size: usize) -> usize {
-        size.max(1024).next_power_of_two()
+        let aligned = size.max(1024).next_power_of_two();
+        aligned.min(1024 * 1024)
     }
 
     fn needs_cleanup(&self) -> bool {

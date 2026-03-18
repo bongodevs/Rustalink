@@ -2,11 +2,9 @@ use super::{
     AudioFilter,
     biquad::{BiquadCoeffs, BiquadState},
 };
-use crate::audio::constants::TARGET_SAMPLE_RATE;
+use crate::audio::constants::{TARGET_SAMPLE_RATE, MIX_BUFFER_SIZE};
 
-const SCALE_16: f64 = 32768.0;
-const INV_16: f64 = 1.0 / SCALE_16;
-const MAX_OUTPUT_GAIN: f64 = 0.98;
+const MAX_OUTPUT_GAIN: f64 = crate::audio::constants::KARAOKE_MAX_OUTPUT_GAIN;
 
 /// Karaoke filter — vocal cancellation via LP/HP biquad filters + mid-channel subtraction.
 pub struct KaraokeFilter {
@@ -21,7 +19,7 @@ pub struct KaraokeFilter {
     hp_states: [BiquadState; 2],
     prev_gain: f64,
 
-    // Scratch buffers — allocated once, reused on every process() call.
+    // Scratch buffers — allocated once with capacity, reused on every process() call.
     out_left_buf: Vec<f64>,
     out_right_buf: Vec<f64>,
 }
@@ -44,8 +42,9 @@ impl KaraokeFilter {
             lp_states: [BiquadState::default(), BiquadState::default()],
             hp_states: [BiquadState::default(), BiquadState::default()],
             prev_gain: MAX_OUTPUT_GAIN,
-            out_left_buf: Vec::new(),
-            out_right_buf: Vec::new(),
+            // IDIOM: Pre-allocate scratch buffers with typical frame capacity
+            out_left_buf: Vec::with_capacity(MIX_BUFFER_SIZE),
+            out_right_buf: Vec::with_capacity(MIX_BUFFER_SIZE),
         }
     }
 
@@ -96,8 +95,8 @@ impl AudioFilter for KaraokeFilter {
 
         for frame in 0..num_frames {
             let offset = frame * 2;
-            let mut left = samples[offset] as f64 * INV_16;
-            let mut right = samples[offset + 1] as f64 * INV_16;
+            let mut left = samples[offset] as f64 * crate::audio::constants::KARAOKE_INV;
+            let mut right = samples[offset + 1] as f64 * crate::audio::constants::KARAOKE_INV;
 
             original_energy += left * left + right * right;
 
@@ -155,9 +154,9 @@ impl AudioFilter for KaraokeFilter {
             }
 
             samples[offset] =
-                ((out_l * SCALE_16).round() as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                ((out_l * crate::audio::constants::KARAOKE_SCALE).round() as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
             samples[offset + 1] =
-                ((out_r * SCALE_16).round() as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+                ((out_r * crate::audio::constants::KARAOKE_SCALE).round() as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
         }
 
         self.prev_gain = target;

@@ -11,11 +11,11 @@ use crate::protocol::{
 };
 
 static OMQ_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"_omq\.push\(\['ui/lyric',\s*(\{[\s\S]*?\})\s*,"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"_omq\.push\(\['ui/lyric',\s*(\{[\s\S]*?\})\s*,"#).expect("invalid OMQ_RE pattern"));
 static LYRIC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)<div class="lyric-original[^>]*">([\s\S]*?)</div>"#).unwrap()
+    Regex::new(r#"(?i)<div class="lyric-original[^>]*">([\s\S]*?)</div>"#).expect("invalid LYRIC_RE pattern")
 });
-static LYRIC_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<[^>]*>"#).unwrap());
+static LYRIC_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<[^>]*>"#).expect("invalid LYRIC_TAG_RE pattern"));
 
 pub struct LetrasMusProvider {
     client: reqwest::Client,

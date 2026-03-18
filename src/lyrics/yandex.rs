@@ -43,18 +43,19 @@ impl YandexProvider {
         }
     }
 
-    fn create_sign(&self, track_id: &str) -> (String, u64) {
+    fn create_sign(&self, track_id: &str) -> Option<(String, u64)> {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .ok()?
             .as_secs();
         let message = format!("{}{}", track_id, ts);
+        // HMAC-SHA256 can accept keys of any size, so this won't fail with our fixed key
         let mut mac = Hmac::<Sha256>::new_from_slice(b"p93jhgh689SBReK6ghtw62")
-            .expect("HMAC can take key of any size");
+            .expect("HMAC-SHA256 key size is valid");
         mac.update(message.as_bytes());
         let result = mac.finalize();
         let sign = general_purpose::STANDARD.encode(result.into_bytes());
-        (urlencoding::encode(&sign).into_owned(), ts)
+        Some((urlencoding::encode(&sign).into_owned(), ts))
     }
 }
 
@@ -96,7 +97,7 @@ impl LyricsProvider for YandexProvider {
                 .to_string()
         };
 
-        let (sign, ts) = self.create_sign(&track_id);
+        let (sign, ts) = self.create_sign(&track_id)?;
         let url = format!(
             "https://api.music.yandex.net/tracks/{}/lyrics?format=LRC&timeStamp={}&sign={}",
             track_id, ts, sign

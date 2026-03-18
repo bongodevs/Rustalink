@@ -57,3 +57,30 @@ pub const OPUS_SAMPLE_RATE: u64 = TARGET_SAMPLE_RATE as u64;
 // ── Route Planner ────────────────────────────────────────────────────────────
 
 pub const ROUTE_PLANNER_FAIL_EXPIRE_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
+
+// ── Mixer/Processor buffer sizes ─────────────────────────────────────────────
+
+/// Default mixer buffer size in samples (40ms at 48kHz = 1920 samples)
+pub const MIX_BUFFER_SIZE: usize = 1920;
+
+/// Controller buffer size (2x frame size for lookahead)
+pub const CONTROLLER_BUFFER_SIZE: usize = FRAME_SIZE_SAMPLES * 2;
+
+// ── Phonograph filter delay lines ────────────────────────────────────────────
+
+/// Maximum delay in milliseconds for phonograph effect
+pub const PHONOGRAPH_MAX_DELAY_MS: f32 = 60.0;
+
+/// Phonograph room delay line sizes (in samples at 48kHz)
+pub const PHONOGRAPH_R1_SIZE: usize = 148 * 48;
+pub const PHONOGRAPH_R2_SIZE: usize = 115 * 48;
+pub const PHONOGRAPH_R3_SIZE: usize = 63 * 48;
+
+// ── Karaoke filter constants ─────────────────────────────────────────────────
+
+/// Karaoke filter scale factor for i16 conversion
+pub const KARAOKE_SCALE: f64 = 32768.0;
+/// Inverse of KARAOKE_SCALE
+pub const KARAOKE_INV: f64 = 1.0 / KARAOKE_SCALE;
+/// Maximum output gain for karaoke filter to prevent clipping
+pub const KARAOKE_MAX_OUTPUT_GAIN: f64 = 0.98;
