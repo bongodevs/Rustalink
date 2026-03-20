@@ -285,7 +285,9 @@ Audius works by default but you can provide a custom app name:
 
 ### Pandora
 
-Pandora requires a CSRF token for search.
+ Pandora usually works out of the box. CSRF/auth tokens are fetched automatically for search.
+
+ If you have issues with Pandora search or need to override the automatically-detected token, you can optionally provide a custom CSRF token:
 
 1. Open [pandora.com](https://www.pandora.com) in your browser (may require a US VPN).
 2. Open DevTools (`F12` → **Network** tab).
@@ -294,6 +296,7 @@ Pandora requires a CSRF token for search.
    ```toml
    [sources.pandora]
    enabled = true
+   # Optional manual override:
    csrf_token = "your-csrf-token"
    ```
 
