@@ -405,10 +405,15 @@ impl YouTubeClient for MusicAndroidClient {
         if let Ok(res) = next_req.send().await {
             if res.status().is_success() {
                 let body: Value = res.json().await?;
-                if let Some(result) = crate::sources::youtube::extractor::extract_from_next(&body, "youtube") {
+                if let Some(result) =
+                    crate::sources::youtube::extractor::extract_from_next(&body, "youtube")
+                {
                     return Ok(Some(result));
                 }
-                tracing::debug!("MusicAndroid: /next endpoint returned but extraction failed for playlist {}", playlist_id);
+                tracing::debug!(
+                    "MusicAndroid: /next endpoint returned but extraction failed for playlist {}",
+                    playlist_id
+                );
             }
         }
 
@@ -433,14 +438,22 @@ impl YouTubeClient for MusicAndroidClient {
         if let Ok(res) = browse_req.json(&browse_body).send().await {
             if res.status().is_success() {
                 let body: Value = res.json().await?;
-                if let Some(result) = crate::sources::youtube::extractor::extract_from_browse(&body, "youtube") {
+                if let Some(result) =
+                    crate::sources::youtube::extractor::extract_from_browse(&body, "youtube")
+                {
                     return Ok(Some(result));
                 }
-                tracing::debug!("MusicAndroid: /browse endpoint returned but extraction failed for playlist {}", playlist_id);
+                tracing::debug!(
+                    "MusicAndroid: /browse endpoint returned but extraction failed for playlist {}",
+                    playlist_id
+                );
             }
         }
 
-        tracing::warn!("MusicAndroid: Both /next and /browse endpoints failed for playlist {}", playlist_id);
+        tracing::warn!(
+            "MusicAndroid: Both /next and /browse endpoints failed for playlist {}",
+            playlist_id
+        );
         Ok(None)
     }
 

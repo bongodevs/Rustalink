@@ -145,7 +145,7 @@ pub fn extract_from_browse(body: &Value, source_name: &str) -> Option<(Vec<Track
         .unwrap_or_else(|| "Unknown Playlist".to_string());
 
     let mut tracks = Vec::new();
-    
+
     if let Some(section_list) = find_section_list(body) {
         if let Some(contents) = section_list.get("contents").and_then(|c| c.as_array()) {
             for section in contents {
@@ -187,7 +187,7 @@ pub fn extract_from_browse(body: &Value, source_name: &str) -> Option<(Vec<Track
             }
         }
     }
-    
+
     if tracks.is_empty() {
         if let Some(contents) = body
             .get("contents")
@@ -211,7 +211,7 @@ pub fn extract_from_browse(body: &Value, source_name: &str) -> Option<(Vec<Track
             }
         }
     }
-    
+
     if tracks.is_empty() {
         if let Some(list) = find_music_playlist_shelf(body) {
             for item in list {
@@ -221,7 +221,7 @@ pub fn extract_from_browse(body: &Value, source_name: &str) -> Option<(Vec<Track
             }
         }
     }
-    
+
     if tracks.is_empty() {
         if let Some(continuation_contents) = body
             .get("onResponseReceivedActions")
@@ -250,7 +250,7 @@ fn find_music_playlist_shelf(value: &Value) -> Option<&Vec<Value>> {
     if let Some(shelf) = value.get("musicPlaylistShelfRenderer") {
         return shelf.get("contents").and_then(|c| c.as_array());
     }
-    
+
     if let Some(obj) = value.as_object() {
         for (_, val) in obj {
             if let Some(list) = find_music_playlist_shelf(val) {
@@ -258,7 +258,7 @@ fn find_music_playlist_shelf(value: &Value) -> Option<&Vec<Value>> {
             }
         }
     }
-    
+
     if let Some(arr) = value.as_array() {
         for item in arr {
             if let Some(list) = find_music_playlist_shelf(item) {
@@ -266,7 +266,7 @@ fn find_music_playlist_shelf(value: &Value) -> Option<&Vec<Value>> {
             }
         }
     }
-    
+
     None
 }
 
@@ -403,7 +403,6 @@ pub fn extract_track(item: &Value, source_name: &str) -> Option<Track> {
 }
 
 fn extract_author(renderer: &Value) -> Option<String> {
-    
     if let Some(subtitle) = renderer.get("subtitle") {
         if let Some(text) = get_first_subtitle_run(subtitle) {
             let artist = text.split(" • ").next().unwrap_or(&text).trim();
@@ -412,7 +411,7 @@ fn extract_author(renderer: &Value) -> Option<String> {
             }
         }
     }
-    
+
     if let Some(author) = renderer
         .get("menu")
         .and_then(|m| m.get("menuRenderer"))
@@ -423,19 +422,19 @@ fn extract_author(renderer: &Value) -> Option<String> {
     {
         return Some(author);
     }
-    
+
     if let Some(text) = renderer.get("longBylineText").and_then(get_first_text) {
         return Some(text);
     }
-    
+
     if let Some(text) = renderer.get("shortBylineText").and_then(get_first_text) {
         return Some(text);
     }
-    
+
     if let Some(text) = renderer.get("ownerText").and_then(get_first_text) {
         return Some(text);
     }
-    
+
     if let Some(flex) = renderer
         .get("flexColumns")
         .and_then(|c| c.get(1))
@@ -443,18 +442,23 @@ fn extract_author(renderer: &Value) -> Option<String> {
         .and_then(|r| r.get("text"))
     {
         if let Some(runs) = flex.get("runs").and_then(|r| r.as_array()) {
-            if let Some(text) = runs.first().and_then(|r| r.get("text")).and_then(|t| t.as_str()) {
+            if let Some(text) = runs
+                .first()
+                .and_then(|r| r.get("text"))
+                .and_then(|t| t.as_str())
+            {
                 return Some(text.to_string());
             }
         }
     }
-    
+
     None
 }
 
 fn get_first_subtitle_run(subtitle: &Value) -> Option<String> {
     if let Some(runs) = subtitle.get("runs").and_then(|r| r.as_array()) {
-        return runs.first()
+        return runs
+            .first()
             .and_then(|r| r.get("text"))
             .and_then(|t| t.as_str())
             .map(|s| s.to_string());

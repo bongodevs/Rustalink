@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::Ordering,
-};
+use std::sync::{Arc, atomic::Ordering};
 
 use tracing::warn;
 

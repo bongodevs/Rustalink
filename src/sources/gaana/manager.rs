@@ -377,7 +377,9 @@ impl GaanaSource {
         if let Some(info) = json.get("entity_info").and_then(|v| v.as_array()) {
             return info.iter().find_map(|e| {
                 if e.get("key").and_then(|k| k.as_str()) == Some("isrc") {
-                    e.get("value").and_then(|v| v.as_str()).map(|s| s.to_owned())
+                    e.get("value")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_owned())
                 } else {
                     None
                 }

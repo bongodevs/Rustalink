@@ -1,9 +1,6 @@
-use std::{
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::common::utils::now_nanos;
-
 
 pub struct StuckDetector {
     last_frame_received_at_nanos: AtomicU64,
@@ -29,7 +26,6 @@ impl StuckDetector {
     pub fn reset_stuck_flag(&self) {
         self.stuck_event_sent.store(false, Ordering::Release);
     }
-
 
     pub fn check_stuck(&self) -> bool {
         if self.stuck_event_sent.load(Ordering::Acquire) {

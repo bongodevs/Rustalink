@@ -276,7 +276,7 @@ impl YouTubeClient for WebRemixClient {
         oauth: Arc<YouTubeOAuth>,
     ) -> AnyResult<Option<(Vec<Track>, String)>> {
         let visitor_data = core::extract_visitor_data(context);
-        
+
         let is_mix_playlist = playlist_id.starts_with("RDCLAK5uy_")
             || playlist_id.starts_with("RDAMVM")
             || playlist_id.starts_with("RDMM")
@@ -306,10 +306,15 @@ impl YouTubeClient for WebRemixClient {
             if let Ok(res) = next_req.json(&next_body).send().await {
                 if res.status().is_success() {
                     let body: Value = res.json().await?;
-                    if let Some(result) = crate::sources::youtube::extractor::extract_from_next(&body, "youtube") {
+                    if let Some(result) =
+                        crate::sources::youtube::extractor::extract_from_next(&body, "youtube")
+                    {
                         return Ok(Some(result));
                     }
-                    tracing::debug!("WebRemix: /next endpoint returned but extraction failed for playlist {}", playlist_id);
+                    tracing::debug!(
+                        "WebRemix: /next endpoint returned but extraction failed for playlist {}",
+                        playlist_id
+                    );
                 }
             }
         }

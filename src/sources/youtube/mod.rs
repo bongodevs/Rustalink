@@ -108,8 +108,10 @@ impl YouTubeSource {
                     cipher_url.clone(),
                     cipher_token.clone(),
                 ))),
-                "WEB_REMIX" | "REMIX" => Some(Arc::new(WebRemixClient::new(http.clone()))),
-                "MWEB" | "MUSIC_WEB" => Some(Arc::new(MWebClient::new(http.clone()))),
+                "WEB_REMIX" | "REMIX" | "MUSIC_WEB" => {
+                    Some(Arc::new(WebRemixClient::new(http.clone())))
+                }
+                "MWEB" => Some(Arc::new(MWebClient::new(http.clone()))),
                 "ANDROID" => Some(Arc::new(AndroidClient::new(http.clone()))),
                 "IOS" => Some(Arc::new(IosClient::new(http.clone()))),
                 "TV" | "TVHTML5" => Some(Arc::new(TvClient::new(http.clone()))),
