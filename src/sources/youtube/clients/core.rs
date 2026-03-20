@@ -336,33 +336,64 @@ where
     let visitor_data = extract_visitor_data(context);
     let config = config_builder();
 
-    let body = json!({
+    let browse_body = json!({
         "context": config.build_context(visitor_data),
         "browseId": if playlist_id.starts_with("VL") { playlist_id.to_string() } else { format!("VL{}", playlist_id) },
     });
 
-    let url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false";
-    let mut req = http
-        .post(url)
+    let browse_url = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false";
+    let mut browse_req = http
+        .post(browse_url)
         .header("User-Agent", client.user_agent())
         .header("X-YouTube-Client-Name", client.client_name())
         .header("X-YouTube-Client-Version", client.client_version());
 
     if let Some(auth) = oauth.get_auth_header().await {
-        req = req.header("Authorization", auth);
+        browse_req = browse_req.header("Authorization", auth);
     }
 
     if let Some(vd) = visitor_data {
-        req = req.header("X-Goog-Visitor-Id", vd);
+        browse_req = browse_req.header("X-Goog-Visitor-Id", vd);
     }
 
-    let res = req.json(&body).send().await?;
-    if !res.status().is_success() {
-        return Ok(None);
+    if let Ok(res) = browse_req.json(&browse_body).send().await {
+        if res.status().is_success() {
+            let body: Value = res.json().await?;
+            if let Some(result) = crate::sources::youtube::extractor::extract_from_browse(&body, "youtube") {
+                return Ok(Some(result));
+            }
+        }
     }
 
-    let body: Value = res.json().await?;
-    Ok(crate::sources::youtube::extractor::extract_from_browse(
-        &body, "youtube",
-    ))
+    let next_body = json!({
+        "context": config.build_context(visitor_data),
+        "playlistId": playlist_id,
+        "enablePersistentPlaylistPanel": true,
+    });
+
+    let next_url = "https://www.youtube.com/youtubei/v1/next?prettyPrint=false";
+    let mut next_req = http
+        .post(next_url)
+        .header("User-Agent", client.user_agent())
+        .header("X-YouTube-Client-Name", client.client_name())
+        .header("X-YouTube-Client-Version", client.client_version());
+
+    if let Some(auth) = oauth.get_auth_header().await {
+        next_req = next_req.header("Authorization", auth);
+    }
+
+    if let Some(vd) = visitor_data {
+        next_req = next_req.header("X-Goog-Visitor-Id", vd);
+    }
+
+    if let Ok(res) = next_req.json(&next_body).send().await {
+        if res.status().is_success() {
+            let body: Value = res.json().await?;
+            if let Some(result) = crate::sources::youtube::extractor::extract_from_next(&body, "youtube") {
+                return Ok(Some(result));
+            }
+        }
+    }
+
+    Ok(None)
 }

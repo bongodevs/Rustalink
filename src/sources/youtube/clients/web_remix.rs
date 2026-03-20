@@ -275,6 +275,45 @@ impl YouTubeClient for WebRemixClient {
         context: &Value,
         oauth: Arc<YouTubeOAuth>,
     ) -> AnyResult<Option<(Vec<Track>, String)>> {
+        let visitor_data = core::extract_visitor_data(context);
+        
+        let is_mix_playlist = playlist_id.starts_with("RDCLAK5uy_")
+            || playlist_id.starts_with("RDAMVM")
+            || playlist_id.starts_with("RDMM")
+            || playlist_id.starts_with("RD");
+
+        if is_mix_playlist {
+            let next_body = json!({
+                "context": self.config().build_context(visitor_data),
+                "playlistId": playlist_id,
+                "enablePersistentPlaylistPanel": true,
+                "isAudioOnly": true
+            });
+
+            let next_url = format!("{}/youtubei/v1/next?prettyPrint=false", MUSIC_API);
+
+            let mut next_req = self
+                .http
+                .post(&next_url)
+                .header("User-Agent", USER_AGENT)
+                .header("X-YouTube-Client-Name", "26")
+                .header("X-YouTube-Client-Version", CLIENT_VERSION);
+
+            if let Some(vd) = visitor_data {
+                next_req = next_req.header("X-Goog-Visitor-Id", vd);
+            }
+
+            if let Ok(res) = next_req.json(&next_body).send().await {
+                if res.status().is_success() {
+                    let body: Value = res.json().await?;
+                    if let Some(result) = crate::sources::youtube::extractor::extract_from_next(&body, "youtube") {
+                        return Ok(Some(result));
+                    }
+                    tracing::debug!("WebRemix: /next endpoint returned but extraction failed for playlist {}", playlist_id);
+                }
+            }
+        }
+
         core::standard_get_playlist(self, &self.http, playlist_id, context, oauth, || {
             self.config()
         })

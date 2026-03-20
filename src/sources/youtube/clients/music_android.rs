@@ -376,63 +376,72 @@ impl YouTubeClient for MusicAndroidClient {
         &self,
         playlist_id: &str,
         context: &Value,
-        oauth: Arc<YouTubeOAuth>,
+        _oauth: Arc<YouTubeOAuth>,
     ) -> AnyResult<Option<(Vec<Track>, String)>> {
         let visitor_data = core::extract_visitor_data(context);
 
-        let body = json!({
+        let next_body = json!({
             "context": self.config().build_context(visitor_data),
             "playlistId": playlist_id,
             "enablePersistentPlaylistPanel": true,
             "isAudioOnly": true
         });
 
-        let url = format!("{}/youtubei/v1/next?prettyPrint=false", INNERTUBE_API);
+        let next_url = format!("{}/youtubei/v1/next?prettyPrint=false", INNERTUBE_API);
 
-        let mut req = self
+        let mut next_req = self
             .http
-            .post(&url)
+            .post(&next_url)
             .header("User-Agent", USER_AGENT)
             .header("X-YouTube-Client-Name", "67")
             .header("X-YouTube-Client-Version", CLIENT_VERSION);
 
         if let Some(vd) = visitor_data {
-            req = req.header("X-Goog-Visitor-Id", vd);
+            next_req = next_req.header("X-Goog-Visitor-Id", vd);
         }
 
-        let req = req.json(&body);
+        let next_req = next_req.json(&next_body);
 
-        let _ = oauth;
-
-        let res = req.send().await?;
-        if !res.status().is_success() {
-            return Ok(None);
-        }
-
-        let body: Value = res.json().await?;
-        let result = crate::sources::youtube::extractor::extract_from_next(&body, "youtube");
-
-        if result.is_none() {
-            tracing::warn!("MusicAndroid: extract_from_next returned None");
-            if let Some(obj) = body.as_object() {
-                tracing::warn!("Response keys: {:?}", obj.keys());
-            }
-            if let Some(contents) = body.get("contents") {
-                if let Some(obj) = contents.as_object() {
-                    tracing::warn!("Contents keys: {:?}", obj.keys());
-                    if let Some(renderer) = obj.get("singleColumnMusicWatchNextResultsRenderer") {
-                        tracing::warn!(
-                            "Renderer keys: {:?}",
-                            renderer.as_object().map(|o| o.keys())
-                        );
-                    }
+        if let Ok(res) = next_req.send().await {
+            if res.status().is_success() {
+                let body: Value = res.json().await?;
+                if let Some(result) = crate::sources::youtube::extractor::extract_from_next(&body, "youtube") {
+                    return Ok(Some(result));
                 }
-            } else {
-                tracing::warn!("No 'contents' field in response");
+                tracing::debug!("MusicAndroid: /next endpoint returned but extraction failed for playlist {}", playlist_id);
             }
         }
 
-        Ok(result)
+        let browse_body = json!({
+            "context": self.config().build_context(visitor_data),
+            "browseId": if playlist_id.starts_with("VL") { playlist_id.to_string() } else { format!("VL{}", playlist_id) },
+        });
+
+        let browse_url = format!("{}/youtubei/v1/browse?prettyPrint=false", INNERTUBE_API);
+
+        let mut browse_req = self
+            .http
+            .post(&browse_url)
+            .header("User-Agent", USER_AGENT)
+            .header("X-YouTube-Client-Name", "67")
+            .header("X-YouTube-Client-Version", CLIENT_VERSION);
+
+        if let Some(vd) = visitor_data {
+            browse_req = browse_req.header("X-Goog-Visitor-Id", vd);
+        }
+
+        if let Ok(res) = browse_req.json(&browse_body).send().await {
+            if res.status().is_success() {
+                let body: Value = res.json().await?;
+                if let Some(result) = crate::sources::youtube::extractor::extract_from_browse(&body, "youtube") {
+                    return Ok(Some(result));
+                }
+                tracing::debug!("MusicAndroid: /browse endpoint returned but extraction failed for playlist {}", playlist_id);
+            }
+        }
+
+        tracing::warn!("MusicAndroid: Both /next and /browse endpoints failed for playlist {}", playlist_id);
+        Ok(None)
     }
 
     async fn resolve_url(
