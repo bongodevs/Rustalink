@@ -31,6 +31,14 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Returns the current time in nanoseconds since the Unix epoch.
+pub fn now_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
 /// Simple ANSI stripper to prevent the log file from being polluted with escape sequences.
 pub fn strip_ansi_escapes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());

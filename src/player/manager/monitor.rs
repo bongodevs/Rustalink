@@ -1,11 +1,14 @@
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{
+    Arc,
+    atomic::Ordering,
+};
 
 use tracing::warn;
 
 use super::lyrics::sync_lyrics;
 use crate::{
-    audio::playback::{PlaybackState, TrackHandle},
-    common::types::GuildId,
+    audio::playback::{PlaybackState, StuckDetector, TrackHandle},
+    common::{types::GuildId, utils::now_ms},
     player::state::PlayerState,
     protocol::{
         self,
@@ -24,21 +27,18 @@ pub struct MonitorCtx {
     pub track: Track,
     pub stop_signal: Arc<std::sync::atomic::AtomicBool>,
     pub ping: Arc<std::sync::atomic::AtomicI64>,
-    pub stuck_threshold_ms: u64,
     pub update_every_n: u64,
     pub lyrics_subscribed: Arc<std::sync::atomic::AtomicBool>,
     pub lyrics_data: Arc<tokio::sync::Mutex<Option<LyricsData>>>,
     pub last_lyric_index: Arc<std::sync::atomic::AtomicI64>,
     pub end_time_ms: Option<u64>,
+    pub stuck_detector: Arc<StuckDetector>,
 }
 
 pub async fn monitor_loop(ctx: MonitorCtx) {
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
     let mut tick: u64 = 0;
     let mut last_pos = ctx.handle.get_position();
-    let mut last_pos_changed_at = std::time::Instant::now();
-    let mut stuck_fired = false;
-    let mut buffering_started_at: Option<std::time::Instant> = None;
 
     send_player_update(&ctx, last_pos);
 
@@ -69,24 +69,12 @@ pub async fn monitor_loop(ctx: MonitorCtx) {
 
         if state == PlaybackState::Playing {
             if cur_pos != last_pos {
-                last_pos_changed_at = std::time::Instant::now();
-                buffering_started_at = None;
-                stuck_fired = false;
-            } else if ctx.handle.is_buffering() {
-                if buffering_started_at.is_none() {
-                    buffering_started_at = Some(std::time::Instant::now());
-                }
-            } else {
-                buffering_started_at = None;
+                ctx.stuck_detector.reset_stuck_flag();
             }
 
-            if !stuck_fired {
-                stuck_fired =
-                    check_stuck(&ctx, cur_pos, last_pos_changed_at, buffering_started_at).await;
+            if ctx.stuck_detector.check_stuck() {
+                send_stuck_event(&ctx, cur_pos);
             }
-        } else {
-            last_pos_changed_at = std::time::Instant::now();
-            buffering_started_at = None;
         }
 
         last_pos = cur_pos;
@@ -169,49 +157,23 @@ async fn handle_track_end_marker(ctx: &MonitorCtx) {
     });
 }
 
-async fn check_stuck(
-    ctx: &MonitorCtx,
-    cur_pos: u64,
-    last_pos_changed_at: std::time::Instant,
-    buffering_started_at: Option<std::time::Instant>,
-) -> bool {
-    if ctx.handle.get_state() != PlaybackState::Playing {
-        return false;
-    }
+fn send_stuck_event(ctx: &MonitorCtx, cur_pos: u64) {
+    let threshold = ctx.stuck_detector.threshold_ms();
 
-    let elapsed_ms = match buffering_started_at {
-        Some(started) => started.elapsed().as_millis() as u64,
-        None => last_pos_changed_at.elapsed().as_millis() as u64,
-    };
+    ctx.session.send_message(&protocol::OutgoingMessage::Event {
+        event: Box::new(RustalinkEvent::TrackStuck {
+            guild_id: ctx.guild_id.clone(),
+            track: ctx.track.clone(),
+            threshold_ms: threshold,
+        }),
+    });
 
-    let threshold = ctx.stuck_threshold_ms;
+    send_player_update(ctx, cur_pos);
 
-    if elapsed_ms >= threshold {
-        ctx.session.send_message(&protocol::OutgoingMessage::Event {
-            event: Box::new(RustalinkEvent::TrackStuck {
-                guild_id: ctx.guild_id.clone(),
-                track: ctx.track.clone(),
-                threshold_ms: threshold,
-            }),
-        });
-
-        send_player_update(ctx, cur_pos);
-
-        warn!(
-            "[{}] Track stuck: {} stalling for {}ms (threshold {}ms). is_buffering: {}",
-            ctx.guild_id,
-            if buffering_started_at.is_some() {
-                "buffering"
-            } else {
-                "position"
-            },
-            elapsed_ms,
-            threshold,
-            buffering_started_at.is_some()
-        );
-        return true;
-    }
-    false
+    warn!(
+        "[{}] Track stuck: no frames received for >= {}ms",
+        ctx.guild_id, threshold
+    );
 }
 
 fn send_player_update(ctx: &MonitorCtx, cur_pos: u64) {
@@ -219,7 +181,7 @@ fn send_player_update(ctx: &MonitorCtx, cur_pos: u64) {
         .send_message(&protocol::OutgoingMessage::PlayerUpdate {
             guild_id: ctx.guild_id.clone(),
             state: PlayerState {
-                time: crate::common::utils::now_ms(),
+                time: now_ms(),
                 position: cur_pos,
                 connected: true,
                 ping: ctx.ping.load(Ordering::Acquire),
