@@ -427,6 +427,7 @@ impl GaanaSource {
                     .filter(|s| !s.is_empty())
             })
             .map(|s| s.to_owned());
+        let isrc = json.get("isrc").and_then(|v| v.as_str()).map(|s| s.to_owned());
 
         let track_info = TrackInfo {
             identifier: id,
@@ -438,7 +439,7 @@ impl GaanaSource {
             title: title.to_owned(),
             uri,
             artwork_url,
-            isrc: None,
+            isrc,
             source_name: "gaana".to_owned(),
         };
 
