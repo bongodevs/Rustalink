@@ -7,6 +7,26 @@ use crate::config::sources::{
 };
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TidalHifiConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub urls: Vec<String>,
+    #[serde(default = "default_tidal_quality")]
+    pub quality: String,
+}
+
+impl Default for TidalHifiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            urls: Vec::new(),
+            quality: default_tidal_quality(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TidalConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -24,6 +44,8 @@ pub struct TidalConfig {
     #[serde(default = "default_limit_20")]
     pub artist_load_limit: usize,
     pub proxy: Option<HttpProxyConfig>,
+    #[serde(default)]
+    pub hifi: TidalHifiConfig,
 }
 
 impl Default for TidalConfig {
@@ -38,6 +60,7 @@ impl Default for TidalConfig {
             album_load_limit: 50,
             artist_load_limit: 20,
             proxy: None,
+            hifi: TidalHifiConfig::default(),
         }
     }
 }
