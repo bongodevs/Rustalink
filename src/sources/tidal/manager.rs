@@ -21,6 +21,7 @@ use tracing::{debug, warn};
 
 use super::{
     client::TidalClient,
+    hifi::TidalHifiClient,
     model::{Manifest, PlaybackInfo},
     oauth::TidalOAuth,
     token::TidalTokenTracker,
@@ -41,6 +42,7 @@ fn url_regex() -> &'static Regex {
 
 pub struct TidalSource {
     pub client: Arc<TidalClient>,
+    hifi: Option<Arc<TidalHifiClient>>,
     playlist_load_limit: usize,
     album_load_limit: usize,
     artist_load_limit: usize,
@@ -51,7 +53,7 @@ impl TidalSource {
         config: Option<crate::config::TidalConfig>,
         http_client: Arc<reqwest::Client>,
     ) -> Result<Self, String> {
-        let (country, quality, p_limit, a_limit, art_limit, refresh_token, get_oauth_token) =
+        let (country, quality, p_limit, a_limit, art_limit, refresh_token, get_oauth_token, hifi_cfg) =
             if let Some(c) = config {
                 (
                     c.country_code,
@@ -61,6 +63,7 @@ impl TidalSource {
                     c.artist_load_limit,
                     c.refresh_token,
                     c.get_oauth_token,
+                    Some(c.hifi),
                 )
             } else {
                 (
@@ -71,6 +74,7 @@ impl TidalSource {
                     0,
                     None,
                     false,
+                    None,
                 )
             };
 
@@ -93,8 +97,20 @@ impl TidalSource {
             quality,
         ));
 
+        let hifi = hifi_cfg
+            .filter(|h| h.enabled && !h.urls.is_empty())
+            .map(|h| {
+                Arc::new(TidalHifiClient::new(
+                    client.inner.clone(),
+                    client.clone(),
+                    h.urls,
+                    h.quality,
+                ))
+            });
+
         Ok(Self {
             client,
+            hifi,
             playlist_load_limit: p_limit,
             album_load_limit: a_limit,
             artist_load_limit: art_limit,
@@ -161,6 +177,9 @@ impl TidalSource {
     }
 
     async fn get_track_data(&self, id: &str) -> LoadResult {
+        if let Some(hifi) = &self.hifi {
+            return hifi.load_track(id).await;
+        }
         match self.client.get_json(&format!("/tracks/{id}")).await {
             Ok(data) => self
                 .parse_track(&data)
@@ -171,6 +190,14 @@ impl TidalSource {
     }
 
     async fn get_album_or_playlist(&self, id: &str, type_str: &str) -> LoadResult {
+        if let Some(hifi) = &self.hifi {
+            return if type_str == "album" {
+                hifi.load_album(id, self.album_load_limit).await
+            } else {
+                hifi.load_playlist(id, self.playlist_load_limit).await
+            };
+        }
+
         let info_data = match self.client.get_json(&format!("/{type_str}s/{id}")).await {
             Ok(d) => d,
             Err(_) => return LoadResult::Empty {},
@@ -226,6 +253,10 @@ impl TidalSource {
     }
 
     async fn get_mix(&self, id: &str, name_override: Option<String>) -> LoadResult {
+        if let Some(hifi) = &self.hifi {
+            return hifi.load_mix(id, name_override).await;
+        }
+
         let data = match self
             .client
             .get_json(&format!("/mixes/{id}/items?limit=100"))
@@ -260,7 +291,6 @@ impl TidalSource {
     }
 
     async fn resolve_by_isrc(&self, isrc: &str) -> LoadResult {
-        // v2 only; requires OAuth Bearer. scraper token won't work here.
         let token = match self.client.token_tracker.get_oauth_token().await {
             Some(t) => t,
             None => {
@@ -317,6 +347,10 @@ impl TidalSource {
     }
 
     async fn search(&self, query: &str) -> LoadResult {
+        if let Some(hifi) = &self.hifi {
+            return hifi.search(query).await;
+        }
+
         let encoded = urlencoding::encode(query);
         match self
             .client
@@ -343,6 +377,10 @@ impl TidalSource {
     }
 
     async fn get_recommendations(&self, id: &str) -> LoadResult {
+        if let Some(hifi) = &self.hifi {
+            return hifi.load_recommendations(id).await;
+        }
+
         if let Ok(data) = self.client.get_json(&format!("/tracks/{id}")).await
             && let Some(mix_id) = data.pointer("/mixes/TRACK_MIX").and_then(|v| v.as_str())
         {
@@ -354,6 +392,10 @@ impl TidalSource {
     }
 
     async fn get_artist_top_tracks(&self, id: &str) -> LoadResult {
+        if let Some(hifi) = &self.hifi {
+            return hifi.load_artist_top_tracks(id).await;
+        }
+
         let info_data = match self.client.get_json(&format!("/artists/{id}")).await {
             Ok(d) => d,
             Err(_) => return LoadResult::Empty {},
@@ -492,6 +534,10 @@ impl SourcePlugin for TidalSource {
         } else {
             identifier.to_owned()
         };
+
+        if let Some(hifi) = &self.hifi {
+            return hifi.get_playback_track(&id).await;
+        }
 
         let token = match self.client.token_tracker.get_oauth_token().await {
             Some(t) => t,

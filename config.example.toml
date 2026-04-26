@@ -124,15 +124,26 @@ enabled = false
 # proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
 
 [sources.tidal]
-enabled = false
+enabled = true
 country_code = "US"
-quality = "LOSSLESS" # HI_RES_LOSSLESS | LOSSLESS | HIGH | LOW
+quality = "LOSSLESS"               # HI_RES_LOSSLESS | LOSSLESS | HIGH | LOW
 playlist_load_limit = 50
 album_load_limit = 50
 artist_load_limit = 20
 get_oauth_token = false
-# refresh_token = "your-refresh-token" # required for playback 
+# refresh_token = "your-refresh-token" # required for direct playback
 # proxy = { url = "http://proxy:8080", username = "user", password = "pass" }
+
+# HiFi-RestAPI proxy (https://github.com/binimum/hifi-api)
+# When enabled, all catalog lookups and playback are routed through the proxy
+# instead of the direct Tidal API. OAuth / refresh_token are not required.
+# Multiple URLs are supported; requests are distributed round-robin.
+# Note: HI_RES_LOSSLESS returns a DASH manifest which is not supported ( it wasn't playable for me) —
+#       use LOSSLESS or lower for playback via HiFi.
+[sources.tidal.hifi]
+enabled = true
+urls = ["http://localhost:8000"]   # one or more HiFi-RestAPI base URLs
+quality = "LOSSLESS"               # HI_RES_LOSSLESS | LOSSLESS | HIGH | LOW
 
 [sources.soundcloud]
 enabled = true

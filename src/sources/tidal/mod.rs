@@ -1,5 +1,6 @@
 pub mod client;
 pub mod error;
+pub mod hifi;
 pub mod manager;
 pub mod model;
 pub mod oauth;
