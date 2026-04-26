@@ -4,8 +4,8 @@ use tracing::warn;
 
 use super::lyrics::sync_lyrics;
 use crate::{
-    audio::playback::{PlaybackState, StuckDetector, TrackHandle},
-    common::{types::GuildId, utils::now_ms},
+    audio::playback::{PlaybackState, TrackHandle},
+    common::types::GuildId,
     player::state::PlayerState,
     protocol::{
         self,
@@ -24,20 +24,21 @@ pub struct MonitorCtx {
     pub track: Track,
     pub stop_signal: Arc<std::sync::atomic::AtomicBool>,
     pub ping: Arc<std::sync::atomic::AtomicI64>,
+    pub stuck_threshold_ms: u64,
     pub update_every_n: u64,
     pub lyrics_subscribed: Arc<std::sync::atomic::AtomicBool>,
     pub lyrics_data: Arc<tokio::sync::Mutex<Option<LyricsData>>>,
     pub last_lyric_index: Arc<std::sync::atomic::AtomicI64>,
     pub end_time_ms: Option<u64>,
-    pub stuck_detector: Arc<StuckDetector>,
 }
 
 pub async fn monitor_loop(ctx: MonitorCtx) {
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
     let mut tick: u64 = 0;
-    let mut last_pos = ctx.handle.get_position();
+    let mut last_frame_received_at = std::time::Instant::now();
+    let mut stuck_event_sent = false;
 
-    send_player_update(&ctx, last_pos);
+    send_player_update(&ctx, ctx.handle.get_position());
 
     loop {
         interval.tick().await;
@@ -65,16 +66,19 @@ pub async fn monitor_loop(ctx: MonitorCtx) {
         }
 
         if state == PlaybackState::Playing {
-            if cur_pos != last_pos {
-                ctx.stuck_detector.reset_stuck_flag();
+            if ctx.handle.is_buffering() {
+                if !stuck_event_sent {
+                    check_stuck(&ctx, last_frame_received_at, cur_pos).await;
+                    stuck_event_sent = true;
+                }
+            } else {
+                last_frame_received_at = std::time::Instant::now();
+                stuck_event_sent = false;
             }
-
-            if ctx.stuck_detector.check_stuck() {
-                send_stuck_event(&ctx, cur_pos);
-            }
+        } else {
+            last_frame_received_at = std::time::Instant::now();
+            stuck_event_sent = false;
         }
-
-        last_pos = cur_pos;
 
         if tick.is_multiple_of(ctx.update_every_n) {
             send_player_update(&ctx, cur_pos);
@@ -154,23 +158,34 @@ async fn handle_track_end_marker(ctx: &MonitorCtx) {
     });
 }
 
-fn send_stuck_event(ctx: &MonitorCtx, cur_pos: u64) {
-    let threshold = ctx.stuck_detector.threshold_ms();
+async fn check_stuck(
+    ctx: &MonitorCtx,
+    last_frame_received_at: std::time::Instant,
+    cur_pos: u64,
+) {
+    if ctx.handle.get_state() != PlaybackState::Playing {
+        return;
+    }
 
-    ctx.session.send_message(&protocol::OutgoingMessage::Event {
-        event: Box::new(RustalinkEvent::TrackStuck {
-            guild_id: ctx.guild_id.clone(),
-            track: ctx.track.clone(),
-            threshold_ms: threshold,
-        }),
-    });
+    let elapsed_ms = last_frame_received_at.elapsed().as_millis() as u64;
+    let threshold = ctx.stuck_threshold_ms;
 
-    send_player_update(ctx, cur_pos);
+    if elapsed_ms >= threshold {
+        ctx.session.send_message(&protocol::OutgoingMessage::Event {
+            event: Box::new(RustalinkEvent::TrackStuck {
+                guild_id: ctx.guild_id.clone(),
+                track: ctx.track.clone(),
+                threshold_ms: threshold,
+            }),
+        });
 
-    warn!(
-        "[{}] Track stuck: no frames received for >= {}ms",
-        ctx.guild_id, threshold
-    );
+        send_player_update(ctx, cur_pos);
+
+        warn!(
+            "[{}] Track stuck: no frames received for {}ms (threshold {}ms)",
+            ctx.guild_id, elapsed_ms, threshold
+        );
+    }
 }
 
 fn send_player_update(ctx: &MonitorCtx, cur_pos: u64) {
@@ -178,7 +193,7 @@ fn send_player_update(ctx: &MonitorCtx, cur_pos: u64) {
         .send_message(&protocol::OutgoingMessage::PlayerUpdate {
             guild_id: ctx.guild_id.clone(),
             state: PlayerState {
-                time: now_ms(),
+                time: crate::common::utils::now_ms(),
                 position: cur_pos,
                 connected: true,
                 ping: ctx.ping.load(Ordering::Acquire),

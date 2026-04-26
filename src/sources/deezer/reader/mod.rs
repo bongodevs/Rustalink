@@ -5,7 +5,7 @@ pub mod remote_reader;
 use std::io::{Read, Seek, SeekFrom};
 
 use symphonia::core::io::MediaSource;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use self::{
     crypt::{CHUNK_SIZE, DeezerCrypt},
@@ -19,6 +19,7 @@ pub struct DeezerReader {
     raw_buf: Vec<u8>,
     ready_buf: Vec<u8>,
     skip_pending: usize,
+    decrypt_failures: u32,
 }
 
 impl DeezerReader {
@@ -38,9 +39,10 @@ impl DeezerReader {
             source,
             crypt,
             pos: 0,
-            raw_buf: Vec::with_capacity(CHUNK_SIZE * 2),
-            ready_buf: Vec::with_capacity(CHUNK_SIZE * 2),
+            raw_buf: Vec::with_capacity(CHUNK_SIZE),
+            ready_buf: Vec::with_capacity(CHUNK_SIZE),
             skip_pending: 0,
+            decrypt_failures: 0,
         })
     }
 }
@@ -48,14 +50,12 @@ impl DeezerReader {
 impl Read for DeezerReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
-            // 1. Drain skip_pending if we have data
             if self.skip_pending > 0 && !self.ready_buf.is_empty() {
                 let to_skip = std::cmp::min(self.skip_pending, self.ready_buf.len());
                 self.ready_buf.drain(..to_skip);
                 self.skip_pending -= to_skip;
             }
 
-            // 2. Supply data from ready_buf if available
             if self.skip_pending == 0 && !self.ready_buf.is_empty() {
                 let n = std::cmp::min(buf.len(), self.ready_buf.len());
                 buf[..n].copy_from_slice(&self.ready_buf[..n]);
@@ -63,15 +63,19 @@ impl Read for DeezerReader {
                 return Ok(n);
             }
 
-            // 3. Need more data from source
             let mut tmp = [0u8; CHUNK_SIZE];
-            let n = self.source.read(&mut tmp)?;
+            let n = match self.source.read(&mut tmp) {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!("DeezerReader: failed to read from CDN: {}", e);
+                    return Err(e);
+                }
+            };
 
             if n == 0 {
                 if self.raw_buf.is_empty() {
                     return Ok(0);
                 }
-                // Process remaining block even if it's smaller than CHUNK_SIZE
                 let leftovers = self.raw_buf.clone();
                 let chunk_idx = self.pos / CHUNK_SIZE as u64;
                 self.crypt
@@ -83,12 +87,24 @@ impl Read for DeezerReader {
 
             self.raw_buf.extend_from_slice(&tmp[..n]);
 
-            // 4. Process all full chunks
             while self.raw_buf.len() >= CHUNK_SIZE {
                 let chunk: Vec<u8> = self.raw_buf.drain(..CHUNK_SIZE).collect();
                 let chunk_idx = self.pos / CHUNK_SIZE as u64;
+
+                let before_len = self.ready_buf.len();
                 self.crypt
                     .decrypt_chunk(chunk_idx, &chunk, &mut self.ready_buf);
+
+                if self.ready_buf.len() == before_len {
+                    self.decrypt_failures += 1;
+                    if self.decrypt_failures % 10 == 1 {
+                        warn!(
+                            "DeezerReader: {} decryption failures (chunk {}), track may be corrupted or key invalid",
+                            self.decrypt_failures, chunk_idx
+                        );
+                    }
+                }
+
                 self.pos += CHUNK_SIZE as u64;
             }
         }

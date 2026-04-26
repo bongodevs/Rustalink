@@ -15,7 +15,7 @@ use crate::{
         buffer::PooledBuffer,
         constants::{MAX_LAYERS, MIXER_CHANNELS, TARGET_SAMPLE_RATE},
         flow::FlowController,
-        playback::{StuckDetector, handle::PlaybackState},
+        playback::handle::PlaybackState,
     },
     config::player::PlayerConfig,
 };
@@ -49,7 +49,7 @@ impl AudioMixer {
         rx: Receiver<PooledBuffer>,
         volume: f32,
     ) -> Result<(), &'static str> {
-        if self.layers.len() >= MAX_LAYERS {
+        if self.layers.len() >= self.max_layers {
             return Err("Maximum mix layers reached");
         }
         self.layers
@@ -100,10 +100,11 @@ pub struct Mixer {
     tracks: Vec<MixerTrack>,
     mix_buf: Vec<i32>,
     pub audio_mixer: AudioMixer,
-    opus_passthrough_track: Option<usize>,
+    opus_passthrough_track: Option<usize>, // index of track providing opus passthrough
     final_pcm_buf: Vec<i16>,
-    pub stuck_detector: Arc<StuckDetector>,
 }
+
+// PassthroughTrack is now implicitly handled by MixerTrack via FlowController's latest_opus
 
 struct MixerTrack {
     flow: FlowController,
@@ -125,7 +126,6 @@ impl Mixer {
             audio_mixer: AudioMixer::new(),
             opus_passthrough_track: None,
             final_pcm_buf: Vec::with_capacity(1920),
-            stuck_detector: Arc::new(StuckDetector::new(10_000)), // 10 second default threshold
         }
     }
 
@@ -281,7 +281,6 @@ impl Mixer {
                     .position
                     .fetch_add(filled as u64 / MIXER_CHANNELS as u64, Ordering::Relaxed);
                 track.is_buffering.store(false, Ordering::Release);
-                self.stuck_detector.record_frame_received();
             } else if !track.finished {
                 track.is_buffering.store(true, Ordering::Release);
             }

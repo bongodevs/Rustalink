@@ -111,7 +111,7 @@ impl TrackHandle {
 
     pub fn get_position(&self) -> u64 {
         let samples = self.position.load(Ordering::Acquire);
-        (samples * 1000) / OPUS_SAMPLE_RATE
+        samples.saturating_mul(1000) / OPUS_SAMPLE_RATE
     }
 
     pub fn is_buffering(&self) -> bool {

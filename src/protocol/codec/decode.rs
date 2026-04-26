@@ -47,7 +47,6 @@ pub fn decode_track(encoded: &str) -> Result<Track, CodecError> {
     };
 
     let source_name = stream.read_string()?;
-    let position = stream.read_u64::<BigEndian>()?;
 
     let user_data = stream.read_json().unwrap_or_else(|_| serde_json::json!({}));
 
@@ -59,7 +58,7 @@ pub fn decode_track(encoded: &str) -> Result<Track, CodecError> {
             author,
             length,
             is_stream,
-            position,
+            position: 0,
             title,
             uri,
             artwork_url,
